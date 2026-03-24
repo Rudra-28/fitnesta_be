@@ -23,10 +23,12 @@ exports.registerOtherarea = async (req, res) => {
 
   } catch (error) {
     console.error("area Registration Error:", error);
+    
+    const statusCode = error.statusCode || 500;
 
-    return res.status(500).json({
+    return res.status(statusCode).json({
       success: false,
-      message: "Failed to register area",
+      message: error.statusCode ? error.message : "Failed to register area",
       error: error.message
     });
   }

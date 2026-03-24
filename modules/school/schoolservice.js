@@ -1,11 +1,21 @@
+const db = require("../../config/db"); 
 const repo = require("./schoolrepo");
 
 exports.registerSchool = async (data) => {
+  const conn = await db.getConnection();
   try {
-    const schoolId = await repo.insertSchool(data);
-    return schoolId;
+    await conn.beginTransaction();
+
+    const userId   = await repo.insertUser(conn, data);
+    const schoolId = await repo.insertSchool(conn, data, userId);
+
+    await conn.commit();
+    return { schoolId, userId };
   } catch (error) {
+    await conn.rollback();
     throw error;
+  } finally {
+    conn.release();
   }
 };
 

@@ -2,23 +2,82 @@ const service = require("./perstutorservice");
 const { validatePersonalTutor } = require("./validatepersonaltutor");
 const { validateParentConsent } = require("./validateparentconsent");
 
-/**
- * PHASE 1: Pre-Registration
- * Triggered when the user clicks "Proceed to Payment" 
- * after filling both the Tutor and Consent forms.
- */
+function toYYYYMMDD(dateStr) {
+    if (!dateStr) return null;
+    // Already YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+    // Handle DD/MM/YYYY from frontend
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+        const [day, month, year] = dateStr.split('/');
+        return `${year}-${month}-${day}`;
+    }
+    // Fallback: let JS parse it and reformat
+    const parsed = new Date(dateStr);
+    return isNaN(parsed) ? null : parsed.toISOString().split('T')[0];
+}
+
 exports.submitRegistration = async (req, res) => {
   try {
-      // If a file was uploaded for signature, append its path to the body
-      if (req.files && req.files.signatureUrl && req.files.signatureUrl.length > 0) {
-          req.body.signatureUrl = req.files.signatureUrl[0].path;
+      let formData = req.body.formData;
+      let serviceType = req.body.serviceType || 'personal_tutor';
+
+      // 1. Handle Multipart/Stringified JSON
+      if (typeof formData === 'string') {
+          try {
+              formData = JSON.parse(formData);
+          } catch (e) {
+              return res.status(400).json({ success: false, message: "Invalid formData JSON format" });
+          }
+      } else if (!formData || Object.keys(formData).length === 0) {
+          // If formData is missing, assume req.body contains the fields directly
+          formData = { ...req.body };
       }
 
-      const formData = req.body;
-      const serviceType = 'personal_tutor';
+    console.log("📦 Parsed formData:", JSON.stringify(formData, null, 2));
+    console.log("📎 Files received:", req.files);
 
-      const errors1 = validatePersonalTutor(formData);
-      const errors2 = validateParentConsent(formData);
+      // 2. Normalize and Map Fields (for validation and grouping)
+      const normalizedData = {
+          fullName: formData.fullName || formData.full_name || formData.participant_name,
+          contactNumber: formData.contactNumber || formData.mobile || formData.contact_number,
+          address: formData.address,
+          dob: formData.dob,
+          standard: formData.standard,
+          batch: formData.batch,
+          teacherFor: formData.teacherFor || formData.teacher_for,
+          // Consent fields
+          society_name: formData.society_name || formData.societyName,
+          parentName: formData.parentName || formData.parent_name,
+          emergencyContactNo: formData.emergencyContactNo || formData.emergency_contact_no,
+          activity_enrolled: formData.activity_enrolled || formData.activity,
+          consent_date: formData.consent_date || formData.consentDate
+      };
+
+      // Normalize dates BEFORE validation is called
+        normalizedData.dob = toYYYYMMDD(normalizedData.dob);
+        normalizedData.consent_date = toYYYYMMDD(normalizedData.consent_date);
+
+
+      // 3. Handle File Upload (Signature)
+      const signatureFile = (req.files?.['signatureUrl'] && req.files['signatureUrl'][0]) || 
+                           (req.files?.['parent_signature_doc'] && req.files['parent_signature_doc'][0]) ||
+                           req.file;
+
+      if (signatureFile) {
+          normalizedData.signatureUrl = signatureFile.path.replace(/\\/g, "/");
+      }
+
+      // 4. Calculate Age & Validate
+      const errors1 = validatePersonalTutor(normalizedData);
+      
+      let errors2 = [];
+      const birthDate = new Date(normalizedData.dob);
+      const age = !isNaN(birthDate) ? Math.floor((new Date() - birthDate) / (1000 * 60 * 60 * 24 * 365.25)) : 0;
+
+      // Only validate parent consent if age < 18
+      if (normalizedData.dob && age < 18) {
+          errors2 = validateParentConsent(normalizedData);
+      }
 
       const errors = [...errors1, ...errors2];
 
@@ -29,8 +88,31 @@ exports.submitRegistration = async (req, res) => {
         });
       }
 
-      // 1. "Park" the data in pending_registrations first
-      const tempUuid = await service.initiateRegistration(formData, serviceType);
+      // 5. Structure data specifically for the perstutorservice expectations
+      const structuredPayload = {
+          user_info: {
+              fullName: normalizedData.fullName,
+              contactNumber: normalizedData.contactNumber,
+              address: normalizedData.address
+          },
+          tutorDetails: {
+              dob: normalizedData.dob,
+              standard: normalizedData.standard,
+              batch: normalizedData.batch,
+              teacherFor: normalizedData.teacherFor
+          },
+          consentDetails: (age < 18) ? {
+              society_name: normalizedData.society_name,
+              parentName: normalizedData.parentName,
+              emergencyContactNo: normalizedData.emergencyContactNo,
+              activity_enrolled: normalizedData.activity_enrolled,
+              signatureUrl: normalizedData.signatureUrl,
+              consent_date: normalizedData.consent_date
+          } : null
+      };
+
+      // 6. "Park" the data in pending_registrations first
+      const tempUuid = await service.initiateRegistration(structuredPayload, serviceType);
 
       res.status(200).json({
           success: true,
@@ -121,43 +203,3 @@ exports.mockPayment = async (req, res) => {
       res.status(400).json({ success: false, message: error.message });
   }
 };
-
-
-
-
-
-// const service = require("./perstutorservice");
-
-// // Renamed to match the route's expectation: submitRegistration
-// exports.submitRegistration = async (req, res) => {
-//   try {
-//     // Note: If you're using verifyToken middleware, use req.user.id. 
-//     // If it's a new user registration, you might not have a userId yet.
-//     const userId = req.user ? req.user.id : null; 
-    
-//     const result = await service.registerPersonalTutor(req.body, userId);
-
-//     res.status(201).json({
-//       success: true,
-//       message: "Personal Tutor registration completed successfully",
-//       data: result
-//     });
-//   } catch (error) {
-//     res.status(400).json({
-//       success: false,
-//       message: error.message
-//     });
-//   }
-// };
-
-// // Added the missing Autofill function
-// exports.getAutofillData = async (req, res) => {
-//   try {
-//     const data = await service.getAutofillData(req.params.userId);
-//     res.status(200).json({ success: true, data });
-//   } catch (error) {
-//     res.status(400).json({ success: false, message: error.message });
-//   }
-// };
-
-

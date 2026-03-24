@@ -5,26 +5,24 @@ const { validateSchool } = require("./schoolvalidation");
 exports.registerSchool = async (req, res) => {
   try {
     const data = req.body;
-    
-    // 1. Validate Form Fields
+
     const errors = validateSchool(data);
     if (errors.length > 0) {
       return res.status(400).json({ success: false, errors });
     }
 
-    // 2. Prevent Duplicate School Names
     const existingSchool = await repo.getSchoolByName(data.schoolName);
     if (existingSchool) {
       return res.status(400).json({ success: false, message: "A school with this precise name is already registered." });
     }
 
-    // 3. Register School
-    const schoolId = await service.registerSchool(data);
+    const { schoolId, userId } = await service.registerSchool(data);  // destructure both IDs
 
     res.status(201).json({
       success: true,
       message: "School registered successfully",
-      schoolId: schoolId
+      schoolId,
+      userId
     });
   } catch (error) {
     res.status(500).json({

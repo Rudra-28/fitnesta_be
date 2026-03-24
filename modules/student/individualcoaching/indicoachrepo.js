@@ -8,7 +8,7 @@ const db = require("../../../config/db");
 exports.insertUser = async (conn, data) => {
     const [result] = await conn.execute(
         `INSERT INTO users (role, full_name, mobile) VALUES (?, ?, ?)`,
-        ['student', data.fullName, data.contactNumber]
+        ['student', data?.fullName || null, data?.contactNumber || null]
     );
     return result.insertId;
 };
@@ -16,26 +16,27 @@ exports.insertUser = async (conn, data) => {
 exports.insertStudent = async (conn, userId, type) => {
     const [result] = await conn.execute(
         `INSERT INTO students (user_id, student_type) VALUES (?, ?)`,
-        [userId, type]
+        [userId, type || 'individual_coaching']
     );
     return result.insertId;
 };
 
 exports.insertindividualcoaching = async (conn, studentId, data) => {
     return await conn.execute(
-        `INSERT INTO individual_participants (student_id, flat_no, dob, age, society_name, activities, kits) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO individual_participants (student_id, flat_no, dob, age, society_name, activity, kits) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
             studentId,
-            data.flat_no || null, 
-            data.dob || null, 
-            data.age || null, 
-            data.society_name || null, 
-            data.activities || null, 
-            data.kit_type || null
+            data?.flat_no || null, 
+            data?.dob || null, 
+            data?.age || null, 
+            data?.society_name || null, 
+            data?.activities || null, 
+            data?.kit_type || null
         ]
     );
 };
 
+//in frontend if age is less than 18 than only the consent form will be filled.
 exports.insertParentConsent = async (conn, studentId, data) => {
     // Fixed: Ensure columns match the values array exactly
     return await conn.execute(
@@ -43,12 +44,12 @@ exports.insertParentConsent = async (conn, studentId, data) => {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
             studentId, 
-            data.society_name, 
-            data.parentName, 
-            data.emergencyContactNo, 
-            data.activity_enrolled, 
-            data.signatureUrl, 
-            data.consent_date
+            data.society_name || null, 
+            data.parentName || null, 
+            data.emergencyContactNo || null, 
+            data.activity_enrolled || null, 
+            data.signatureUrl || null, 
+            data.consent_date || null
         ]
     );
 };
@@ -62,7 +63,7 @@ exports.insertPendingRegistration = async (conn, tempUuid, formData, serviceType
     const jsonData = JSON.stringify(formData);
     return await conn.execute(
         `INSERT INTO pending_registrations (temp_uuid, form_data, service_type) VALUES (?, ?, ?)`,
-        [tempUuid, jsonData, serviceType]
+        [tempUuid, jsonData, serviceType || 'individual_coaching']
     );
 };
 

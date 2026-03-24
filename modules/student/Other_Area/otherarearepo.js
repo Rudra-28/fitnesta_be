@@ -44,7 +44,7 @@ exports.insertOtherarea = async (conn, data, studentId) => {
 // Add this to otherarearepo.js
 exports.findExecutiveByName = async (conn, name) => {
   const [rows] = await conn.execute(
-      `SELECT me.id 
+      `SELECT me.id
        FROM marketing_executives me
        JOIN professionals p ON me.professional_id = p.id
        JOIN users u ON p.user_id = u.id

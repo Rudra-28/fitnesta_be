@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
 const repo = require("./authrepository");
 
-exports.loginUser = async (mobile, role, subrole, student_type) => {
+exports.loginUser = async (mobile, role) => {
   // 1. Sanitize the mobile number (remove +91 if present)
   const cleanMobile = mobile.replace("+91", "");
 
@@ -17,28 +17,28 @@ exports.loginUser = async (mobile, role, subrole, student_type) => {
     throw new Error(`ROLE_MISMATCH`);
   }
 
-  // 4. Strict Subrole & Cross-reference Validation
+  let subrole = null;
+  let student_type = null;
+
+  // 4. Role Specific Verification
   if (role === "professional") {
-    if (!subrole) {
-      throw new Error("SUBROLE_REQUIRED");
-    }
-
-    if (user.subrole !== subrole) {
-      throw new Error("SUBROLE_MISMATCH");
-    }
-
-    const prof = await repo.findProfessionalByUserIdAndType(user.id, subrole);
-    if (!prof) {
+    const profs = await repo.findProfessionalsByUserId(user.id);
+    if (profs.length === 0) {
       throw new Error("PROFESSIONAL_DATA_MISMATCH");
     }
-  } else if (role === "student") {
-    if (!student_type) {
-      throw new Error("STUDENT_TYPE_REQUIRED");
+    
+    // User requirement: Login if there is ONLY ONE row
+    if (profs.length > 1) {
+       throw new Error("MULTIPLE_SUBROLES_FOUND");
     }
-
-    const studentData = await repo.findStudentByUserIdAndType(user.id, student_type);
-    if (!studentData) {
-      throw new Error("STUDENT_DATA_MISMATCH");
+    
+    subrole = profs[0].profession_type;
+  } else if (role === "student") {
+    const students = await repo.findStudentsByUserId(user.id);
+    // For students, login them in, just check their number is in table 
+    // (which we already did via findUserByMobile and Role check)
+    if (students.length > 0) {
+        student_type = students[0].student_type;
     }
   }
 

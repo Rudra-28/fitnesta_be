@@ -2,9 +2,11 @@ const db = require("../config/db"); // Adjust if your config is one level up
 
 exports.verifyMobileUnique = async (req, res, next) => {
     try {
-        // This covers both field names: 'contactNumber' or 'mobile'
-        const mobile = req.body.contactNumber || req.body.mobile || req.body.formData?.contactNumber ||
-        req.body.formData?.mobile;
+        // This covers both field names: 'contactNumber' or 'mobile' across possible body structures
+        const mobile = req.body?.contactNumber || 
+                       req.body?.mobile || 
+                       req.body?.formData?.contactNumber || 
+                       req.body?.formData?.mobile;
 
         if (!mobile) {
             return res.status(400).json({

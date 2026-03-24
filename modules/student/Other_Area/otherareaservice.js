@@ -12,7 +12,9 @@ exports.registerOtherarea = async (data) => {
     const executiveId = await repo.findExecutiveByName(conn, data.marketingIncharge);
         
     if (!executiveId) {
-        throw new Error(`Marketing Executive '${data.marketingIncharge}' does not exist.`);
+        const error = new Error(`Marketing Executive '${data.marketingIncharge}' does not exist.`);
+        error.statusCode = 400;
+        throw error;
     }
     // 1. Create user
     const userId = await repo.insertUser(conn, data, "student");

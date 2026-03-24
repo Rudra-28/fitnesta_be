@@ -32,7 +32,7 @@ exports.insertSociety = async (conn, data, studentId) => {
      total_participants, proposed_wing, authority_role,
      authority_person_name, authority_contact,
      playground_available, coordinator_name, coordinator_number,
-     is_agreement_signed)
+     agreement_signed_by_authority)
      
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [

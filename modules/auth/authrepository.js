@@ -6,7 +6,6 @@ const findUserByMobile = async (mobile) => {
         id, 
         mobile, 
         role, 
-        subrole,
         email, 
         full_name, 
         is_verified
@@ -34,6 +33,22 @@ const findStudentByUserIdAndType = async (userId, studentType) => {
   return rows.length ? rows[0] : null;
 };
 
+const findProfessionalsByUserId = async (userId) => {
+  const [rows] = await db.query(
+    `SELECT profession_type FROM professionals WHERE user_id = ?`,
+    [userId]
+  );
+  return rows;
+};
+
+const findStudentsByUserId = async (userId) => {
+  const [rows] = await db.query(
+    `SELECT student_type FROM students WHERE user_id = ?`,
+    [userId]
+  );
+  return rows;
+};
+
 const markUserVerified = async (userId) => {
   await db.query(
     `UPDATE users 
@@ -47,5 +62,7 @@ module.exports = {
   findUserByMobile,
   findProfessionalByUserIdAndType,
   findStudentByUserIdAndType,
+  findProfessionalsByUserId,
+  findStudentsByUserId,
   markUserVerified
 };

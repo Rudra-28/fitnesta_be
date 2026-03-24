@@ -32,9 +32,9 @@ exports.finalizeRegistration = async (tempUuid) => {
         const pending = await repo.getPendingByUuid(conn, tempUuid);
         if (!pending) throw new Error("Registration record not found or already processed");
 
-        const data = typeof pending.form_data === 'string' 
+        const data = (typeof pending.form_data === 'string' 
         ? JSON.parse(pending.form_data) 
-        : pending.form_data;
+        : pending.form_data) || {};
         
         // 1. Insert User & Student
         const userId = await repo.insertUser(conn, data.user_info);
@@ -43,7 +43,9 @@ exports.finalizeRegistration = async (tempUuid) => {
 
         // 2. Insert Form Specifics (Tutor + Consent)
         await repo.insertindividualcoaching(conn, studentId, data.individualcoaching);
-        await repo.insertParentConsent(conn, studentId, data.consentDetails);
+         if(data.consentDetails?.parentName){
+            await repo.insertParentConsent(conn, studentId, data.consentDetails);
+         }
 
         // 3. Mark as completed
         await repo.updatePendingStatus(conn, pending.id, 'completed');

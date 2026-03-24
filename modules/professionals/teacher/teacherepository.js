@@ -56,8 +56,8 @@ exports.insertTeacher = async (conn, data, professionalId) => {
 
 exports.getAllTeachers = async () => {
 
-    const [rows] = await db.execute(
-      `SELECT 
+  const [rows] = await db.execute(
+    `SELECT 
         u.id AS user_id,
         u.full_name,
         u.mobile,
@@ -88,7 +88,7 @@ exports.getAllTeachers = async () => {
   
        JOIN users u 
        ON p.user_id = u.id`
-    );
-  
-    return rows;
-  };
+  );
+
+  return rows;
+};

@@ -1,9 +1,16 @@
 const express = require("express");
 const router = express.Router();
-const { verifyAppSecret } = require("../../../middleware/authMiddleware");
 const indicoachcontroller = require("./indicoachcontroller");
+const upload = require("../../../utils/fileupload");
+const validate = require("../../student/individualcoaching/indicoachvalidate");
+
+const icUploads = upload.fields([
+    { name: 'signatureUrl', maxCount: 1 },
+    { name: 'signature_url', maxCount: 1 }
+]);
+
 // Only the Flutter app with the Secret Key can hit this
-router.post("/send-PT", indicoachcontroller.submitRegistration);
+router.post("/send-IC", icUploads, indicoachcontroller.submitRegistration);
 
 // Public but secured by Signature Verification inside the controller
 router.post("/payment-webhook", indicoachcontroller.handlePaymentWebhook);

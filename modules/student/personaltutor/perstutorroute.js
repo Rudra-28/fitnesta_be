@@ -11,7 +11,7 @@ const ptUploads = upload.fields([
 ]);
 
 // Only the Flutter app with the Secret Key can hit this
-router.post("/send-PT", ptUploads, verifyMobileUnique, personaltutorController.submitRegistration);
+router.post("/send-PT", ptUploads, personaltutorController.submitRegistration);
 
 // Public but secured by Signature Verification inside the controller
 router.post("/payment-webhook", personaltutorController.handlePaymentWebhook);

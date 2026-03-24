@@ -29,9 +29,9 @@ exports.validateSchool = (data) => {
   if (!data.principalName) {
     errors.push("Principal name is required");
   }
-  if (!data.principalContact || !/^[6-9]\d{9}$/.test(data.principalContact)) {
-    errors.push("Invalid principal contact number");
-  }
+ if (!data.principalContact || !/^\d{10}$/.test(data.principalContact)) {
+  errors.push("Invalid principal contact number");
+}
 
   return errors;
 };
