@@ -4,8 +4,6 @@ const router = express.Router();
 const societyRoutes = require("../../modules/student/society/societyroute");
 const individualCoaching = require('../../modules/student/individualcoaching/indicoachroute')
 const otherarea = require('../../modules/student/Other_Area/otherarearoute')
-//const schoolStudentRoutes = require('../../modules/student/school-student/schoolstudentroute');
-
 router.use('/auth', require('../../modules/auth/authroute'));
 router.use('/trainers', require('../../modules/professionals/trainer/trainerroute'));
 router.use('/teachers', require('../../modules/professionals/teacher/teacherroute'));

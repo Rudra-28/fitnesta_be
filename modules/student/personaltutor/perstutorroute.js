@@ -1,6 +1,5 @@
 const express = require("express");
 const router = express.Router();
-const { verifyAppSecret } = require("../../../middleware/authMiddleware");
 const personaltutorController = require("./perstutorcontroller");
 const { verifyMobileUnique } = require("../../../middleware/checkduplicate");
 
