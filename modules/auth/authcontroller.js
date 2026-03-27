@@ -38,6 +38,12 @@ exports.login = async (req, res) => {
     } else if (error.message === "PROFESSIONAL_DATA_MISMATCH" || error.message === "STUDENT_DATA_MISMATCH") {
       statusCode = 403;
       message = "Data mismatch: Registration incomplete.";
+    } else if (error.message === "APPROVAL_PENDING") {
+      statusCode = 403;
+      message = "Your registration is pending admin approval. You will be notified once approved.";
+    } else if (error.message === "REGISTRATION_REJECTED") {
+      statusCode = 403;
+      message = "Your registration was rejected. Please contact support.";
     }
 
     res.status(statusCode).json({

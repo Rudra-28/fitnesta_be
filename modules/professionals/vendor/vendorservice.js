@@ -1,39 +1,21 @@
-const db = require("../../../config/db");
 const repo = require("./vendorrepository");
-const validator = require("./vendorvalidate");
+const { validateVendors } = require("./vendorvalidate");
 
-exports.createVendors = async (data)=>{
-console.log(validator);
+exports.createVendors = async (data) => {
+    // 1. Validate
+    const errors = validateVendors(data);
+    if (errors.length > 0) throw new Error(errors.join(", "));
 
-console.time("DB");
+    // 2. Save to pending_registrations — does NOT touch users/professionals/vendors yet
+    const tempUuid = await repo.insertPending(data);
 
-const errors = validator.validateVendors(data);
-
-
-if(errors.length){
-throw new Error(errors.join(", "));
-}
-const conn = await db.getConnection();
-try{
-await conn.beginTransaction();
-const userId = await repo.insertUser(conn,data);
-const professionalId = await repo.insertProfessional(conn,data,userId, "vendor");
-await repo.insertVendors(conn,data,professionalId);
-
-console.timeEnd("DB");
-
-await conn.commit();
-return {message:"Vendor registration done, now login to verify your account.", id: userId };
-}
-catch(err){
-await conn.rollback();
-throw err;
-}
-finally{
-conn.release();
-}
+    return {
+        success: true,
+        tempUuid,
+        message: "Registration submitted successfully. Awaiting admin approval."
+    };
 };
+
 exports.getAllVendors = async () => {
-  const vendors = await repo.getAllVendors();
-  return vendors;
+    return await repo.getAllVendors();
 };

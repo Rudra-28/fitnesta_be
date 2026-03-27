@@ -2,13 +2,15 @@ const db = require("../../config/db");
 
 const findUserByMobile = async (mobile) => {
   const [rows] = await db.query(
-    `SELECT 
-        id, 
-        mobile, 
-        role, 
-        email, 
-        full_name, 
-        is_verified
+    `SELECT
+        id,
+        mobile,
+        role,
+        subrole,
+        email,
+        full_name,
+        is_verified,
+        approval_status
      FROM users
      WHERE mobile = ?
      LIMIT 1`,
@@ -35,7 +37,7 @@ const findStudentByUserIdAndType = async (userId, studentType) => {
 
 const findProfessionalsByUserId = async (userId) => {
   const [rows] = await db.query(
-    `SELECT profession_type FROM professionals WHERE user_id = ?`,
+    `SELECT profession_type, referral_code FROM professionals WHERE user_id = ?`,
     [userId]
   );
   return rows;
@@ -49,6 +51,17 @@ const findStudentsByUserId = async (userId) => {
   return rows;
 };
 
+const findPendingByMobile = async (mobile) => {
+  const [rows] = await db.query(
+    `SELECT status, service_type
+     FROM pending_registrations
+     WHERE JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ?
+     LIMIT 1`,
+    [mobile]
+  );
+  return rows.length ? rows[0] : null;
+};
+
 const markUserVerified = async (userId) => {
   await db.query(
     `UPDATE users 
@@ -60,6 +73,7 @@ const markUserVerified = async (userId) => {
 
 module.exports = {
   findUserByMobile,
+  findPendingByMobile,
   findProfessionalByUserIdAndType,
   findStudentByUserIdAndType,
   findProfessionalsByUserId,

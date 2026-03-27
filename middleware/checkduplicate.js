@@ -1,39 +1,43 @@
-const db = require("../config/db"); // Adjust if your config is one level up
+const db = require("../config/db");
 
 exports.verifyMobileUnique = async (req, res, next) => {
     try {
-        // This covers both field names: 'contactNumber' or 'mobile' across possible body structures
-        const mobile = req.body?.contactNumber || 
-                       req.body?.mobile || 
-                       req.body?.formData?.contactNumber || 
-                       req.body?.formData?.mobile;
+        const mobile = req.body?.authorityContact || req.body?.contactNumber || req.body?.mobile;
 
         if (!mobile) {
-            return res.status(400).json({
-                success: false,
-                message: "Mobile number is required."
-            });
+            return res.status(400).json({ success: false, message: "Mobile number is required." });
         }
 
-        // Query the 'users' table directly since all roles (teacher/trainer) are there
-        const [rows] = await db.execute(
-            "SELECT id FROM users WHERE mobile = ? LIMIT 1",
+        // Check 1: already an approved user
+        const [users] = await db.execute(
+            `SELECT id FROM users WHERE mobile = ? LIMIT 1`,
             [mobile]
         );
-
-        if (rows.length > 0) {
+        if (users.length > 0) {
             return res.status(400).json({
                 success: false,
                 message: "This mobile number is already registered. Please login or use another number."
             });
         }
 
-        next(); // Everything is fine, proceed to the controller
+        // Check 2: already has a pending submission
+        const [pending] = await db.execute(
+            `SELECT id FROM pending_registrations
+             WHERE JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ?
+             AND status = 'pending'
+             LIMIT 1`,
+            [mobile]
+        );
+        if (pending.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: "A registration request with this mobile number is already pending admin approval."
+            });
+        }
+
+        next();
     } catch (error) {
-        console.error("Duplicate Check Error:", error);
-        res.status(500).json({
-            success: false,
-            message: "Internal server error during validation."
-        });
+        console.error("Duplicate check error:", error);
+        res.status(500).json({ success: false, message: "Internal server error during validation." });
     }
 };
