@@ -1,86 +1,106 @@
-const db = require("../../../config/db");
+const prisma = require("../../../config/prisma");
 
-exports.insertUser = async (conn, data) => {
-    const [result] = await conn.execute(
-        `INSERT INTO users (role, full_name, address, mobile) VALUES (?, ?, ?, ?)`,
-        ['student', data?.fullName || null, data?.address || null, data?.contactNumber || null]
-    );
-    return result.insertId;
+// ── Called inside a Prisma transaction (tx) ────────────────────────────────
+exports.insertUser = async (tx, data) => {
+    const user = await tx.users.create({
+        data: {
+            role: "student",
+            full_name: data?.fullName || null,
+            address: data?.address || null,
+            mobile: data?.contactNumber || null,
+        },
+    });
+    return user.id;
 };
 
-exports.insertStudent = async (conn, userId, type) => {
-    const [result] = await conn.execute(
-        `INSERT INTO students (user_id, student_type) VALUES (?, ?)`,
-        [userId, type]
-    );
-    return result.insertId;
+exports.insertStudent = async (tx, userId, type) => {
+    const student = await tx.students.create({
+        data: { user_id: userId, student_type: type },
+    });
+    return student.id;
 };
 
-exports.insertpersonalTutor = async (conn, studentId, data) => {
-    return await conn.execute(
-        `INSERT INTO personal_tutors (student_id, dob, standard, batch, teacher_for) VALUES (?, ?, ?, ?, ?)`,
-        [
-            studentId, 
-            data?.dob || null, 
-            data?.standard || null, 
-            data?.batch || null, 
-            data?.teacherFor || null
-        ]
-    );
+exports.insertpersonalTutor = async (tx, studentId, data) => {
+    await tx.personal_tutors.create({
+        data: {
+            student_id: studentId,
+            dob: data?.dob ? new Date(data.dob) : null,
+            standard: data?.standard || null,
+            batch: data?.batch || null,
+            teacher_for: data?.teacherFor || null,
+        },
+    });
 };
 
-exports.insertParentConsent = async (conn, studentId, data) => {
-    if (!data) return null; // Skip if no consent data provided (e.g. adult students)
-    
-    return await conn.execute(
-        `INSERT INTO parent_consents (student_id, society_name, parent_name, emergency_contact_no, activity_enrolled, parent_signature_doc, consent_date) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-            studentId, 
-            data.society_name || null, 
-            data.parentName || null, 
-            data.emergencyContactNo || null, 
-            data.activity_enrolled || null, 
-            data.signatureUrl || null, 
-            data.consent_date || null
-        ]
-    );
+exports.insertParentConsent = async (tx, studentId, data) => {
+    if (!data) return null;
+    await tx.parent_consents.create({
+        data: {
+            student_id: studentId,
+            society_name: data.society_name || null,
+            parent_name: data.parentName || null,
+            emergency_contact_no: data.emergencyContactNo || null,
+            activity_enrolled: data.activity_enrolled || null,
+            parent_signature_doc: data.signatureUrl || null,
+            consent_date: data.consent_date ? new Date(data.consent_date) : new Date(),
+        },
+    });
 };
 
-exports.insertPendingRegistration = async (conn, tempUuid, formData, serviceType) => {
-    const jsonData = JSON.stringify(formData);
-    return await conn.execute(
-        `INSERT INTO pending_registrations (temp_uuid, form_data, service_type) VALUES (?, ?, ?)`,
-        [tempUuid, jsonData, serviceType || 'personal_tutor']
-    );
+// ── Pending state ──────────────────────────────────────────────────────────
+exports.insertPendingRegistration = async (tempUuid, formData, serviceType) => {
+    await prisma.pending_registrations.create({
+        data: {
+            temp_uuid: tempUuid,
+            form_data: formData,
+            service_type: serviceType || "personal_tutor",
+            status: "pending",
+        },
+    });
 };
 
-exports.getPendingByUuid = async (conn, tempUuid) => {
-    const [rows] = await conn.execute(
-        `SELECT * FROM pending_registrations WHERE temp_uuid = ? AND status = 'pending'`,
-        [tempUuid]
-    );
-    return rows[0];
+exports.getPendingByUuid = async (tempUuid) => {
+    return await prisma.pending_registrations.findFirst({
+        where: { temp_uuid: tempUuid, status: "pending" },
+    });
 };
 
-exports.updatePendingStatus = async (conn, id, status) => {
-    return await conn.execute(
-        `UPDATE pending_registrations SET status = ? WHERE id = ?`,
-        [status, id]
-    );
+// Used by getRegistrationStatus — needs to find the record even after it's approved
+exports.getPendingByUuidAny = async (tempUuid) => {
+    return await prisma.pending_registrations.findFirst({
+        where: { temp_uuid: tempUuid },
+    });
 };
 
+exports.updatePendingStatus = async (id, status) => {
+    await prisma.pending_registrations.update({
+        where: { id },
+        data: { status },
+    });
+};
+
+// ── Utility ────────────────────────────────────────────────────────────────
 exports.getpersonaltutordetails = async (userId) => {
-    const [rows] = await db.execute(
-        `SELECT 
-            u.full_name, u.address, u.mobile, 
-            s.id AS student_id, s.type,
-            pt.dob, pt.standard, pt.batch, pt.teacher_for
-         FROM users u 
-         JOIN students s ON u.id = s.user_id 
-         LEFT JOIN personal_tutors pt ON s.id = pt.student_id
-         WHERE u.id = ?`,
-        [userId]
-    );
-    return rows[0];
+    return await prisma.users.findFirst({
+        where: { id: userId },
+        select: {
+            full_name: true,
+            address: true,
+            mobile: true,
+            students: {
+                select: {
+                    id: true,
+                    student_type: true,
+                    personal_tutors: {
+                        select: {
+                            dob: true,
+                            standard: true,
+                            batch: true,
+                            teacher_for: true,
+                        },
+                    },
+                },
+            },
+        },
+    });
 };

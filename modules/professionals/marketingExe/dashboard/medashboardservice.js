@@ -1,4 +1,4 @@
-const db   = require("../../../../config/db");
+const prisma = require("../../../../config/prisma");
 const repo = require("./medashboardrepo");
 
 const getMeProfessional = async (meUserId) => {
@@ -11,15 +11,13 @@ const getMeProfessional = async (meUserId) => {
     return professional;
 };
 
-// ── Dashboard Summary ────────────────────────────────────────────────────────
-
+// ── Dashboard Summary ─────────────────────────────────────────────────────────
 exports.getSummary = async (meUserId) => {
     const professional = await getMeProfessional(meUserId);
     return await repo.getSummary(professional.id);
 };
 
-// ── Society ──────────────────────────────────────────────────────────────────
-
+// ── Society ───────────────────────────────────────────────────────────────────
 exports.registerSociety = async (data, meUserId) => {
     const professional = await getMeProfessional(meUserId);
 
@@ -50,8 +48,7 @@ exports.getSocietyById = async (societyId, meUserId) => {
     return society;
 };
 
-// ── School ───────────────────────────────────────────────────────────────────
-
+// ── School ────────────────────────────────────────────────────────────────────
 exports.registerSchool = async (data, meUserId) => {
     const professional = await getMeProfessional(meUserId);
 
@@ -62,19 +59,13 @@ exports.registerSchool = async (data, meUserId) => {
         throw err;
     }
 
-    const conn = await db.getConnection();
-    try {
-        await conn.beginTransaction();
-        const userId   = await repo.insertPrincipalUser(conn, data);
-        const schoolId = await repo.insertSchool(conn, data, userId, professional.id);
-        await conn.commit();
-        return { success: true, schoolId, userId, message: "School registered successfully." };
-    } catch (err) {
-        await conn.rollback();
-        throw err;
-    } finally {
-        conn.release();
-    }
+    const result = await prisma.$transaction(async (tx) => {
+        const userId   = await repo.insertPrincipalUser(tx, data);
+        const schoolId = await repo.insertSchool(tx, data, userId, professional.id);
+        return { schoolId, userId };
+    });
+
+    return { success: true, ...result, message: "School registered successfully." };
 };
 
 exports.getMySchools = async (meUserId) => {

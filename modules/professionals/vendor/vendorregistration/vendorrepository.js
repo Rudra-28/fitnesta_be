@@ -1,4 +1,4 @@
-const prisma = require("../../../config/prisma");
+const prisma = require("../../../../config/prisma");
 const crypto = require("crypto");
 
 // ── STEP 1: Stage submission ──────────────────────────────────────────────
@@ -8,7 +8,7 @@ exports.insertPending = async (data) => {
         data: {
             temp_uuid: tempUuid,
             form_data: data,
-            service_type: "trainer",
+            service_type: "vendor",
             status: "pending",
         },
     });
@@ -20,12 +20,11 @@ exports.insertUser = async (tx, data) => {
     const user = await tx.users.create({
         data: {
             role: "professional",
-            subrole: "trainer",
+            subrole: "vendor",
             full_name: data.fullName,
             mobile: data.contactNumber,
             email: data.email ?? null,
             address: data.address ?? null,
-            photo: data.photo ?? null,
             approval_status: "approved",
         },
     });
@@ -41,34 +40,32 @@ exports.insertProfessional = async (tx, data, userId) => {
             uuid,
             referral_code: referralCode,
             user_id: userId,
-            profession_type: "trainer",
+            profession_type: "vendor",
             pan_card: data.panCard ?? null,
             adhar_card: data.adharCard ?? null,
-            relative_name: data.relativeName ?? null,
-            relative_contact: data.relativeContact ?? null,
-            own_two_wheeler: data.ownTwoWheeler ?? false,
-            // TEXT column in DB — stored as JSON string
-            communication_languages: JSON.stringify(data.communicationLanguages ?? []),
-            place: data.place ?? null,
-            date: data.date ? new Date(data.date) : null,
         },
     });
     return professional.id;
 };
 
-exports.insertTrainer = async (tx, data, professionalId) => {
-    const trainer = await tx.trainers.create({
+exports.insertVendors = async (tx, data, professionalId) => {
+    await tx.vendors.create({
         data: {
             professional_id: professionalId,
-            player_level: data.playerLevel ?? null,
-            category: data.category ?? null,
-            // Prisma knows these are Json columns
-            specified_game: data.specifiedGame ?? [],
-            specified_skills: data.specifiedSkills ?? [],
-            experience_details: data.experienceDetails ?? null,
-            qualification_docs: data.qualificationDocs ?? null,
-            documents: data.documents ?? null,
+            store_name: data.storeName ?? null,
+            store_address: data.storeAddress ?? null,
+            store_location: data.storeLocation ?? null,
+            gst_certificate: data.GSTCertificate ?? null,
         },
     });
-    return trainer.id;
+};
+
+exports.getAllVendors = async () => {
+    return await prisma.vendors.findMany({
+        include: {
+            professionals: {
+                include: { users: true },
+            },
+        },
+    });
 };

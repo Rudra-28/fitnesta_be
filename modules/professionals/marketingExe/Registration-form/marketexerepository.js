@@ -1,85 +1,80 @@
-const db = require("../../../../config/db");
+const prisma = require("../../../../config/prisma");
+const crypto = require("crypto");
 
-// ── STEP 1: Save submission to staging table ──────────────────────────────
+// ── STEP 1: Stage submission ──────────────────────────────────────────────
 exports.insertPending = async (data) => {
-    const tempUuid = require("crypto").randomUUID();
-    await db.execute(
-        `INSERT INTO pending_registrations (temp_uuid, form_data, service_type, status)
-         VALUES (?, ?, 'marketing_executive', 'pending')`,
-        [tempUuid, JSON.stringify(data)]
-    );
+    const tempUuid = crypto.randomUUID();
+    await prisma.pending_registrations.create({
+        data: {
+            temp_uuid: tempUuid,
+            form_data: data,
+            service_type: "marketing_executive",
+            status: "pending",
+        },
+    });
     return tempUuid;
 };
 
-// ── STEP 2: Called by admin service on approval ───────────────────────────
-exports.insertUser = async (conn, data) => {
-    const [result] = await conn.execute(
-        `INSERT INTO users (role, subrole, full_name, mobile, email, address, photo, approval_status)
-         VALUES ('professional', 'marketing_executive', ?, ?, ?, ?, ?, 'approved')`,
-        [
-            data.fullName ?? null,
-            data.contactNumber ?? null,
-            data.email ?? null,
-            data.address ?? null,
-            data.photo ?? null,
-        ]
-    );
-    return result.insertId;
+// ── STEP 2: Called inside a Prisma transaction on admin approval ──────────
+exports.insertUser = async (tx, data) => {
+    const user = await tx.users.create({
+        data: {
+            role: "professional",
+            subrole: "marketing_executive",
+            full_name: data.fullName ?? null,
+            mobile: data.contactNumber ?? null,
+            email: data.email ?? null,
+            address: data.address ?? null,
+            photo: data.photo ?? null,
+            approval_status: "approved",
+        },
+    });
+    return user.id;
 };
 
-exports.insertProfessional = async (conn, data, userId) => {
-    const uuid = require("crypto").randomUUID();
+exports.insertProfessional = async (tx, data, userId) => {
+    const uuid = crypto.randomUUID();
     const referralCode = "FIT-" + uuid.replace(/-/g, "").substring(0, 8).toUpperCase();
 
-    const [result] = await conn.execute(
-        `INSERT INTO professionals
-         (uuid, referral_code, user_id, profession_type, pan_card, adhar_card, relative_name, relative_contact,
-          own_two_wheeler, communication_languages, place, date)
-         VALUES (?, ?, ?, 'marketing_executive', ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+    const professional = await tx.professionals.create({
+        data: {
             uuid,
-            referralCode,
-            userId,
-            data.panCard ?? null,
-            data.adharCard ?? null,
-            data.relativeName ?? null,
-            data.relativeContact ?? null,
-            data.ownTwoWheeler ? 1 : 0,
-            JSON.stringify(data.communicationLanguages ?? []),
-            data.place ?? null,
-            data.date ?? null,
-        ]
-    );
-    return result.insertId;
+            referral_code: referralCode,
+            user_id: userId,
+            profession_type: "marketing_executive",
+            pan_card: data.panCard ?? null,
+            adhar_card: data.adharCard ?? null,
+            relative_name: data.relativeName ?? null,
+            relative_contact: data.relativeContact ?? null,
+            own_two_wheeler: data.ownTwoWheeler ?? false,
+            // TEXT column in DB — stored as JSON string
+            communication_languages: JSON.stringify(data.communicationLanguages ?? []),
+            place: data.place ?? null,
+            date: data.date ? new Date(data.date) : null,
+        },
+    });
+    return professional.id;
 };
 
-exports.insertMarketexe = async (conn, data, professionalId) => {
-    const [result] = await conn.execute(
-        `INSERT INTO marketing_executives
-         (professional_id, dob, education_qualification, previous_experience, activity_agreement_pdf)
-         VALUES (?, ?, ?, ?, ?)`,
-        [
-            professionalId,
-            data.dob ?? null,
-            data.educationQualification ?? null,
-            data.previousExperience ?? null,
-            data.activityAgreementsPdf ?? null,
-        ]
-    );
-    return result.insertId;
+exports.insertMarketexe = async (tx, data, professionalId) => {
+    const me = await tx.marketing_executives.create({
+        data: {
+            professional_id: professionalId,
+            dob: data.dob ? new Date(data.dob) : null,
+            education_qualification: data.educationQualification ?? null,
+            previous_experience: data.previousExperience ?? null,
+            activity_agreement_pdf: data.activityAgreementsPdf ?? null,
+        },
+    });
+    return me.id;
 };
 
 exports.getAllMarketexe = async () => {
-    const [rows] = await db.execute(
-        `SELECT
-            u.id AS user_id, u.full_name, u.mobile, u.email, u.address, u.photo,
-            p.id AS professional_id, p.pan_card, p.adhar_card, p.relative_name,
-            p.relative_contact, p.own_two_wheeler, p.communication_languages, p.place, p.date,
-            m.id AS market_exe_id, m.dob, m.education_qualification,
-            m.previous_experience, m.activity_agreement_pdf
-         FROM marketing_executives m
-         JOIN professionals p ON m.professional_id = p.id
-         JOIN users u ON p.user_id = u.id`
-    );
-    return rows;
+    return await prisma.marketing_executives.findMany({
+        include: {
+            professionals: {
+                include: { users: true },
+            },
+        },
+    });
 };

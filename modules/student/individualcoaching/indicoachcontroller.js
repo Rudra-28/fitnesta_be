@@ -1,50 +1,60 @@
 const service = require("./indicoachservice");
+const jwt = require("jsonwebtoken");
+const { verifyWebhookSignature } = require("../../../utils/razorpay");
 
 function toYYYYMMDD(dateStr) {
   if (!dateStr) return null;
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
-    const [day, month, year] = dateStr.split('/');
+    const [day, month, year] = dateStr.split("/");
     return `${year}-${month}-${day}`;
   }
   const parsed = new Date(dateStr);
-  return isNaN(parsed) ? null : parsed.toISOString().split('T')[0];
+  return isNaN(parsed) ? null : parsed.toISOString().split("T")[0];
 }
 
+/**
+ * PHASE 1 — Flutter submits the enrollment form.
+ *
+ * Expected extra fields (on top of existing form fields):
+ *   activity_id  {number}  — selected activity's ID from the activities list
+ *   term_months  {number}  — 1, 3, or 6
+ *   coaching_type {string} — 'individual_coaching' (default) or 'group_coaching'
+ *                            (when the form is used for group coaching individual participant)
+ *
+ * Response: { success, temp_uuid, order_id, amount, currency, key_id }
+ * Flutter uses order_id + key_id to open the Razorpay SDK checkout.
+ */
 exports.submitRegistration = async (req, res) => {
   try {
     let { formData, serviceType } = req.body;
 
-    if (typeof formData === 'string') {
+    if (typeof formData === "string") {
       try {
         formData = JSON.parse(formData);
-      } catch (e) {
-        throw new Error("Invalid formData JSON format");
+      } catch {
+        return res.status(400).json({ success: false, message: "Invalid formData JSON" });
       }
     } else if (!formData || Object.keys(formData).length === 0) {
       formData = { ...req.body };
     }
 
-    if (!serviceType) {
-      serviceType = formData.serviceType || 'individual_coaching';
-    }
+    if (!serviceType) serviceType = formData.serviceType || "individual_coaching";
     delete formData.serviceType;
 
-    // Capture signature file
-    const signatureFile = (req.files?.['signatureUrl'] && req.files['signatureUrl'][0]) ||
-      (req.files?.['signature_url'] && req.files['signature_url'][0]) ||
+    const signatureFile =
+      (req.files?.["signatureUrl"] && req.files["signatureUrl"][0]) ||
+      (req.files?.["signature_url"] && req.files["signature_url"][0]) ||
       req.file;
 
-    // Normalize dates on the flat formData BEFORE restructuring
     formData.dob = toYYYYMMDD(formData.dob);
     formData.consent_date = toYYYYMMDD(formData.consent_date);
 
-    // Group flat fields into nested structure
     if (formData && !formData.user_info) {
       formData = {
         user_info: {
           fullName: formData.fullName || formData.participantName || formData.full_name,
-          contactNumber: formData.contactNumber || formData.mobile || formData.contact_number
+          contactNumber: formData.contactNumber || formData.mobile || formData.contact_number,
         },
         individualcoaching: {
           flat_no: formData.flat_no,
@@ -52,7 +62,7 @@ exports.submitRegistration = async (req, res) => {
           age: formData.age,
           society_name: formData.society_name,
           activities: formData.activities || formData.activity_enrolled,
-          kit_type: formData.kit_type || formData.kits || formData.Kit_type
+          kit_type: formData.kit_type || formData.kits || formData.Kit_type,
         },
         consentDetails: {
           society_name: formData.society_name,
@@ -60,8 +70,14 @@ exports.submitRegistration = async (req, res) => {
           emergencyContactNo: formData.emergencyContactNo || formData.emergency_contact_no,
           activity_enrolled: formData.activity_enrolled,
           consent_date: formData.consent_date,
-          signatureUrl: formData.signatureUrl || formData.signature_url
-        }
+          signatureUrl: formData.signatureUrl || formData.signature_url,
+        },
+        // Payment fields — Flutter must send these so we can look up the fee
+        payment: {
+          activity_id: formData.activity_id ? parseInt(formData.activity_id) : null,
+          term_months: formData.term_months ? parseInt(formData.term_months) : null,
+          coaching_type: formData.coaching_type || serviceType,
+        },
       };
     }
 
@@ -70,93 +86,96 @@ exports.submitRegistration = async (req, res) => {
       formData.consentDetails.signatureUrl = signatureFile.path.replace(/\\/g, "/");
     }
 
-    console.log("PHASE 1: Initiating individual coaching registration for:",
-      formData.user_info?.fullName || formData.user_info?.contactNumber);
+    const result = await service.initiateRegistration(formData, serviceType);
 
-    const tempUuid = await service.initiateRegistration(formData, serviceType);
-    console.log("Registration parked. Temp UUID:", tempUuid);
-
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Data stored in Cached Memory Successfully. Awaiting payment confirmation.",
-      temp_uuid: tempUuid,
+      message: "Registration parked. Complete payment to confirm.",
+      temp_uuid: result.tempUuid,
+      order_id: result.orderId,
+      amount: result.amount,
+      currency: result.currency,
+      key_id: result.keyId,
     });
   } catch (error) {
-    console.error("PHASE 1 Error (initiateRegistration):", error);
-    res.status(500).json({ success: false, message: error.message });
+    return res.status(error.status ?? 500).json({ success: false, message: error.message });
   }
 };
 
+/**
+ * PHASE 2 — Razorpay webhook (payment.captured event).
+ *
+ * Razorpay POST body structure:
+ * {
+ *   event: "payment.captured",
+ *   payload: {
+ *     payment: {
+ *       entity: {
+ *         id: "pay_xxx",
+ *         order_id: "order_xxx",
+ *         notes: { temp_uuid: "...", service_type: "..." }
+ *       }
+ *     }
+ *   }
+ * }
+ *
+ * The X-Razorpay-Signature header must match our HMAC-SHA256 of the raw body.
+ * Configure this URL in the Razorpay dashboard under Webhooks.
+ */
 exports.handlePaymentWebhook = async (req, res) => {
   try {
-    const { temp_uuid, payment_id } = req.body;
-    console.log("PHASE 2: Webhook received. Temp UUID:", temp_uuid, "Payment ID:", payment_id);
+    const signature = req.headers["x-razorpay-signature"];
 
-    if (!temp_uuid) {
-      console.warn("Webhook received without temp_uuid");
-      return res.status(400).send("No UUID provided in metadata");
+    if (!verifyWebhookSignature(req.rawBody, signature)) {
+      return res.status(400).json({ success: false, message: "Invalid webhook signature" });
     }
 
-    const result = await service.finalizeRegistration(temp_uuid, payment_id);
-    console.log("Registration finalized for User ID:", result.userId);
+    const entity = req.body?.payload?.payment?.entity;
+    const temp_uuid = entity?.notes?.temp_uuid;
 
-    res.status(200).json({
-      success: true,
-      message: "Webhook processed. Tables updated.",
-      userId: result.userId
-    });
+    if (!temp_uuid) {
+      return res.status(400).json({ success: false, message: "temp_uuid missing from payment notes" });
+    }
+
+    // Only finalize on payment.captured; ignore other events silently
+    if (req.body.event !== "payment.captured") {
+      return res.status(200).json({ received: true });
+    }
+
+    await service.finalizeRegistration(temp_uuid);
+    return res.status(200).json({ success: true });
   } catch (error) {
-    console.error("Webhook Logic Error:", error);
-    res.status(200).send("Error logged; manual intervention may be required.");
+    // Return 200 so Razorpay does not keep retrying — error is logged for manual review
+    console.error("IC Webhook error:", error);
+    return res.status(200).json({ received: true });
   }
 };
 
-const jwt = require('jsonwebtoken');
-
+/**
+ * PHASE 3 — Flutter polls this after the Razorpay SDK closes.
+ * Returns JWT once the webhook has finalized the registration.
+ */
 exports.checkRegistrationStatus = async (req, res) => {
   try {
     const { temp_uuid } = req.params;
-    console.log("Checking status for Temp UUID:", temp_uuid);
     const registration = await service.getRegistrationStatus(temp_uuid);
 
-    if (registration.status === 'completed') {
-      console.log("Registration completed for Temp UUID:", temp_uuid, ". Generating JWT.");
+    if (registration.status === "approved") {
       const token = jwt.sign(
-        { id: registration.userId, role: 'student' },
+        { id: registration.userId, role: "student" },
         process.env.JWT_ACCESS_SECRET,
-        { expiresIn: '7d' }
+        { expiresIn: "7d" }
       );
-      res.status(200).json({
+      return res.status(200).json({
         success: true,
         isCompleted: true,
-        token: token,
-        userId: registration.userId
+        token,
+        userId: registration.userId,
       });
-    } else {
-      console.log("Registration still pending for Temp UUID:", temp_uuid);
-      res.status(200).json({ success: true, isCompleted: false });
     }
+
+    return res.status(200).json({ success: true, isCompleted: false, status: registration.status });
   } catch (error) {
-    console.error("Status Check Error:", error);
-    res.status(404).json({ success: false, message: error.message });
-  }
-};
-
-exports.mockPayment = async (req, res) => {
-  try {
-    const { temp_uuid } = req.body;
-    console.log("Mocking payment for Temp UUID:", temp_uuid);
-
-    const result = await service.finalizeRegistration(temp_uuid);
-    console.log("Mock payment finalized for User ID:", result.userId);
-
-    res.status(200).json({
-      success: true,
-      message: "Manual payment mock successful",
-      data: result
-    });
-  } catch (error) {
-    console.error("Mock Payment Error:", error);
-    res.status(400).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };

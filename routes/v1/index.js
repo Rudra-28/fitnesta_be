@@ -8,6 +8,7 @@ router.use('/auth', require('../../modules/auth/authroute'));
 router.use('/trainers', require('../../modules/professionals/trainer/trainerroute'));
 router.use('/teachers', require('../../modules/professionals/teacher/teacherroute'));
 router.use('/vendors', require('../../modules/professionals/vendor/vendorroute'));
+router.use('/vendor-dashboard', require('../../modules/professionals/vendor/vendordashboard/vendordashboardroute'));
 router.use('/marketing-executives', require('../../modules/professionals/marketingExe/Registration-form/marketexeroute'));
 router.use('/personal-tutor', require('../../modules/student/personaltutor/perstutorroute'));
 router.use('/individual-coaching', individualCoaching);

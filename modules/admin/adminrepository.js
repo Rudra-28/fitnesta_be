@@ -1,39 +1,39 @@
-const db = require("../../config/db");
+const prisma = require("../../config/prisma");
 
 exports.getAllPending = async (serviceType) => {
-    if (serviceType) {
-        const [rows] = await db.execute(
-            `SELECT id, temp_uuid, service_type, form_data, created_at
-             FROM pending_registrations
-             WHERE status = 'pending' AND service_type = ?
-             ORDER BY created_at DESC`,
-            [serviceType]
-        );
-        return rows;
-    }
-
-    const [rows] = await db.execute(
-        `SELECT id, temp_uuid, service_type, form_data, created_at
-         FROM pending_registrations
-         WHERE status = 'pending'
-         ORDER BY created_at DESC`
-    );
-    return rows;
+    return await prisma.pending_registrations.findMany({
+        where: {
+            status: "pending",
+            ...(serviceType && { service_type: serviceType }),
+        },
+        select: {
+            id: true,
+            temp_uuid: true,
+            service_type: true,
+            form_data: true,
+            created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+    });
 };
 
 exports.getById = async (id) => {
-    const [rows] = await db.execute(
-        `SELECT * FROM pending_registrations WHERE id = ? LIMIT 1`,
-        [id]
-    );
-    return rows[0] || null;
+    return await prisma.pending_registrations.findFirst({
+        where: { id: Number(id) },
+    });
 };
 
-exports.markReviewed = async (id, status, reviewedBy, note) => {
-    await db.execute(
-        `UPDATE pending_registrations
-         SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = NOW()
-         WHERE id = ?`,
-        [status, reviewedBy, note ?? null, id]
-    );
+// tx is a Prisma transaction client when called inside $transaction,
+// or null when called outside (rejection path) — falls back to prisma directly.
+exports.markReviewed = async (tx, id, status, reviewedBy, note) => {
+    const client = tx ?? prisma;
+    await client.pending_registrations.update({
+        where: { id: Number(id) },
+        data: {
+            status,
+            reviewed_by: reviewedBy,
+            review_note: note ?? null,
+            reviewed_at: new Date(),
+        },
+    });
 };

@@ -1,102 +1,80 @@
-const db = require("../../../config/db");
+const prisma = require("../../../config/prisma");
 
-/**
- * --- PERMANENT STORAGE FUNCTIONS ---
- * These are called ONLY after payment is confirmed.
- */
-
-exports.insertUser = async (conn, data) => {
-    const [result] = await conn.execute(
-        `INSERT INTO users (role, full_name, mobile) VALUES (?, ?, ?)`,
-        ['student', data?.fullName || null, data?.contactNumber || null]
-    );
-    return result.insertId;
+// ── Called inside a Prisma transaction (tx) ────────────────────────────────
+exports.insertUser = async (tx, data) => {
+    const user = await tx.users.create({
+        data: {
+            role: "student",
+            full_name: data?.fullName || null,
+            mobile: data?.contactNumber || null,
+        },
+    });
+    return user.id;
 };
 
-exports.insertStudent = async (conn, userId, type) => {
-    const [result] = await conn.execute(
-        `INSERT INTO students (user_id, student_type) VALUES (?, ?)`,
-        [userId, type || 'individual_coaching']
-    );
-    return result.insertId;
+exports.insertStudent = async (tx, userId, type) => {
+    const student = await tx.students.create({
+        data: { user_id: userId, student_type: type || "individual_coaching" },
+    });
+    return student.id;
 };
 
-exports.insertindividualcoaching = async (conn, studentId, data) => {
-    return await conn.execute(
-        `INSERT INTO individual_participants (student_id, flat_no, dob, age, society_name, activity, kits) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-            studentId,
-            data?.flat_no || null, 
-            data?.dob || null, 
-            data?.age || null, 
-            data?.society_name || null, 
-            data?.activities || null, 
-            data?.kit_type || null
-        ]
-    );
+exports.insertindividualcoaching = async (tx, studentId, data) => {
+    await tx.individual_participants.create({
+        data: {
+            student_id: studentId,
+            flat_no: data?.flat_no || null,
+            dob: data?.dob ? new Date(data.dob) : null,
+            age: data?.age || null,
+            society_name: data?.society_name || null,
+            activity: data?.activities || null,
+            kits: data?.kit_type || null,
+        },
+    });
 };
 
-//in frontend if age is less than 18 than only the consent form will be filled.
-exports.insertParentConsent = async (conn, studentId, data) => {
-    // Fixed: Ensure columns match the values array exactly
-    return await conn.execute(
-        `INSERT INTO parent_consents (student_id, society_name, parent_name, emergency_contact_no, activity_enrolled, parent_signature_doc, consent_date) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [
-            studentId, 
-            data.society_name || null, 
-            data.parentName || null, 
-            data.emergencyContactNo || null, 
-            data.activity_enrolled || null, 
-            data.signatureUrl || null, 
-            data.consent_date || null
-        ]
-    );
+exports.insertParentConsent = async (tx, studentId, data) => {
+    await tx.parent_consents.create({
+        data: {
+            student_id: studentId,
+            society_name: data.society_name || null,
+            parent_name: data.parentName || null,
+            emergency_contact_no: data.emergencyContactNo || null,
+            activity_enrolled: data.activity_enrolled || null,
+            parent_signature_doc: data.signatureUrl || null,
+            consent_date: data.consent_date ? new Date(data.consent_date) : new Date(),
+        },
+    });
 };
 
-/**
- * --- PENDING STATE FUNCTIONS ---
- * Used to "park" data before payment.
- */
-
-exports.insertPendingRegistration = async (conn, tempUuid, formData, serviceType) => {
-    const jsonData = JSON.stringify(formData);
-    return await conn.execute(
-        `INSERT INTO pending_registrations (temp_uuid, form_data, service_type) VALUES (?, ?, ?)`,
-        [tempUuid, jsonData, serviceType || 'individual_coaching']
-    );
+// ── Pending state ──────────────────────────────────────────────────────────
+exports.insertPendingRegistration = async (tempUuid, formData, serviceType) => {
+    await prisma.pending_registrations.create({
+        data: {
+            temp_uuid: tempUuid,
+            form_data: formData,
+            service_type: serviceType || "individual_coaching",
+            status: "pending",
+        },
+    });
 };
 
-exports.getPendingByUuid = async (conn, tempUuid) => {
-    const [rows] = await conn.execute(
-        `SELECT * FROM pending_registrations WHERE temp_uuid = ? AND status = 'pending'`,
-        [tempUuid]
-    );
-    return rows[0];
+exports.getPendingByUuid = async (tempUuid) => {
+    return await prisma.pending_registrations.findFirst({
+        where: { temp_uuid: tempUuid, status: "pending" },
+    });
 };
 
-exports.updatePendingStatus = async (conn, id, status) => {
-    return await conn.execute(
-        `UPDATE pending_registrations SET status = ? WHERE id = ?`,
-        [status, id]
-    );
+// Used by getRegistrationStatus — needs to find the record even after it's approved
+exports.getPendingByUuidAny = async (tempUuid) => {
+    return await prisma.pending_registrations.findFirst({
+        where: { temp_uuid: tempUuid },
+    });
 };
 
-/**
- * --- UTILITY FUNCTIONS ---
- */
-
-exports.getpersonaltutordetails = async (userId) => {
-    const [rows] = await db.execute(
-        `SELECT 
-            u.full_name, u.address, u.mobile, 
-            s.id AS student_id, s.type,
-            pt.dob, pt.standard, pt.batch, pt.teacher_for
-         FROM users u 
-         JOIN students s ON u.id = s.user_id 
-         LEFT JOIN personal_tutors pt ON s.id = pt.student_id
-         WHERE u.id = ?`,
-        [userId]
-    );
-    return rows[0];
+exports.updatePendingStatus = async (id, status) => {
+    await prisma.pending_registrations.update({
+        where: { id },
+        data: { status },
+    });
 };

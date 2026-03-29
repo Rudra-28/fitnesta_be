@@ -1,36 +1,94 @@
-const db = require("../../config/db");
+const prisma = require("../../config/prisma");
 
 /**
  * Fetch active activities with their fee structures for a given coaching type.
- * For school_student, we alias to individual_coaching since no separate fee rows exist.
+ * Optionally filter by society_category (A+, A, B) — relevant for group_coaching.
  */
-exports.getActivitiesByCoachingType = async (coachingType) => {
-    const [rows] = await db.execute(
-        `SELECT
-            a.id,
-            a.name,
-            a.notes,
-            f.society_category,
-            f.standard,
-            f.term_months,
-            f.total_fee,
-            f.effective_monthly
-         FROM activities a
-         JOIN fee_structures f ON f.activity_id = a.id
-         WHERE a.is_active = 1
-           AND f.coaching_type = ?
-         ORDER BY a.id, f.society_category, f.standard, f.term_months`,
-        [coachingType]
-    );
-    return rows;
+exports.getActivitiesByCoachingType = async (coachingType, societyCategory = null) => {
+    const where = {
+        is_active: true,
+        fee_structures: {
+            some: {
+                coaching_type: coachingType,
+                ...(societyCategory && { society_category: societyCategory }),
+            },
+        },
+    };
+
+    const activities = await prisma.activities.findMany({
+        where,
+        include: {
+            fee_structures: {
+                where: {
+                    coaching_type: coachingType,
+                    ...(societyCategory && { society_category: societyCategory }),
+                },
+                select: {
+                    society_category: true,
+                    standard: true,
+                    term_months: true,
+                    total_fee: true,
+                    effective_monthly: true,
+                },
+                orderBy: [
+                    { society_category: "asc" },
+                    { standard: "asc" },
+                    { term_months: "asc" },
+                ],
+            },
+        },
+        orderBy: { id: "asc" },
+    });
+
+    return activities;
 };
 
 /**
  * Fetch all active activities (no fee data).
  */
 exports.getAllActiveActivities = async () => {
-    const [rows] = await db.execute(
-        `SELECT id, name, notes FROM activities WHERE is_active = 1 ORDER BY id`
-    );
-    return rows;
+    return await prisma.activities.findMany({
+        where: { is_active: true },
+        select: { id: true, name: true, notes: true },
+        orderBy: { id: "asc" },
+    });
+};
+
+/**
+ * Look up the fee for a single activity.
+ * Used by individual_coaching, group_coaching, and school_student flows.
+ * @param {number} activityId
+ * @param {string} coachingType  - 'individual_coaching' | 'group_coaching' | 'school_student'
+ * @param {number} termMonths    - 1 | 3 | 6 | 9
+ * @returns {{ total_fee: Decimal } | null}
+ */
+exports.getFeeForActivity = async (activityId, coachingType, termMonths) => {
+    return await prisma.fee_structures.findFirst({
+        where: {
+            activity_id: activityId,
+            coaching_type: coachingType,
+            term_months: termMonths,
+        },
+        select: { total_fee: true },
+    });
+};
+
+/**
+ * Look up fees for multiple activities at once (personal tutor multi-subject).
+ * @param {number[]} activityIds
+ * @param {string}   coachingType - 'personal_tutor'
+ * @param {number}   termMonths   - 1 | 3
+ * @param {string}   standard     - e.g. '8TH-10TH'
+ * @returns {Array<{ activity_id: number, total_fee: Decimal }>}
+ */
+exports.getFeesForActivities = async (activityIds, coachingType, termMonths, standard) => {
+    return await prisma.fee_structures.findMany({
+        where: {
+            activity_id: { in: activityIds },
+            coaching_type: coachingType,
+            term_months: termMonths,
+            standard,
+        },
+        select: { activity_id: true, total_fee: true },
+    });
 };

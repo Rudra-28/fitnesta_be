@@ -1,29 +1,15 @@
-const db = require("../../config/db"); 
+const prisma = require("../../config/prisma");
 const repo = require("./schoolrepo");
 
 exports.registerSchool = async (data) => {
-  const conn = await db.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const userId   = await repo.insertUser(conn, data);
-    const schoolId = await repo.insertSchool(conn, data, userId);
-
-    await conn.commit();
-    return { schoolId, userId };
-  } catch (error) {
-    await conn.rollback();
-    throw error;
-  } finally {
-    conn.release();
-  }
+    const result = await prisma.$transaction(async (tx) => {
+        const userId   = await repo.insertUser(tx, data);
+        const schoolId = await repo.insertSchool(tx, data, userId);
+        return { schoolId, userId };
+    });
+    return result;
 };
 
 exports.getSchools = async () => {
-  try {
-    const schools = await repo.getAllSchools();
-    return schools;
-  } catch (error) {
-    throw error;
-  }
+    return await repo.getAllSchools();
 };

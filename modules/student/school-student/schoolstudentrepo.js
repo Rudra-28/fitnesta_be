@@ -1,59 +1,65 @@
-const db = require("../../../config/db");
+const prisma = require("../../../config/prisma");
 
-// --- PERMANENT STORAGE FUNCTIONS ---
-
-exports.insertUser = async (conn, data) => {
-    const [result] = await conn.execute(
-        `INSERT INTO users (role, full_name, mobile) VALUES (?, ?, ?)`,
-        ['student', data.fullName, data.mobile]
-    );
-    return result.insertId;
+// ── Called inside a Prisma transaction (tx) ────────────────────────────────
+exports.insertUser = async (tx, data) => {
+    const user = await tx.users.create({
+        data: {
+            role: "student",
+            full_name: data.fullName,
+            mobile: data.mobile,
+        },
+    });
+    return user.id;
 };
 
-exports.insertStudent = async (conn, userId, type) => {
-    const [result] = await conn.execute(
-        `INSERT INTO students (user_id, student_type) VALUES (?, ?)`,
-        [userId, type]
-    );
-    return result.insertId;
+exports.insertStudent = async (tx, userId, type) => {
+    const student = await tx.students.create({
+        data: { user_id: userId, student_type: type },
+    });
+    return student.id;
 };
 
-exports.insertSchoolStudent = async (conn, studentId, data) => {
-    return await conn.execute(
-        `INSERT INTO school_students (student_id, school_id, student_name, standard, address, kit_type) 
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-            studentId, 
-            data.school_id, 
-            data.fullName, 
-            data.standard, 
-            data.address, 
-            data.kit_type
-        ]
-    );
+exports.insertSchoolStudent = async (tx, studentId, data) => {
+    await tx.school_students.create({
+        data: {
+            student_id: studentId,
+            school_id: data.school_id,
+            student_name: data.fullName,
+            standard: data.standard,
+            address: data.address,
+            kit_type: data.kit_type || null,
+        },
+    });
 };
 
-// --- PENDING STATE FUNCTIONS ---
-
-exports.insertPendingRegistration = async (conn, tempUuid, formData, serviceType) => {
-    const jsonData = JSON.stringify(formData);
-    return await conn.execute(
-        `INSERT INTO pending_registrations (temp_uuid, form_data, service_type) VALUES (?, ?, ?)`,
-        [tempUuid, jsonData, serviceType]
-    );
+// ── Pending state ──────────────────────────────────────────────────────────
+exports.insertPendingRegistration = async (tempUuid, formData, serviceType) => {
+    await prisma.pending_registrations.create({
+        data: {
+            temp_uuid: tempUuid,
+            form_data: formData,
+            service_type: serviceType,
+            status: "pending",
+        },
+    });
 };
 
-exports.getPendingByUuid = async (conn, tempUuid) => {
-    const [rows] = await conn.execute(
-        `SELECT * FROM pending_registrations WHERE temp_uuid = ? AND status = 'pending'`,
-        [tempUuid]
-    );
-    return rows[0];
+exports.getPendingByUuid = async (tempUuid) => {
+    return await prisma.pending_registrations.findFirst({
+        where: { temp_uuid: tempUuid, status: "pending" },
+    });
 };
 
-exports.updatePendingStatus = async (conn, id, status) => {
-    return await conn.execute(
-        `UPDATE pending_registrations SET status = ? WHERE id = ?`,
-        [status, id]
-    );
+// Used by getRegistrationStatus — needs to find the record even after it's approved
+exports.getPendingByUuidAny = async (tempUuid) => {
+    return await prisma.pending_registrations.findFirst({
+        where: { temp_uuid: tempUuid },
+    });
+};
+
+exports.updatePendingStatus = async (id, status) => {
+    await prisma.pending_registrations.update({
+        where: { id },
+        data: { status },
+    });
 };

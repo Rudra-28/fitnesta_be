@@ -1,70 +1,70 @@
-const db = require("../../../config/db");
+const prisma = require("../../../config/prisma");
+const crypto = require("crypto");
 
-// ── STEP 1: Save submission to staging table ──────────────────────────────
+// ── STEP 1: Stage submission ──────────────────────────────────────────────
 exports.insertPending = async (data) => {
-    const tempUuid = require("crypto").randomUUID();
-    await db.execute(
-        `INSERT INTO pending_registrations (temp_uuid, form_data, service_type, status)
-         VALUES (?, ?, 'teacher', 'pending')`,
-        [tempUuid, JSON.stringify(data)]
-    );
+    const tempUuid = crypto.randomUUID();
+    await prisma.pending_registrations.create({
+        data: {
+            temp_uuid: tempUuid,
+            form_data: data,
+            service_type: "teacher",
+            status: "pending",
+        },
+    });
     return tempUuid;
 };
 
-// ── STEP 2: Called by admin service on approval ───────────────────────────
-exports.insertUser = async (conn, data) => {
-    const [result] = await conn.execute(
-        `INSERT INTO users (role, subrole, full_name, mobile, email, address, approval_status)
-         VALUES ('professional', 'teacher', ?, ?, ?, ?, 'approved')`,
-        [
-            data.fullName,
-            data.contactNumber,
-            data.email      ?? null,
-            data.address    ?? null,
-        ]
-    );
-    return result.insertId;
+// ── STEP 2: Called inside a Prisma transaction on admin approval ──────────
+exports.insertUser = async (tx, data) => {
+    const user = await tx.users.create({
+        data: {
+            role: "professional",
+            subrole: "teacher",
+            full_name: data.fullName,
+            mobile: data.contactNumber,
+            email: data.email ?? null,
+            address: data.address ?? null,
+            approval_status: "approved",
+        },
+    });
+    return user.id;
 };
 
-exports.insertProfessional = async (conn, data, userId) => {
-    const uuid         = require("crypto").randomUUID();
+exports.insertProfessional = async (tx, data, userId) => {
+    const uuid = crypto.randomUUID();
     const referralCode = "FIT-" + uuid.replace(/-/g, "").substring(0, 8).toUpperCase();
 
-    const [result] = await conn.execute(
-        `INSERT INTO professionals
-         (uuid, referral_code, user_id, profession_type, pan_card, adhar_card, relative_name, relative_contact,
-          own_two_wheeler, communication_languages, place, date)
-         VALUES (?, ?, ?, 'teacher', ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
+    const professional = await tx.professionals.create({
+        data: {
             uuid,
-            referralCode,
-            userId,
-            data.panCard                ?? null,
-            data.adharCard              ?? null,
-            data.relativeName           ?? null,
-            data.relativeContact        ?? null,
-            data.ownTwoWheeler ? 1 : 0,
-            JSON.stringify(data.communicationLanguages ?? []),
-            data.place                  ?? null,
-            data.date                   ?? null,
-        ]
-    );
-    return result.insertId;
+            referral_code: referralCode,
+            user_id: userId,
+            profession_type: "teacher",
+            pan_card: data.panCard ?? null,
+            adhar_card: data.adharCard ?? null,
+            relative_name: data.relativeName ?? null,
+            relative_contact: data.relativeContact ?? null,
+            own_two_wheeler: data.ownTwoWheeler ?? false,
+            // TEXT column in DB — stored as JSON string
+            communication_languages: JSON.stringify(data.communicationLanguages ?? []),
+            place: data.place ?? null,
+            date: data.date ? new Date(data.date) : null,
+        },
+    });
+    return professional.id;
 };
 
-exports.insertTeacher = async (conn, data, professionalId) => {
-    const [result] = await conn.execute(
-        `INSERT INTO teachers
-         (professional_id, subject, experience_details, ded_doc, bed_doc, other_doc)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-            professionalId,
-            data.subject ?? null,
-            data.experienceDetails ?? null,
-            data.dedDoc ?? null,
-            data.bedDoc ?? null,
-            data.otherDoc ?? null,  
-        ]
-    );
-    return result.insertId;
+exports.insertTeacher = async (tx, data, professionalId) => {
+    const teacher = await tx.teachers.create({
+        data: {
+            professional_id: professionalId,
+            subject: data.subject ?? null,
+            experience_details: data.experienceDetails ?? null,
+            ded_doc: data.dedDoc ?? null,
+            bed_doc: data.bedDoc ?? null,
+            other_doc: data.otherDoc ?? null,
+        },
+    });
+    return teacher.id;
 };

@@ -1,52 +1,36 @@
-const db   = require("../../../config/db");
+const prisma = require("../../../config/prisma");
 const repo = require("./societyrepo");
 
 exports.registerSociety = async (data) => {
-    const serviceType = data.hasSignedAgreement ? 'society_enrollment' : 'society_request';
+    const serviceType = data.hasSignedAgreement ? "society_enrollment" : "society_request";
 
     const duplicate = await repo.findBySocietyUniqueId(data.societyUniqueId);
 
     if (duplicate.exists) {
-        if (duplicate.where === 'approved') {
+        if (duplicate.where === "approved") {
             const err = new Error("A society with this ID is already registered.");
             err.statusCode = 409;
             throw err;
         }
-
-        // A pending enrollment already exists — block regardless of current path
-        if (duplicate.serviceType === 'society_enrollment') {
+        if (duplicate.serviceType === "society_enrollment") {
             const err = new Error("An enrollment for this Society ID is already pending admin approval.");
             err.statusCode = 409;
             throw err;
         }
-
-        // A pending society_request exists and the user is submitting another request — block
-        if (duplicate.serviceType === 'society_request' && !data.hasSignedAgreement) {
+        if (duplicate.serviceType === "society_request" && !data.hasSignedAgreement) {
             const err = new Error("A registration request for this Society ID is already pending approval.");
             err.statusCode = 409;
             throw err;
         }
-
-        // A pending society_request exists but the user is now submitting an enrollment
-        // (ME visited and agreement is signed) — allow it, the old request will be cancelled below
     }
 
-    // Enrollment path: validate referral code immediately so the user gets
-    // instant feedback before anything is staged
     if (data.hasSignedAgreement) {
-        const conn = await db.getConnection();
-        try {
-            const professional = await repo.findProfessionalByReferralCode(conn, data.referralCode);
-            if (!professional) {
-                const err = new Error("Invalid referral code. No Fitness Coordinator found with this code.");
-                err.statusCode = 400;
-                throw err;
-            }
-        } finally {
-            conn.release();
+        const professional = await repo.findProfessionalByReferralCode(null, data.referralCode);
+        if (!professional) {
+            const err = new Error("Invalid referral code. No Fitness Coordinator found with this code.");
+            err.statusCode = 400;
+            throw err;
         }
-
-        // Auto-cancel the pending society_request for the same society (now being upgraded to enrollment)
         await repo.cancelPendingRequest(data.societyUniqueId);
     }
 
@@ -57,7 +41,7 @@ exports.registerSociety = async (data) => {
         tempUuid,
         message: data.hasSignedAgreement
             ? "Society enrollment submitted. Awaiting approval."
-            : "Society registration request submitted. Awaiting admin approval."
+            : "Society registration request submitted. Awaiting admin approval.",
     };
 };
 
@@ -66,18 +50,19 @@ exports.getSocieties = async () => {
 };
 
 // ── helpers ────────────────────────────────────────────────────────────────
-const mapPending = (rows) => rows.map(r => ({
-    id: r.id,
-    tempUuid: r.temp_uuid,
-    serviceType: r.service_type,
-    submittedAt: r.created_at,
-    formData: r.form_data
-}));
+const mapPending = (rows) =>
+    rows.map((r) => ({
+        id: r.id,
+        tempUuid: r.temp_uuid,
+        serviceType: r.service_type,
+        submittedAt: r.created_at,
+        formData: r.form_data,
+    }));
 
 const assertPending = async (pendingId, expectedType) => {
     const pending = await repo.getPendingById(pendingId);
     if (!pending) { const err = new Error("PENDING_NOT_FOUND"); err.statusCode = 404; throw err; }
-    if (pending.status !== 'pending') { const err = new Error("ALREADY_REVIEWED"); err.statusCode = 409; throw err; }
+    if (pending.status !== "pending") { const err = new Error("ALREADY_REVIEWED"); err.statusCode = 409; throw err; }
     if (pending.service_type !== expectedType) {
         const err = new Error(`Expected a ${expectedType} entry, got ${pending.service_type}.`);
         err.statusCode = 400;
@@ -90,17 +75,14 @@ const assertPending = async (pendingId, expectedType) => {
 exports.listPendingRequests = async () => mapPending(await repo.getPendingRequests());
 
 exports.approveRequestByAdmin = async (pendingId, adminUserId, note) => {
-    await assertPending(pendingId, 'society_request');
-    // Approving a request only acknowledges it — no society is created yet.
-    // The society is inserted into the DB only when the enrollment is approved
-    // (after the ME visits and the agreement is physically signed).
-    await repo.markPendingReviewed(pendingId, 'approved', adminUserId, note);
+    await assertPending(pendingId, "society_request");
+    await repo.markPendingReviewed(pendingId, "approved", adminUserId, note);
     return { message: "Society request acknowledged. An ME will be assigned to visit." };
 };
 
 exports.rejectRequestByAdmin = async (pendingId, adminUserId, note) => {
-    await assertPending(pendingId, 'society_request');
-    await repo.markPendingReviewed(pendingId, 'rejected', adminUserId, note);
+    await assertPending(pendingId, "society_request");
+    await repo.markPendingReviewed(pendingId, "rejected", adminUserId, note);
     return { message: "Society request rejected." };
 };
 
@@ -108,29 +90,23 @@ exports.rejectRequestByAdmin = async (pendingId, adminUserId, note) => {
 exports.listPendingEnrollments = async () => mapPending(await repo.getPendingEnrollments());
 
 exports.approveEnrollmentByAdmin = async (pendingId, adminUserId, note) => {
-    const pending = await assertPending(pendingId, 'society_enrollment');
+    const pending = await assertPending(pendingId, "society_enrollment");
     const data = pending.form_data;
-    const conn = await db.getConnection();
-    try {
-        await conn.beginTransaction();
-        const professional = await repo.findProfessionalByReferralCode(conn, data.referralCode);
+
+    await prisma.$transaction(async (tx) => {
+        const professional = await repo.findProfessionalByReferralCode(tx, data.referralCode);
         if (!professional) throw new Error("Referral code is no longer valid.");
-        const userId = await repo.insertUser(conn, data);
-        await repo.insertSociety(conn, data, userId, professional.id);
-        await repo.markPendingReviewed(pendingId, 'approved', adminUserId, note);
-        await conn.commit();
-        return { message: "Society enrollment approved successfully." };
-    } catch (err) {
-        await conn.rollback();
-        throw err;
-    } finally {
-        conn.release();
-    }
+        const userId = await repo.insertUser(tx, data);
+        await repo.insertSociety(tx, data, userId, professional.id);
+        await repo.markPendingReviewed(pendingId, "approved", adminUserId, note);
+    });
+
+    return { message: "Society enrollment approved successfully." };
 };
 
 exports.rejectEnrollmentByAdmin = async (pendingId, adminUserId, note) => {
-    await assertPending(pendingId, 'society_enrollment');
-    await repo.markPendingReviewed(pendingId, 'rejected', adminUserId, note);
+    await assertPending(pendingId, "society_enrollment");
+    await repo.markPendingReviewed(pendingId, "rejected", adminUserId, note);
     return { message: "Society enrollment rejected." };
 };
 
@@ -151,7 +127,7 @@ exports.listPendingEnrollmentsForMe = async (meUserId) => {
 };
 
 exports.approveEnrollmentByMe = async (pendingId, meUserId, note) => {
-    const pending      = await assertPending(pendingId, 'society_enrollment');
+    const pending = await assertPending(pendingId, "society_enrollment");
     const professional = await getMeProfessional(meUserId);
 
     if (pending.form_data.referralCode !== professional.referral_code) {
@@ -160,24 +136,17 @@ exports.approveEnrollmentByMe = async (pendingId, meUserId, note) => {
         throw err;
     }
 
-    const conn = await db.getConnection();
-    try {
-        await conn.beginTransaction();
-        const userId = await repo.insertUser(conn, pending.form_data);
-        await repo.insertSociety(conn, pending.form_data, userId, professional.id);
-        await repo.markPendingReviewed(pendingId, 'approved', meUserId, note);
-        await conn.commit();
-        return { message: "Society enrollment approved successfully." };
-    } catch (err) {
-        await conn.rollback();
-        throw err;
-    } finally {
-        conn.release();
-    }
+    await prisma.$transaction(async (tx) => {
+        const userId = await repo.insertUser(tx, pending.form_data);
+        await repo.insertSociety(tx, pending.form_data, userId, professional.id);
+        await repo.markPendingReviewed(pendingId, "approved", meUserId, note);
+    });
+
+    return { message: "Society enrollment approved successfully." };
 };
 
 exports.rejectEnrollmentByMe = async (pendingId, meUserId, note) => {
-    const pending      = await assertPending(pendingId, 'society_enrollment');
+    const pending = await assertPending(pendingId, "society_enrollment");
     const professional = await getMeProfessional(meUserId);
 
     if (pending.form_data.referralCode !== professional.referral_code) {
@@ -186,6 +155,6 @@ exports.rejectEnrollmentByMe = async (pendingId, meUserId, note) => {
         throw err;
     }
 
-    await repo.markPendingReviewed(pendingId, 'rejected', meUserId, note);
+    await repo.markPendingReviewed(pendingId, "rejected", meUserId, note);
     return { message: "Society enrollment rejected." };
 };

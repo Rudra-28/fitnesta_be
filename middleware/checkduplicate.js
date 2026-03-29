@@ -1,4 +1,4 @@
-const db = require("../config/db");
+const prisma = require("../config/prisma");
 
 exports.verifyMobileUnique = async (req, res, next) => {
     try {
@@ -9,29 +9,28 @@ exports.verifyMobileUnique = async (req, res, next) => {
         }
 
         // Check 1: already an approved user
-        const [users] = await db.execute(
-            `SELECT id FROM users WHERE mobile = ? LIMIT 1`,
-            [mobile]
-        );
-        if (users.length > 0) {
+        const existingUser = await prisma.users.findFirst({
+            where: { mobile },
+            select: { id: true },
+        });
+        if (existingUser) {
             return res.status(400).json({
                 success: false,
-                message: "This mobile number is already registered. Please login or use another number."
+                message: "This mobile number is already registered. Please login or use another number.",
             });
         }
 
-        // Check 2: already has a pending submission
-        const [pending] = await db.execute(
-            `SELECT id FROM pending_registrations
-             WHERE JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ?
-             AND status = 'pending'
-             LIMIT 1`,
-            [mobile]
-        );
+        // Check 2: already has a pending submission (JSON_EXTRACT — raw query)
+        const pending = await prisma.$queryRaw`
+            SELECT id FROM pending_registrations
+            WHERE JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ${mobile}
+              AND status = 'pending'
+            LIMIT 1
+        `;
         if (pending.length > 0) {
             return res.status(400).json({
                 success: false,
-                message: "A registration request with this mobile number is already pending admin approval."
+                message: "A registration request with this mobile number is already pending admin approval.",
             });
         }
 

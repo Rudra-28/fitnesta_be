@@ -123,7 +123,27 @@ CREATE TABLE vendors (
 );
 
 -- ---------------------------------------------------------------
--- 8. WALLETS
+-- 8. VENDOR PRODUCTS
+-- Products (kits, equipment, etc.) listed by a vendor on their
+-- dashboard. sports_category is VARCHAR for extensibility.
+-- price = MRP, selling_price = discounted/offered price.
+-- ---------------------------------------------------------------
+CREATE TABLE vendor_products (
+    id              INT PRIMARY KEY AUTO_INCREMENT,
+    vendor_id       INT NOT NULL,
+    product_image   VARCHAR(255) DEFAULT NULL,             -- Cloudinary URL
+    product_name    VARCHAR(150) NOT NULL,
+    sports_category VARCHAR(100) NOT NULL,                 -- e.g. 'Cricket', 'Football'
+    price           DECIMAL(10,2) NOT NULL,                -- MRP
+    selling_price   DECIMAL(10,2) NOT NULL,                -- offered price
+    stock           INT NOT NULL DEFAULT 0,
+    description     TEXT DEFAULT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (vendor_id) REFERENCES vendors(id)
+);
+
+-- ---------------------------------------------------------------
+-- 9. WALLETS
 -- One wallet per professional for commission credits.
 -- ---------------------------------------------------------------
 CREATE TABLE wallets (
@@ -382,7 +402,8 @@ CREATE TABLE fee_structures (
     coaching_type     ENUM(
                           'group_coaching',
                           'individual_coaching',
-                          'personal_tutor'
+                          'personal_tutor',
+                          'school_student'
                       ) NOT NULL,
     society_category  ENUM('A+','A','B') DEFAULT NULL,
     standard          VARCHAR(20)        DEFAULT NULL,            -- '1ST-2ND' | '3RD-4TH' | '5TH-6TH' | '7TH-8TH' | '8TH-10TH' | 'ANY'
@@ -398,7 +419,7 @@ CREATE TABLE fee_structures (
 -- ---------------------------------------------------------------
 INSERT INTO activities (id, name, notes) VALUES
 -- Group Coaching
-(1,  'Fun Games / Play Ground',                    'Age 2–7 only'),
+(1,  'Fun Games / Play Ground',                    'Age 2-7 only'),
 (2,  'Fitness + Kho-Kho + Kabaddi + Volleyball',   NULL),
 (3,  'Cricket + Fitness',                          NULL),
 (4,  'Karate + Fitness',                           NULL),
@@ -421,7 +442,12 @@ INSERT INTO activities (id, name, notes) VALUES
 (19, 'Maths',                                      NULL),
 (20, 'Science',                                    NULL),
 (21, 'English',                                    NULL),
-(22, 'German',                                     NULL);
+(22, 'German',                                     NULL),
+-- School Student specific activities
+(23, 'Kho-Kho',                                    NULL),
+(24, 'Kabaddi',                                    NULL),
+(25, 'Bollywood Dance',                            NULL),
+(26, 'Foreign Languages [German/French]',          NULL);
 
 -- ---------------------------------------------------------------
 -- SEED: Fee Structures — Group Coaching (A+ / A / B × 1M / 3M / 6M)
@@ -601,3 +627,32 @@ CREATE TABLE pending_registrations (
     reviewed_at     TIMESTAMP NULL DEFAULT NULL,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ---------------------------------------------------------------
+-- SEED: Fee Structures — School Student (Compulsory Participant Model)
+-- Weekly 3 days, 2 hours. Single 9-month term. society_category = NULL.
+-- effective_monthly = total_fee / 9
+-- ---------------------------------------------------------------
+INSERT INTO fee_structures (activity_id, coaching_type, society_category, standard, term_months, total_fee, effective_monthly) VALUES
+-- Cricket
+(10,'school_student',NULL,NULL,9, 3900, 433.33),
+-- Karate (Martial Arts)
+(11,'school_student',NULL,NULL,9, 3900, 433.33),
+-- Skating
+(15,'school_student',NULL,NULL,9, 3900, 433.33),
+-- Boxing
+(12,'school_student',NULL,NULL,9, 3900, 433.33),
+-- Football
+(13,'school_student',NULL,NULL,9, 3500, 388.89),
+-- Volleyball
+(14,'school_student',NULL,NULL,9, 3500, 388.89),
+-- Kho-Kho
+(23,'school_student',NULL,NULL,9, 3000, 333.33),
+-- Kabaddi
+(24,'school_student',NULL,NULL,9, 3000, 333.33),
+-- Bollywood Dance
+(25,'school_student',NULL,NULL,9, 3900, 433.33),
+-- Classical Dance (Kathak / Bharat Natyam)
+(7,'school_student',NULL,NULL,9,  4500, 500.00),
+-- Foreign Languages (German/French)
+(26,'school_student',NULL,NULL,9, 4500, 500.00);

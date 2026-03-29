@@ -1,44 +1,43 @@
-const db = require("../../config/db");
+const prisma = require("../../config/prisma");
 
-exports.insertUser = async (conn, data) => {
-    const [result] = await conn.execute(
-        `INSERT INTO users (role, full_name, mobile) VALUES (?, ?, ?)`,
-        ['student', data.principalName, data.principalContact]
-    );
-    return result.insertId;
+exports.insertUser = async (tx, data) => {
+    const user = await tx.users.create({
+        data: {
+            role: "student",
+            full_name: data.principalName,
+            mobile: data.principalContact,
+        },
+    });
+    return user.id;
 };
 
-exports.insertSchool = async (conn, data, userId) => {  // 👈 accept userId
-  const [result] = await conn.execute(
-    `INSERT INTO schools 
-      (user_id, school_name, address, pin_code, state, language_medium, landline_no, activity_coordinator, agreement_signed_by_authority) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,  // 👈 added user_id column
-    [
-      userId,                              // 👈 link to users table
-      data.schoolName,
-      data.address,
-      data.pinCode,
-      data.state,
-      data.languageMedium,
-      data.landlineNo,
-      data.activityCoordinator,
-      data.agreementSigned ? 1 : 0
-    ]
-  );
-  return result.insertId;
+exports.insertSchool = async (tx, data, userId) => {
+    const school = await tx.schools.create({
+        data: {
+            user_id: userId,
+            school_name: data.schoolName,
+            address: data.address,
+            pin_code: data.pinCode,
+            state: data.state,
+            language_medium: data.languageMedium,
+            landline_no: data.landlineNo,
+            activity_coordinator: data.activityCoordinator,
+            agreement_signed_by_authority: data.agreementSigned ? true : false,
+        },
+    });
+    return school.id;
 };
 
 exports.getSchoolByName = async (schoolName) => {
-  const [rows] = await db.query(
-    `SELECT id FROM schools WHERE LOWER(school_name) = LOWER(?) LIMIT 1`,
-    [schoolName]
-  );
-  return rows.length ? rows[0] : null;
+    return await prisma.schools.findFirst({
+        where: { school_name: { equals: schoolName, mode: "insensitive" } },
+        select: { id: true },
+    });
 };
 
 exports.getAllSchools = async () => {
-  const [rows] = await db.query(
-    `SELECT id, school_name, address, pin_code, state FROM schools ORDER BY school_name ASC`
-  );
-  return rows;
+    return await prisma.schools.findMany({
+        select: { id: true, school_name: true, address: true, pin_code: true, state: true },
+        orderBy: { school_name: "asc" },
+    });
 };

@@ -1,169 +1,164 @@
-const db   = require("../../../config/db");
+const prisma = require("../../../config/prisma");
 const crypto = require("crypto");
 
-// ── STEP 1: Stage submission in pending_registrations ─────────────────────
+// ── STEP 1: Stage submission ───────────────────────────────────────────────
 exports.insertPending = async (formData, serviceType) => {
     const tempUuid = crypto.randomUUID();
-    await db.execute(
-        `INSERT INTO pending_registrations (temp_uuid, form_data, service_type, status)
-         VALUES (?, ?, ?, 'pending')`,
-        [tempUuid, JSON.stringify(formData), serviceType]
-    );
+    await prisma.pending_registrations.create({
+        data: {
+            temp_uuid: tempUuid,
+            form_data: formData,
+            service_type: serviceType,
+            status: "pending",
+        },
+    });
     return tempUuid;
 };
 
-// Check if a society_unique_id already exists in the approved societies table
-// or is staged as a specific pending service_type
+// Check approved societies table, then pending_registrations JSON blob
 exports.findBySocietyUniqueId = async (societyUniqueId) => {
-    const [approved] = await db.execute(
-        `SELECT id FROM societies WHERE society_unique_id = ? LIMIT 1`,
-        [societyUniqueId]
-    );
-    if (approved.length) return { exists: true, where: 'approved', serviceType: null };
+    const approved = await prisma.societies.findFirst({
+        where: { society_unique_id: societyUniqueId },
+        select: { id: true },
+    });
+    if (approved) return { exists: true, where: "approved", serviceType: null };
 
-    const [pending] = await db.execute(
-        `SELECT id, service_type FROM pending_registrations
-         WHERE status = 'pending'
-           AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.societyUniqueId')) = ?
-         LIMIT 1`,
-        [societyUniqueId]
-    );
-    if (pending.length) return { exists: true, where: 'pending', serviceType: pending[0].service_type };
+    // JSON_EXTRACT needed — raw query
+    const pending = await prisma.$queryRaw`
+        SELECT id, service_type FROM pending_registrations
+        WHERE status = 'pending'
+          AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.societyUniqueId')) = ${societyUniqueId}
+        LIMIT 1
+    `;
+    if (pending.length)
+        return { exists: true, where: "pending", serviceType: pending[0].service_type };
 
     return { exists: false };
 };
 
-// When enrollment is submitted, auto-cancel any pending request from the
-// same society so it never shows up as a dangling pending record
+// Auto-cancel a pending society_request when enrollment supersedes it
 exports.cancelPendingRequest = async (societyUniqueId) => {
-    await db.execute(
-        `UPDATE pending_registrations
-         SET status = 'rejected',
-             review_note = 'Superseded by enrollment form submission'
-         WHERE service_type = 'society_request'
-           AND status = 'pending'
-           AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.societyUniqueId')) = ?`,
-        [societyUniqueId]
-    );
+    await prisma.$executeRaw`
+        UPDATE pending_registrations
+        SET status = 'rejected',
+            review_note = 'Superseded by enrollment form submission'
+        WHERE service_type = 'society_request'
+          AND status = 'pending'
+          AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.societyUniqueId')) = ${societyUniqueId}
+    `;
 };
 
-// Validate referral code before staging
-exports.findProfessionalByReferralCode = async (conn, referralCode) => {
-    const [rows] = await conn.execute(
-        `SELECT id FROM professionals WHERE referral_code = ? LIMIT 1`,
-        [referralCode]
-    );
-    return rows.length ? rows[0] : null;
+// ── Called inside a Prisma transaction (tx) ────────────────────────────────
+
+exports.findProfessionalByReferralCode = async (tx, referralCode) => {
+    const client = tx ?? prisma;
+    return await client.professionals.findFirst({
+        where: { referral_code: referralCode },
+        select: { id: true },
+    });
 };
 
-// ── STEP 2: Called by admin on approval ───────────────────────────────────
-exports.insertUser = async (conn, data) => {
-    const [result] = await conn.execute(
-        `INSERT INTO users (full_name, mobile, role) VALUES (?, ?, 'student')`,
-        [data.authorityPersonName, data.authorityContact]
-    );
-    return result.insertId;
+exports.insertUser = async (tx, data) => {
+    const user = await tx.users.create({
+        data: {
+            role: "student",
+            full_name: data.authorityPersonName ?? null,
+            mobile: data.authorityContact ?? null,
+        },
+    });
+    return user.id;
 };
 
-exports.insertSociety = async (conn, data, userId, meProfessionalId = null) => {
-    const [result] = await conn.execute(
-        `INSERT INTO societies
-         (society_unique_id, registered_by_user_id, me_professional_id, society_name, society_category,
-          address, pin_code, total_participants, no_of_flats, proposed_wing, authority_role,
-          authority_person_name, contact_number, playground_available,
-          agreement_signed_by_authority, activity_agreement_pdf)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-            data.societyUniqueId,
-            userId,
-            meProfessionalId,
-            data.societyName,
-            data.societyCategory,
-            data.address,
-            data.pinCode,
-            Number(data.totalParticipants),
-            Number(data.noOfFlats),
-            data.proposedWing,
-            data.authorityRole,
-            data.authorityPersonName,
-            data.contactNumber,
-            data.playgroundAvailable ? 1 : 0,
-            data.hasSignedAgreement ? 1 : 0,
-            data.activityAgreementPdf ?? null,
-        ]
-    );
-    return result.insertId;
+exports.insertSociety = async (tx, data, userId, meProfessionalId = null) => {
+    const society = await tx.societies.create({
+        data: {
+            society_unique_id: data.societyUniqueId,
+            registered_by_user_id: userId,
+            me_professional_id: meProfessionalId,
+            society_name: data.societyName ?? null,
+            society_category: data.societyCategory ?? null,
+            address: data.address ?? null,
+            pin_code: data.pinCode ?? null,
+            total_participants: data.totalParticipants ? Number(data.totalParticipants) : null,
+            no_of_flats: data.noOfFlats ? Number(data.noOfFlats) : null,
+            proposed_wing: data.proposedWing ?? null,
+            authority_role: data.authorityRole ?? null,
+            authority_person_name: data.authorityPersonName ?? null,
+            contact_number: data.contactNumber ?? null,
+            playground_available: data.playgroundAvailable ? true : false,
+            agreement_signed_by_authority: data.hasSignedAgreement ? true : false,
+            activity_agreement_pdf: data.activityAgreementPdf ?? null,
+        },
+    });
+    return society.id;
 };
 
-// Get a professional record by user_id (used to resolve ME's referral_code and id)
+// ── Non-transaction reads ──────────────────────────────────────────────────
+
 exports.findProfessionalByUserId = async (userId) => {
-    const [rows] = await db.execute(
-        `SELECT id, referral_code FROM professionals WHERE user_id = ? LIMIT 1`,
-        [userId]
-    );
-    return rows[0] || null;
+    return await prisma.professionals.findFirst({
+        where: { user_id: userId },
+        select: { id: true, referral_code: true },
+    });
 };
 
-// Get a single pending_registrations row by id
 exports.getPendingById = async (id) => {
-    const [rows] = await db.execute(
-        `SELECT * FROM pending_registrations WHERE id = ? LIMIT 1`,
-        [id]
-    );
-    return rows[0] || null;
+    return await prisma.pending_registrations.findFirst({
+        where: { id },
+    });
 };
 
-// Admin: all pending society_request entries
 exports.getPendingRequests = async () => {
-    const [rows] = await db.execute(
-        `SELECT id, temp_uuid, service_type, form_data, created_at
-         FROM pending_registrations
-         WHERE status = 'pending' AND service_type = 'society_request'
-         ORDER BY created_at DESC`
-    );
-    return rows;
+    return await prisma.pending_registrations.findMany({
+        where: { status: "pending", service_type: "society_request" },
+        select: { id: true, temp_uuid: true, service_type: true, form_data: true, created_at: true },
+        orderBy: { created_at: "desc" },
+    });
 };
 
-// Admin: all pending society_enrollment entries
 exports.getPendingEnrollments = async () => {
-    const [rows] = await db.execute(
-        `SELECT id, temp_uuid, service_type, form_data, created_at
-         FROM pending_registrations
-         WHERE status = 'pending' AND service_type = 'society_enrollment'
-         ORDER BY created_at DESC`
-    );
-    return rows;
+    return await prisma.pending_registrations.findMany({
+        where: { status: "pending", service_type: "society_enrollment" },
+        select: { id: true, temp_uuid: true, service_type: true, form_data: true, created_at: true },
+        orderBy: { created_at: "desc" },
+    });
 };
 
-// ME: pending society_enrollment entries that carry their referral code
+// JSON_EXTRACT needed — raw query
 exports.getPendingEnrollmentsForMe = async (meReferralCode) => {
-    const [rows] = await db.execute(
-        `SELECT id, temp_uuid, service_type, form_data, created_at
-         FROM pending_registrations
-         WHERE status = 'pending'
-           AND service_type = 'society_enrollment'
-           AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.referralCode')) = ?
-         ORDER BY created_at DESC`,
-        [meReferralCode]
-    );
-    return rows;
+    return await prisma.$queryRaw`
+        SELECT id, temp_uuid, service_type, form_data, created_at
+        FROM pending_registrations
+        WHERE status = 'pending'
+          AND service_type = 'society_enrollment'
+          AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.referralCode')) = ${meReferralCode}
+        ORDER BY created_at DESC
+    `;
 };
 
 exports.markPendingReviewed = async (id, status, reviewedBy, note) => {
-    await db.execute(
-        `UPDATE pending_registrations
-         SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = NOW()
-         WHERE id = ?`,
-        [status, reviewedBy, note ?? null, id]
-    );
+    await prisma.pending_registrations.update({
+        where: { id },
+        data: {
+            status,
+            reviewed_by: reviewedBy,
+            review_note: note ?? null,
+            reviewed_at: new Date(),
+        },
+    });
 };
 
 exports.getAllSocieties = async () => {
-    const [rows] = await db.query(
-        `SELECT id, society_name, address, pin_code, society_category,
-                agreement_signed_by_authority, approval_status
-         FROM societies
-         ORDER BY society_name ASC`
-    );
-    return rows;
+    return await prisma.societies.findMany({
+        select: {
+            id: true,
+            society_name: true,
+            address: true,
+            pin_code: true,
+            society_category: true,
+            agreement_signed_by_authority: true,
+            approval_status: true,
+        },
+        orderBy: { society_name: "asc" },
+    });
 };

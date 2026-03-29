@@ -1,0 +1,473 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model activities {
+  id              Int               @id @default(autoincrement())
+  name            String            @db.VarChar(150)
+  notes           String?           @db.VarChar(255)
+  is_active       Boolean?          @default(true)
+  created_at      DateTime?         @default(now()) @db.Timestamp(0)
+  fee_structures  fee_structures[]
+  trainer_batches trainer_batches[]
+}
+
+model admins {
+  id         Int           @id @default(autoincrement())
+  user_id    Int
+  scope      admins_scope? @default(sub_admin)
+  created_at DateTime?     @default(now()) @db.Timestamp(0)
+  users      users         @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "admins_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model commissions {
+  id                Int                           @id @default(autoincrement())
+  professional_id   Int
+  professional_type commissions_professional_type
+  source_type       commissions_source_type
+  source_id         Int
+  base_amount       Decimal                       @db.Decimal(10, 2)
+  commission_rate   Decimal                       @db.Decimal(5, 2)
+  commission_amount Decimal                       @db.Decimal(10, 2)
+  status            commissions_status?           @default(pending)
+  created_at        DateTime?                     @default(now()) @db.Timestamp(0)
+  professionals     professionals                 @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "commissions_ibfk_1")
+
+  @@index([professional_id], map: "professional_id")
+}
+
+model fee_structures {
+  id                Int                              @id @default(autoincrement())
+  activity_id       Int
+  coaching_type     fee_structures_coaching_type
+  society_category  fee_structures_society_category?
+  standard          String?                          @db.VarChar(20)
+  term_months       Int                              @db.TinyInt
+  total_fee         Decimal                          @db.Decimal(10, 2)
+  effective_monthly Decimal?                         @db.Decimal(10, 2)
+  activities        activities                       @relation(fields: [activity_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fee_structures_ibfk_1")
+
+  @@unique([activity_id, coaching_type, society_category, standard, term_months], map: "uq_fee")
+}
+
+model individual_participants {
+  id               Int       @id @default(autoincrement())
+  student_id       Int?
+  participant_name String?   @db.VarChar(100)
+  mobile           String?   @db.VarChar(15)
+  flat_no          String?   @db.VarChar(50)
+  dob              DateTime? @db.Date
+  age              Int?
+  society_name     String?   @db.VarChar(150)
+  activity         String?   @db.VarChar(100)
+  kits             String?   @db.Text
+  students         students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
+
+  @@index([student_id], map: "student_id")
+}
+
+model marketing_executives {
+  id                      Int            @id @default(autoincrement())
+  professional_id         Int?
+  dob                     DateTime?      @db.Date
+  education_qualification String?        @db.VarChar(200)
+  previous_experience     String?        @db.Text
+  activity_agreement_pdf  String?        @db.VarChar(255)
+  professionals           professionals? @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "marketing_executives_ibfk_1")
+
+  @@index([professional_id], map: "professional_id")
+}
+
+model other_areas {
+  id                     Int       @id @default(autoincrement())
+  student_id             Int?
+  sponsor_name           String?   @db.VarChar(100)
+  coordinator_name       String?   @db.VarChar(100)
+  address                String?   @db.Text
+  mobile                 String?   @db.VarChar(15)
+  marketing_incharge     String?   @db.VarChar(100)
+  activity_agreement_pdf String?   @db.VarChar(255)
+  students               students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "other_areas_ibfk_1")
+
+  @@index([student_id], map: "student_id")
+}
+
+model parent_consents {
+  id                   Int       @id @default(autoincrement())
+  student_id           Int?
+  participant_name     String?   @db.VarChar(100)
+  dob                  DateTime? @db.Date
+  age                  Int?
+  society_name         String?   @db.VarChar(150)
+  activity_enrolled    String?   @db.VarChar(150)
+  created_at           DateTime? @default(now()) @db.Timestamp(0)
+  parent_name          String    @db.VarChar(255)
+  emergency_contact_no String    @db.VarChar(20)
+  parent_signature_doc String?   @db.VarChar(500)
+  consent_date         DateTime  @db.Date
+  students             students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "parent_consents_ibfk_1")
+
+  @@index([student_id], map: "student_id")
+}
+
+model pending_registrations {
+  id           Int                           @id @default(autoincrement())
+  temp_uuid    String                        @unique(map: "temp_uuid") @db.VarChar(255)
+  form_data    Json
+  service_type String                        @db.VarChar(50)
+  status       pending_registrations_status? @default(pending)
+  created_at   DateTime?                     @default(now()) @db.Timestamp(0)
+  reviewed_by  Int?
+  review_note  String?                       @db.Text
+  reviewed_at  DateTime?                     @db.Timestamp(0)
+}
+
+model personal_tutors {
+  id          Int       @id @default(autoincrement())
+  student_id  Int?
+  dob         DateTime? @db.Date
+  standard    String?   @db.VarChar(50)
+  batch       String?   @db.VarChar(50)
+  teacher_for String?   @db.VarChar(100)
+  students    students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_1")
+
+  @@index([student_id], map: "student_id")
+}
+
+model professionals {
+  id                      Int                            @id @default(autoincrement())
+  uuid                    String?                        @unique(map: "uuid") @db.Char(36)
+  referral_code           String?                        @unique(map: "referral_code") @db.VarChar(12)
+  user_id                 Int?
+  profession_type         professionals_profession_type?
+  pan_card                String?                        @db.VarChar(255)
+  adhar_card              String?                        @db.VarChar(255)
+  relative_name           String?                        @db.VarChar(100)
+  relative_contact        String?                        @db.VarChar(15)
+  own_two_wheeler         Boolean?
+  communication_languages String?                        @db.Text
+  place                   String?                        @db.VarChar(100)
+  date                    DateTime?                      @db.Date
+  commissions             commissions[]
+  marketing_executives    marketing_executives[]
+  users                   users?                         @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "professionals_ibfk_1")
+  schools                 schools[]
+  societies               societies[]
+  teachers                teachers[]
+  trainer_batches         trainer_batches[]
+  trainers                trainers[]
+  travelling_allowances   travelling_allowances[]
+  vendors                 vendors[]
+  wallets                 wallets?
+
+  @@index([user_id], map: "user_id")
+}
+
+model school_students {
+  id           Int                       @id @default(autoincrement())
+  student_id   Int
+  school_id    Int
+  student_name String?                   @db.VarChar(150)
+  standard     String?                   @db.VarChar(50)
+  address      String?                   @db.Text
+  kit_type     school_students_kit_type?
+  created_at   DateTime?                 @default(now()) @db.Timestamp(0)
+  students     students                  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_1")
+  schools      schools                   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_2")
+
+  @@index([school_id], map: "school_id")
+  @@index([student_id], map: "student_id")
+}
+
+model schools {
+  id                            Int                      @id @default(autoincrement())
+  user_id                       Int?
+  me_professional_id            Int?
+  school_name                   String?                  @db.VarChar(150)
+  address                       String?                  @db.Text
+  pin_code                      String?                  @db.VarChar(10)
+  state                         String?                  @db.VarChar(100)
+  language_medium               String?                  @db.VarChar(100)
+  landline_no                   String?                  @db.VarChar(20)
+  principal_name                String?                  @db.VarChar(100)
+  principal_contact             String?                  @db.VarChar(15)
+  activity_coordinator          String?                  @db.VarChar(100)
+  agreement_signed_by_authority Boolean?                 @default(false)
+  activity_agreement_pdf        String?                  @db.VarChar(255)
+  me_id                         Int?
+  approval_status               schools_approval_status? @default(pending)
+  created_at                    DateTime?                @default(now()) @db.Timestamp(0)
+  school_students               school_students[]
+  professionals                 professionals?           @relation(fields: [me_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "schools_ibfk_1")
+  trainer_batches               trainer_batches[]
+
+  @@index([me_professional_id], map: "me_professional_id")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model societies {
+  society_unique_id             String                     @unique(map: "society_unique_id") @db.VarChar(50)
+  id                            Int                        @id @default(autoincrement())
+  registered_by_user_id         Int?
+  society_name                  String?                    @db.VarChar(150)
+  society_category              societies_society_category
+  address                       String?                    @db.Text
+  pin_code                      String?                    @db.VarChar(10)
+  total_participants            Int?
+  no_of_flats                   Int?
+  proposed_wing                 String?                    @db.VarChar(50)
+  authority_role                String?                    @db.VarChar(50)
+  authority_person_name         String?                    @db.VarChar(100)
+  contact_number                String?                    @db.VarChar(15)
+  playground_available          Boolean?
+  coordinator_name              String?                    @db.VarChar(100)
+  coordinator_number            String?                    @db.VarChar(15)
+  agreement_signed_by_authority Boolean?                   @default(false)
+  me_professional_id            Int?
+  activity_agreement_pdf        String?                    @db.VarChar(255)
+  approval_status               societies_approval_status? @default(pending)
+  created_at                    DateTime?                  @default(now()) @db.Timestamp(0)
+  professionals                 professionals?             @relation(fields: [me_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "societies_fk_me")
+  users                         users?                     @relation(fields: [registered_by_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "societies_fk_user")
+  trainer_batches               trainer_batches[]
+
+  @@index([me_professional_id], map: "societies_fk_me")
+  @@index([registered_by_user_id], map: "societies_fk_user")
+}
+
+model students {
+  id                      Int                       @id @default(autoincrement())
+  user_id                 Int?
+  student_type            students_student_type?
+  individual_participants individual_participants[]
+  other_areas             other_areas[]
+  parent_consents         parent_consents[]
+  personal_tutors         personal_tutors[]
+  school_students         school_students[]
+  users                   users?                    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "students_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model teachers {
+  id                 Int            @id @default(autoincrement())
+  professional_id    Int?
+  subject            String?        @db.VarChar(100)
+  experience_details String?        @db.Text
+  ded_doc            String?        @db.VarChar(255)
+  bed_doc            String?        @db.VarChar(255)
+  other_doc          String?        @db.VarChar(255)
+  professionals      professionals? @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "teachers_ibfk_1")
+
+  @@index([professional_id], map: "professional_id")
+}
+
+model trainer_batches {
+  id                      Int           @id @default(autoincrement())
+  trainer_professional_id Int
+  society_id              Int?
+  school_id               Int?
+  activity_id             Int?
+  batch_date              DateTime      @db.Date
+  batch_time              DateTime?     @db.Time(0)
+  created_at              DateTime?     @default(now()) @db.Timestamp(0)
+  professionals           professionals @relation(fields: [trainer_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "trainer_batches_ibfk_1")
+  societies               societies?    @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "trainer_batches_ibfk_2")
+  schools                 schools?      @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "trainer_batches_ibfk_3")
+  activities              activities?   @relation(fields: [activity_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "trainer_batches_ibfk_4")
+
+  @@index([activity_id], map: "activity_id")
+  @@index([school_id], map: "school_id")
+  @@index([society_id], map: "society_id")
+  @@index([trainer_professional_id], map: "trainer_professional_id")
+}
+
+model trainers {
+  id                 Int            @id @default(autoincrement())
+  professional_id    Int?
+  player_level       String?        @db.VarChar(50)
+  category           String?        @db.VarChar(100)
+  specified_game     Json?
+  specified_skills   Json?
+  experience_details String?        @db.Text
+  qualification_docs String?        @db.VarChar(255)
+  documents          String?        @db.VarChar(255)
+  professionals      professionals? @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "trainers_ibfk_1")
+
+  @@index([professional_id], map: "professional_id")
+}
+
+model travelling_allowances {
+  id                      Int                           @id @default(autoincrement())
+  trainer_professional_id Int
+  allowance_date          DateTime                      @db.Date
+  batches_count           Int                           @db.TinyInt
+  amount                  Decimal                       @db.Decimal(6, 2)
+  status                  travelling_allowances_status? @default(pending)
+  created_at              DateTime?                     @default(now()) @db.Timestamp(0)
+  updated_at              DateTime?                     @default(now()) @db.Timestamp(0)
+  professionals           professionals                 @relation(fields: [trainer_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "travelling_allowances_ibfk_1")
+
+  @@unique([trainer_professional_id, allowance_date], map: "uq_ta_per_day")
+}
+
+model users {
+  id              Int                   @id @default(autoincrement())
+  role            String                @db.VarChar(50)
+  subrole         String?               @db.VarChar(50)
+  full_name       String?               @db.VarChar(100)
+  mobile          String?               @unique(map: "mobile") @db.VarChar(15)
+  email           String?               @db.VarChar(100)
+  address         String?               @db.Text
+  photo           String?               @db.VarChar(255)
+  created_at      DateTime?             @default(now()) @db.Timestamp(0)
+  is_verified     Boolean?              @default(false)
+  approval_status users_approval_status @default(pending)
+  approved_by     Int?
+  approval_note   String?               @db.Text
+  admins          admins[]
+  professionals   professionals[]
+  societies       societies[]
+  students        students[]
+}
+
+model vendors {
+  id              Int              @id @default(autoincrement())
+  professional_id Int?
+  store_name      String?          @db.VarChar(150)
+  store_address   String?          @db.Text
+  store_location  String?          @db.VarChar(150)
+  gst_certificate String?          @db.VarChar(255)
+  professionals   professionals?   @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "vendors_ibfk_1")
+  vendor_products vendor_products[]
+
+  @@index([professional_id], map: "professional_id")
+}
+
+model vendor_products {
+  id              Int      @id @default(autoincrement())
+  vendor_id       Int
+  product_image   String?  @db.VarChar(255)
+  product_name    String   @db.VarChar(150)
+  sports_category String   @db.VarChar(100)
+  price           Decimal  @db.Decimal(10, 2)
+  selling_price   Decimal  @db.Decimal(10, 2)
+  stock           Int      @default(0)
+  description     String?  @db.Text
+  created_at      DateTime @default(now()) @db.Timestamp(0)
+  vendors         vendors  @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "vendor_products_ibfk_1")
+
+  @@index([vendor_id], map: "vendor_id")
+}
+
+model wallets {
+  id              Int           @id @default(autoincrement())
+  professional_id Int           @unique(map: "professional_id")
+  balance         Decimal?      @default(0.00) @db.Decimal(10, 2)
+  updated_at      DateTime?     @default(now()) @db.Timestamp(0)
+  professionals   professionals @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "wallets_ibfk_1")
+}
+
+enum admins_scope {
+  super_admin
+  sub_admin
+}
+
+enum commissions_professional_type {
+  marketing_executive
+  trainer
+  teacher
+}
+
+enum fee_structures_coaching_type {
+  group_coaching
+  individual_coaching
+  personal_tutor
+  school_student
+}
+
+enum students_student_type {
+  group_coaching
+  individual_coaching
+  personal_tutor
+  school_student
+}
+
+enum commissions_source_type {
+  group_coaching_society
+  group_coaching_school
+  group_coaching_other
+  individual_coaching
+  personal_tutor
+  event_ticket
+  school_registration
+}
+
+enum fee_structures_society_category {
+  A_ @map("A+")
+  A
+  B
+}
+
+enum pending_registrations_status {
+  pending
+  approved
+  rejected
+}
+
+enum professionals_profession_type {
+  trainer
+  teacher
+  marketing_executive
+  vendor
+}
+
+enum societies_society_category {
+  A_ @map("A+")
+  A
+  B
+}
+
+enum travelling_allowances_status {
+  pending
+  paid
+}
+
+enum school_students_kit_type {
+  Cricket
+  Football
+  Volleyball
+  Karate
+}
+
+enum commissions_status {
+  pending
+  paid
+}
+
+enum users_approval_status {
+  pending
+  approved
+  rejected
+}
+
+enum schools_approval_status {
+  pending
+  approved
+  rejected
+}
+
+enum societies_approval_status {
+  pending
+  approved
+  rejected
+}

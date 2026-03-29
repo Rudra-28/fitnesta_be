@@ -1,67 +1,121 @@
+const prisma = require("../../../config/prisma");
+const crypto = require("crypto");
 const repo = require("./perstutorrepo");
-const crypto = require('crypto'); // Built-in Node.js module
-const db = require("../../../config/db");
+const activitiesRepo = require("../../activities/activitiesrepository");
+const razorpay = require("../../../utils/razorpay");
 
+/**
+ * PHASE 1 — Park form data and create a Razorpay order.
+ *
+ * Personal tutor supports multiple subjects in one registration.
+ * The controller must include formData.payment = { activity_ids, term_months, standard }
+ * where activity_ids is an array of ints (one per subject selected).
+ *
+ * Total fee = sum of each subject's fee at the given standard and term.
+ *
+ * Returns: { tempUuid, orderId, amount, currency, keyId }
+ */
 exports.initiateRegistration = async (formData, serviceType) => {
+    const { activity_ids, term_months, standard } = formData.payment || {};
+
+    if (!activity_ids || !Array.isArray(activity_ids) || activity_ids.length === 0) {
+        const err = new Error("activity_ids (array) is required to calculate the fee");
+        err.status = 400;
+        throw err;
+    }
+    if (!term_months) {
+        const err = new Error("term_months is required to calculate the fee");
+        err.status = 400;
+        throw err;
+    }
+    if (!standard) {
+        const err = new Error("standard is required to calculate the fee for personal tutor");
+        err.status = 400;
+        throw err;
+    }
+
+    const ids = activity_ids.map((id) => parseInt(id));
+
+    const feeRecords = await activitiesRepo.getFeesForActivities(
+        ids,
+        "personal_tutor",
+        parseInt(term_months),
+        standard
+    );
+
+    if (feeRecords.length === 0) {
+        const err = new Error("No fee structure found for the selected subjects, standard, and duration");
+        err.status = 400;
+        throw err;
+    }
+
+    // Warn if some activity_ids had no matching fee row (misconfigured data or wrong IDs)
+    if (feeRecords.length !== ids.length) {
+        const foundIds = feeRecords.map((r) => r.activity_id);
+        const missing = ids.filter((id) => !foundIds.includes(id));
+        const err = new Error(`No fee found for activity_id(s): ${missing.join(", ")} at standard ${standard}`);
+        err.status = 400;
+        throw err;
+    }
+
+    const amount = feeRecords.reduce((sum, r) => sum + parseFloat(r.total_fee), 0);
     const tempUuid = crypto.randomUUID();
-    const conn = await db.getConnection();
-    
-    try {
-        await repo.insertPendingRegistration(conn, tempUuid, formData, serviceType);
-        return tempUuid;
-    } catch (error) {
-        throw error;
-    } finally {
-        conn.release();
-    }
+
+    const order = await razorpay.createOrder(amount, tempUuid, {
+        temp_uuid: tempUuid,
+        service_type: serviceType,
+    });
+
+    formData.razorpay_order_id = order.id;
+
+    await repo.insertPendingRegistration(tempUuid, formData, serviceType);
+
+    return {
+        tempUuid,
+        orderId: order.id,
+        amount,
+        currency: "INR",
+        keyId: process.env.RAZORPAY_KEY_ID,
+    };
 };
 
+/**
+ * PHASE 2 — Finalize registration after Razorpay confirms payment via webhook.
+ */
 exports.finalizeRegistration = async (tempUuid) => {
-    const conn = await db.getConnection();
-    try {
-        await conn.beginTransaction();
+    const pending = await repo.getPendingByUuid(tempUuid);
+    if (!pending) throw new Error("Registration record not found or already processed");
 
-        const pending = await repo.getPendingByUuid(conn, tempUuid);
-        if (!pending) throw new Error("Registration record not found or already processed");
-
-        const data = typeof pending.form_data === 'string' 
-        ? JSON.parse(pending.form_data) 
+    const data = typeof pending.form_data === "string"
+        ? JSON.parse(pending.form_data)
         : pending.form_data;
-        
-        // 1. Insert User & Student
-        const userId = await repo.insertUser(conn, data.user_info);
-        // Change this line:
-        const studentId = await repo.insertStudent(conn, userId, 'personal_tutor');
 
-        // 2. Insert Form Specifics (Tutor + Consent)
-        await repo.insertpersonalTutor(conn, studentId, data.tutorDetails);
-        await repo.insertParentConsent(conn, studentId, data.consentDetails);
+    const result = await prisma.$transaction(async (tx) => {
+        const userId    = await repo.insertUser(tx, data.user_info);
+        const studentId = await repo.insertStudent(tx, userId, "personal_tutor");
+        await repo.insertpersonalTutor(tx, studentId, data.tutorDetails);
+        await repo.insertParentConsent(tx, studentId, data.consentDetails);
+        return { userId };
+    });
 
-        // 3. Mark as completed
-        await repo.updatePendingStatus(conn, pending.id, 'completed');
-
-        await conn.commit();
-        return { userId, success: true };
-    } catch (error) {
-        await conn.rollback();
-        throw error;
-    } finally {
-        conn.release();
-    }
+    await repo.updatePendingStatus(pending.id, "approved");
+    return { userId: result.userId, success: true };
 };
 
+/**
+ * PHASE 3 — Flutter polls this to get its JWT once the webhook has fired.
+ */
 exports.getRegistrationStatus = async (tempUuid) => {
-    const conn = await db.getConnection();
-    try {
-        const pending = await repo.getPendingByUuid(conn, tempUuid);
-        if (!pending) return { status: 'not_found' };
-        
-        return {
-            status: pending.status,
-            // You might want to return the actual user ID once completed
-            userId: pending.status === 'completed' ? 'User Created' : null 
-        };
-    } finally {
-        conn.release();
-    }
+    const pending = await repo.getPendingByUuidAny(tempUuid);
+    if (!pending) return { status: "not_found" };
+    if (pending.status !== "approved") return { status: pending.status };
+
+    const formData = typeof pending.form_data === "string"
+        ? JSON.parse(pending.form_data)
+        : pending.form_data;
+
+    const mobile = formData.user_info?.contactNumber || formData.contactNumber || formData.mobile;
+    const user = await prisma.users.findFirst({ where: { mobile }, select: { id: true } });
+
+    return { status: "approved", userId: user?.id ?? null };
 };

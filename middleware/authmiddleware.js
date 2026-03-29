@@ -39,9 +39,10 @@
 // };
 
 const jwt = require("jsonwebtoken");
+const prisma = require("../config/prisma");
 
 // 1. Verify JWT (For logged-in users)
-const verifyAccessToken = (req, res, next) => {
+const verifyAccessToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -52,6 +53,12 @@ const verifyAccessToken = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+
+    const user = await prisma.users.findUnique({ where: { id: decoded.userId } });
+    if (!user) {
+      return res.status(401).json({ message: "User no longer exists" });
+    }
+
     req.user = decoded;
     next();
   } catch (error) {
