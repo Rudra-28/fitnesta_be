@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const repo = require("./perstutorrepo");
 const activitiesRepo = require("../../activities/activitiesrepository");
 const razorpay = require("../../../utils/razorpay");
+const paymentsRepo = require("../../payments/paymentsrepo");
 
 /**
  * PHASE 1 — Park form data and create a Razorpay order.
@@ -81,8 +82,11 @@ exports.initiateRegistration = async (formData, serviceType) => {
 
 /**
  * PHASE 2 — Finalize registration after Razorpay confirms payment via webhook.
+ * @param {string} tempUuid
+ * @param {string} razorpayPaymentId - entity.id from webhook payload
+ * @param {number} amount            - entity.amount / 100 (INR)
  */
-exports.finalizeRegistration = async (tempUuid) => {
+exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
     const pending = await repo.getPendingByUuid(tempUuid);
     if (!pending) throw new Error("Registration record not found or already processed");
 
@@ -99,6 +103,16 @@ exports.finalizeRegistration = async (tempUuid) => {
     });
 
     await repo.updatePendingStatus(pending.id, "approved");
+
+    await paymentsRepo.recordPayment({
+        tempUuid,
+        razorpayOrderId:   data.razorpay_order_id,
+        razorpayPaymentId,
+        serviceType:       pending.service_type,
+        amount,
+        studentUserId:     result.userId,
+    });
+
     return { userId: result.userId, success: true };
 };
 

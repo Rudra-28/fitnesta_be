@@ -656,3 +656,27 @@ INSERT INTO fee_structures (activity_id, coaching_type, society_category, standa
 (7,'school_student',NULL,NULL,9,  4500, 500.00),
 -- Foreign Languages (German/French)
 (26,'school_student',NULL,NULL,9, 4500, 500.00);
+
+-- ---------------------------------------------------------------
+-- 21. PAYMENTS
+-- One row per successful Razorpay payment.
+-- Serves as the foundation for:
+--   • Commission calculation  → commissions.source_id = payments.id
+--   • Profit analysis on admin panel (SUM amount GROUP BY service_type / date)
+--   • Refund tracking         → status = 'refunded'
+-- student_user_id is NULL until finalizeRegistration completes,
+-- then filled so admin reports can JOIN to the full student profile.
+-- ---------------------------------------------------------------
+CREATE TABLE payments (
+    id                      INT PRIMARY KEY AUTO_INCREMENT,
+    temp_uuid               VARCHAR(255)  NOT NULL UNIQUE,
+    razorpay_order_id       VARCHAR(100)  NOT NULL,
+    razorpay_payment_id     VARCHAR(100)  NOT NULL UNIQUE,
+    service_type            VARCHAR(50)   NOT NULL,              -- 'individual_coaching' | 'personal_tutor' | 'school_student'
+    amount                  DECIMAL(10,2) NOT NULL,              -- total fee paid in INR
+    currency                VARCHAR(10)   DEFAULT 'INR',
+    status                  ENUM('captured','refunded','failed') DEFAULT 'captured',
+    student_user_id         INT           DEFAULT NULL,          -- filled after finalization; FK to users
+    captured_at             TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (student_user_id) REFERENCES users(id)
+);

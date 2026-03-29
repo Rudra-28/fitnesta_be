@@ -72,7 +72,10 @@ exports.handlePaymentWebhook = async (req, res) => {
             return res.status(200).json({ received: true });
         }
 
-        await service.finalizeRegistration(temp_uuid);
+        const paymentId = entity.id;
+        const amount = entity.amount / 100; // paise → INR
+
+        await service.finalizeRegistration(temp_uuid, paymentId, amount);
         return res.status(200).json({ success: true });
     } catch (error) {
         console.error("SS Webhook error:", error);
