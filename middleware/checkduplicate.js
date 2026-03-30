@@ -23,8 +23,11 @@ exports.verifyMobileUnique = async (req, res, next) => {
         // Check 2: already has a pending submission (JSON_EXTRACT — raw query)
         const pending = await prisma.$queryRaw`
             SELECT id FROM pending_registrations
-            WHERE JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ${mobile}
-              AND status = 'pending'
+            WHERE (
+                JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ${mobile}
+                OR JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.mobile')) = ${mobile}
+            )
+            AND status = 'pending'
             LIMIT 1
         `;
         if (pending.length > 0) {

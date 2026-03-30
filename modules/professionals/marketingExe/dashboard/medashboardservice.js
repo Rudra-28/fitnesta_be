@@ -83,3 +83,57 @@ exports.getSchoolById = async (schoolId, meUserId) => {
     }
     return school;
 };
+
+exports.getMySchoolsEnrollment = async (meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const { total_students } = await repo.getSchoolsWithEnrollmentByMe(professional.id);
+    return { total_students };
+};
+
+// ── Students (Total Students screen) ──────────────────────────────────────────
+exports.getSchoolStudents = async (meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const schools = await repo.getSchoolsStudentSummaryByMe(professional.id);
+    const total_students = schools.reduce((sum, s) => sum + s.student_count, 0);
+    return { total_students, schools };
+};
+
+exports.getSocietyStudents = async (meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const societies = await repo.getSocietiesStudentSummaryByMe(professional.id);
+    const total_students = societies.reduce((sum, s) => sum + s.student_count, 0);
+    return { total_students, societies };
+};
+
+exports.getStudentsBySchool = async (schoolId, meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const data = await repo.getStudentsBySchoolId(schoolId, professional.id);
+    if (!data) {
+        const err = new Error("School not found.");
+        err.statusCode = 404;
+        throw err;
+    }
+    return data;
+};
+
+exports.getSchoolStudentById = async (schoolStudentId, meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const data = await repo.getSchoolStudentById(schoolStudentId, professional.id);
+    if (!data) {
+        const err = new Error("Student not found.");
+        err.statusCode = 404;
+        throw err;
+    }
+    return data;
+};
+
+exports.getStudentsBySociety = async (societyId, meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const data = await repo.getStudentsBySocietyId(societyId, professional.id);
+    if (!data) {
+        const err = new Error("Society not found.");
+        err.statusCode = 404;
+        throw err;
+    }
+    return data;
+};

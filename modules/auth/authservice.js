@@ -89,7 +89,7 @@ exports.loginUser = async (mobile, role) => {
       subrole: role === "professional" ? subrole : null,
       referral_code: role === "professional" ? referral_code : null,
       student_type: role === "student" ? student_type : null,
-      isVerified: user.is_verified
+      isVerified: user.is_verified ? 1 : 0
     }
   };
 };

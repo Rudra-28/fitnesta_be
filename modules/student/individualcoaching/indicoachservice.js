@@ -85,12 +85,15 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
 
     await repo.updatePendingStatus(pending.id, "approved");
 
+    const termMonths = data.payment?.term_months ? parseInt(data.payment.term_months) : 1;
+
     await paymentsRepo.recordPayment({
         tempUuid,
         razorpayOrderId:   data.razorpay_order_id,
         razorpayPaymentId,
         serviceType:       pending.service_type,
         amount,
+        termMonths,
         studentUserId:     result.userId,
     });
 

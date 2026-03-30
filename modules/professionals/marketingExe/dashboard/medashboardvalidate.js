@@ -18,9 +18,6 @@ exports.validateMeSociety = (data) => {
     if (!data.pinCode || !/^\d{6}$/.test(data.pinCode))
         errors.push("Valid 6-digit pin code is required");
 
-    if (data.totalParticipants == null || isNaN(data.totalParticipants) || Number(data.totalParticipants) <= 0)
-        errors.push("Total participants must be a valid positive number");
-
     if (data.noOfFlats == null || isNaN(data.noOfFlats) || Number(data.noOfFlats) <= 0)
         errors.push("Number of flats must be a valid positive number");
 

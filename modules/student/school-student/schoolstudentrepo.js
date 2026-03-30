@@ -27,7 +27,12 @@ exports.insertSchoolStudent = async (tx, studentId, data) => {
             student_name: data.fullName,
             standard: data.standard,
             address: data.address,
-            kit_type: data.kit_type || null,
+            activities: data.activity_ids && data.activity_ids.length > 0
+                ? JSON.stringify(data.activity_ids)
+                : null,
+            kit_type: data.product_ids && data.product_ids.length > 0
+                ? JSON.stringify(data.product_ids)
+                : null,
         },
     });
 };

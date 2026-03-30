@@ -22,13 +22,15 @@ exports.insertStudent = async (tx, userId, type) => {
 exports.insertindividualcoaching = async (tx, studentId, data) => {
     await tx.individual_participants.create({
         data: {
-            student_id: studentId,
-            flat_no: data?.flat_no || null,
-            dob: data?.dob ? new Date(data.dob) : null,
-            age: data?.age || null,
-            society_name: data?.society_name || null,
-            activity: data?.activities || null,
-            kits: data?.kit_type || null,
+            student_id:                 studentId,
+            flat_no:                    data?.flat_no || null,
+            dob:                        data?.dob ? new Date(data.dob) : null,
+            age:                        data?.age || null,
+            society_id:                 data?.society_id ? parseInt(data.society_id) : null,
+            society_name:               data?.society_name || null,              // from dropdown
+            manually_entered_society:   data?.manually_entered_society || null,  // typed manually
+            activity:                   data?.activities || null,
+            kits:                       data?.kit_type || null,
         },
     });
 };
@@ -37,7 +39,7 @@ exports.insertParentConsent = async (tx, studentId, data) => {
     await tx.parent_consents.create({
         data: {
             student_id: studentId,
-            society_name: data.society_name || null,
+            society_name: data.society_name  || null,
             parent_name: data.parentName || null,
             emergency_contact_no: data.emergencyContactNo || null,
             activity_enrolled: data.activity_enrolled || null,

@@ -29,9 +29,14 @@ exports.submitRegistration = async (req, res) => {
         }
         formData.school_id = school.id;
 
-        // Attach payment info so the service can look up the fee
+        // Attach payment info so the service can look up the fee + kit prices
         formData.payment = {
-            activity_id: formData.activity_id ? parseInt(formData.activity_id) : null,
+            activity_ids: Array.isArray(formData.activity_ids)
+                ? formData.activity_ids.map(Number)
+                : [],
+            product_ids: Array.isArray(formData.product_ids)
+                ? formData.product_ids.map(Number)
+                : [],
         };
 
         const result = await service.initiateRegistration(formData, serviceType);
@@ -86,6 +91,19 @@ exports.handlePaymentWebhook = async (req, res) => {
 /**
  * PHASE 3 — Flutter polls this after the Razorpay SDK closes.
  */
+exports.devFinalize = async (req, res) => {
+    if (process.env.DEV_SKIP_PAYMENT !== "true") {
+        return res.status(403).json({ success: false, message: "Only available in DEV_SKIP_PAYMENT mode" });
+    }
+    try {
+        const { temp_uuid } = req.params;
+        await service.finalizeRegistration(temp_uuid, "dev_payment_" + Date.now(), 0);
+        return res.status(200).json({ success: true, message: "Registration finalized (dev mode)" });
+    } catch (error) {
+        return res.status(error.status ?? 500).json({ success: false, message: error.message });
+    }
+};
+
 exports.checkRegistrationStatus = async (req, res) => {
     try {
         const { temp_uuid } = req.params;

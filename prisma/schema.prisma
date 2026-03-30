@@ -60,19 +60,23 @@ model fee_structures {
 }
 
 model individual_participants {
-  id               Int       @id @default(autoincrement())
-  student_id       Int?
-  participant_name String?   @db.VarChar(100)
-  mobile           String?   @db.VarChar(15)
-  flat_no          String?   @db.VarChar(50)
-  dob              DateTime? @db.Date
-  age              Int?
-  society_name     String?   @db.VarChar(150)
-  activity         String?   @db.VarChar(100)
-  kits             String?   @db.Text
-  students         students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
+  id                       Int        @id @default(autoincrement())
+  student_id               Int?
+  participant_name         String?    @db.VarChar(100)
+  mobile                   String?    @db.VarChar(15)
+  flat_no                  String?    @db.VarChar(50)
+  dob                      DateTime?  @db.Date
+  age                      Int?
+  society_id               Int?
+  society_name             String?    @db.VarChar(150)
+  manually_entered_society String?    @db.VarChar(150)
+  activity                 String?    @db.VarChar(100)
+  kits                     String?    @db.Text
+  students                 students?  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
+  societies                societies? @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
 
   @@index([student_id], map: "student_id")
+  @@index([society_id], map: "society_id")
 }
 
 model marketing_executives {
@@ -179,7 +183,8 @@ model school_students {
   student_name String?                   @db.VarChar(150)
   standard     String?                   @db.VarChar(50)
   address      String?                   @db.Text
-  kit_type     school_students_kit_type?
+  activities   String?                   @db.Text
+  kit_type     String?                   @db.Text
   created_at   DateTime?                 @default(now()) @db.Timestamp(0)
   students     students                  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_1")
   schools      schools                   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_2")
@@ -213,6 +218,23 @@ model schools {
   @@index([me_professional_id], map: "me_professional_id")
 }
 
+model payments {
+  id                  Int              @id @default(autoincrement())
+  temp_uuid           String           @unique(map: "temp_uuid") @db.VarChar(255)
+  razorpay_order_id   String           @db.VarChar(100)
+  razorpay_payment_id String           @unique(map: "razorpay_payment_id") @db.VarChar(100)
+  service_type        String           @db.VarChar(50)
+  amount              Decimal          @db.Decimal(10, 2)
+  currency            String?          @default("INR") @db.VarChar(10)
+  term_months         Int              @default(1) @db.TinyInt
+  status              payments_status? @default(captured)
+  student_user_id     Int?
+  captured_at         DateTime         @default(now()) @db.Timestamp(0)
+  users               users?           @relation(fields: [student_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "payments_ibfk_1")
+
+  @@index([student_user_id], map: "student_user_id")
+}
+
 /// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
 model societies {
   society_unique_id             String                     @unique(map: "society_unique_id") @db.VarChar(50)
@@ -238,6 +260,7 @@ model societies {
   created_at                    DateTime?                  @default(now()) @db.Timestamp(0)
   professionals                 professionals?             @relation(fields: [me_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "societies_fk_me")
   users                         users?                     @relation(fields: [registered_by_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "societies_fk_user")
+  individual_participants       individual_participants[]
   trainer_batches               trainer_batches[]
 
   @@index([me_professional_id], map: "societies_fk_me")
@@ -338,6 +361,7 @@ model users {
   professionals   professionals[]
   societies       societies[]
   students        students[]
+  payments        payments[]
 }
 
 model vendors {
@@ -470,4 +494,10 @@ enum societies_approval_status {
   pending
   approved
   rejected
+}
+
+enum payments_status {
+  captured
+  refunded
+  failed
 }

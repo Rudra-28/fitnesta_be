@@ -11,15 +11,17 @@ const prisma = require("../../config/prisma");
  * @param {string} data.razorpayPaymentId
  * @param {string} data.serviceType        - 'individual_coaching' | 'personal_tutor' | 'school_student'
  * @param {number} data.amount             - in INR
+ * @param {number} data.termMonths         - duration purchased: 1 | 3 | 6 | 9
  * @param {number} data.studentUserId      - users.id of the newly created student
  */
 exports.recordPayment = async (data) => {
+    const termMonths = data.termMonths || 1;
     await prisma.$executeRaw`
         INSERT INTO payments
-            (temp_uuid, razorpay_order_id, razorpay_payment_id, service_type, amount, student_user_id)
+            (temp_uuid, razorpay_order_id, razorpay_payment_id, service_type, amount, term_months, student_user_id)
         VALUES
             (${data.tempUuid}, ${data.razorpayOrderId}, ${data.razorpayPaymentId},
-             ${data.serviceType}, ${data.amount}, ${data.studentUserId})
+             ${data.serviceType}, ${data.amount}, ${termMonths}, ${data.studentUserId})
     `;
 };
 /**

@@ -30,7 +30,7 @@ exports.insertSchool = async (tx, data, userId) => {
 
 exports.getSchoolByName = async (schoolName) => {
     return await prisma.schools.findFirst({
-        where: { school_name: { equals: schoolName, mode: "insensitive" } },
+        where: { school_name: schoolName },
         select: { id: true },
     });
 };

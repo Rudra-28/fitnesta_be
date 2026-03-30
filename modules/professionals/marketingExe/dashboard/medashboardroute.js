@@ -32,6 +32,14 @@ router.get("/society/:id", meGuard, controller.getSocietyById);
 // ── School ─────────────────────────────────────────────────────────────────
 router.post("/school", meGuard, handleUpload, controller.registerSchool);
 router.get("/schools", meGuard, controller.getMySchools);
+router.get("/schools/enrollment", meGuard, controller.getMySchoolsEnrollment);
 router.get("/school/:id", meGuard, controller.getSchoolById);
+
+// ── Students (Total Students screen) ───────────────────────────────────────
+router.get("/students/schools", meGuard, controller.getSchoolStudents);
+router.get("/students/societies", meGuard, controller.getSocietyStudents);
+router.get("/students/school/:schoolId", meGuard, controller.getStudentsBySchool);
+router.get("/students/school-student/:id", meGuard, controller.getSchoolStudentById);
+router.get("/students/society/:societyId", meGuard, controller.getStudentsBySociety);
 
 module.exports = router;

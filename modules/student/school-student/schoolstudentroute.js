@@ -7,4 +7,9 @@ router.post("/submit", verifyMobileUnique, schoolStudentController.submitRegistr
 router.post("/payment-webhook", schoolStudentController.handlePaymentWebhook);
 router.get("/status/:temp_uuid", schoolStudentController.checkRegistrationStatus);
 
+// ── Dev only — manually finalize a pending registration (DEV_SKIP_PAYMENT mode) ──
+if (process.env.DEV_SKIP_PAYMENT === "true") {
+    router.post("/dev-finalize/:temp_uuid", schoolStudentController.devFinalize);
+}
+
 module.exports = router;

@@ -46,7 +46,7 @@ exports.insertProfessional = async (tx, data, userId) => {
             adhar_card: data.adharCard ?? null,
             relative_name: data.relativeName ?? null,
             relative_contact: data.relativeContact ?? null,
-            own_two_wheeler: data.ownTwoWheeler ?? false,
+            own_two_wheeler: data.ownTwoWheeler ? true : false,
             // TEXT column in DB — stored as JSON string
             communication_languages: JSON.stringify(data.communicationLanguages ?? []),
             place: data.place ?? null,

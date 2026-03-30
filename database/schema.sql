@@ -246,26 +246,25 @@ CREATE TABLE schools (
 -- activity: single activity selected from trainer's offerings.
 -- ---------------------------------------------------------------
 CREATE TABLE individual_participants (
-    id                  INT PRIMARY KEY AUTO_INCREMENT,
-    student_id          INT,
-    participant_name    VARCHAR(100),
-    mobile              VARCHAR(15),
-    flat_no             VARCHAR(50),
-    dob                 DATE,
-    age                 INT,
-    society_id          INT DEFAULT NULL,                            -- FK when society is registered
-    society_name        VARCHAR(150),                               -- free text when not registered
-    activity            VARCHAR(100),
-    kits                TEXT,
-    FOREIGN KEY (student_id) REFERENCES students(id),
-    FOREIGN KEY (society_id) REFERENCES societies(id)
+    id                          INT PRIMARY KEY AUTO_INCREMENT,
+    student_id                  INT,
+    participant_name            VARCHAR(100),
+    mobile                      VARCHAR(15),
+    flat_no                     VARCHAR(50),
+    dob                         DATE,
+    age                         INT,
+    society_id                  INT DEFAULT NULL,                   -- FK when selected from dropdown
+    society_name                VARCHAR(150) DEFAULT NULL,          -- name of the registered society (from dropdown)
+    manually_entered_society    VARCHAR(150) DEFAULT NULL,          -- filled only when user types a custom society name not in the list
+    activity                    VARCHAR(100),
+    kits                        TEXT,
+    FOREIGN KEY (student_id)    REFERENCES students(id),
+    FOREIGN KEY (society_id)    REFERENCES societies(id)
 );
 
 -- ---------------------------------------------------------------
 -- 13. SCHOOL STUDENTS (Group Coaching — School)
 -- Students enrolled under a registered school.
--- kit_type is extensible via JSON if needed in future, but kept
--- as ENUM for now to enforce valid values.
 -- ---------------------------------------------------------------
 CREATE TABLE school_students (
     id              INT PRIMARY KEY AUTO_INCREMENT,
@@ -274,7 +273,8 @@ CREATE TABLE school_students (
     student_name    VARCHAR(150),
     standard        VARCHAR(50),
     address         TEXT,
-    kit_type        ENUM('Cricket','Football','Volleyball','Karate'),
+    activities      TEXT,   -- JSON array of activity IDs e.g. [23, 25]
+    kit_type        TEXT,   -- JSON array of vendor product IDs e.g. [3, 7]
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students(id),
     FOREIGN KEY (school_id) REFERENCES schools(id)
@@ -675,6 +675,7 @@ CREATE TABLE payments (
     service_type            VARCHAR(50)   NOT NULL,              -- 'individual_coaching' | 'personal_tutor' | 'school_student'
     amount                  DECIMAL(10,2) NOT NULL,              -- total fee paid in INR
     currency                VARCHAR(10)   DEFAULT 'INR',
+    term_months             TINYINT       NOT NULL DEFAULT 1,    -- duration bought: 1 | 3 | 6 | 9 — used to compute expiry_date = captured_at + term_months months
     status                  ENUM('captured','refunded','failed') DEFAULT 'captured',
     student_user_id         INT           DEFAULT NULL,          -- filled after finalization; FK to users
     captured_at             TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,

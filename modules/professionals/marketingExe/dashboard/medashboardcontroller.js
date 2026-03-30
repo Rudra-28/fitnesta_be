@@ -83,6 +83,50 @@ exports.getMySchools = async (req, res) => {
     } catch (err) { handleErr(err, res); }
 };
 
+exports.getMySchoolsEnrollment = async (req, res) => {
+    try {
+        const data = await service.getMySchoolsEnrollment(req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) { handleErr(err, res); }
+};
+
+// ── Students ──────────────────────────────────────────────────────────────────
+
+exports.getSchoolStudents = async (req, res) => {
+    try {
+        const data = await service.getSchoolStudents(req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) { handleErr(err, res); }
+};
+
+exports.getSocietyStudents = async (req, res) => {
+    try {
+        const data = await service.getSocietyStudents(req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) { handleErr(err, res); }
+};
+
+exports.getStudentsBySchool = async (req, res) => {
+    try {
+        const data = await service.getStudentsBySchool(Number(req.params.schoolId), req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) { handleErr(err, res); }
+};
+
+exports.getSchoolStudentById = async (req, res) => {
+    try {
+        const data = await service.getSchoolStudentById(Number(req.params.id), req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) { handleErr(err, res); }
+};
+
+exports.getStudentsBySociety = async (req, res) => {
+    try {
+        const data = await service.getStudentsBySociety(Number(req.params.societyId), req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) { handleErr(err, res); }
+};
+
 exports.getSchoolById = async (req, res) => {
     try {
         const data = await service.getSchoolById(Number(req.params.id), req.me.userId);

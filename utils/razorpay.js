@@ -25,6 +25,15 @@ function getInstance() {
  * @returns {object}           - Razorpay order object { id, amount, currency, ... }
  */
 exports.createOrder = async (amount, receipt, notes = {}) => {
+    if (process.env.DEV_SKIP_PAYMENT === "true") {
+        return {
+            id: "dev_order_" + receipt.slice(0, 16),
+            amount: Math.round(amount * 100),
+            currency: "INR",
+            receipt: receipt.slice(0, 40),
+            notes,
+        };
+    }
     const order = await getInstance().orders.create({
         amount: Math.round(amount * 100), // paise
         currency: "INR",

@@ -51,26 +51,47 @@ exports.submitRegistration = async (req, res) => {
     formData.consent_date = toYYYYMMDD(formData.consent_date);
 
     if (formData && !formData.user_info) {
+      /*
+       * Society name resolution for Individual Game Coaching:
+       *
+       *   Dropdown selected  → society_id + society_name both sent by Flutter.
+       *                        manually_entered_society is null.
+       *
+       *   Manually entered   → society_id is null, society_name is null.
+       *                        Flutter sends the typed value as manually_entered_society.
+       *
+       * Both paths are stored in separate columns so admin can distinguish
+       * registered vs unregistered society enrollments.
+       */
+      const societyId               = formData.society_id ? parseInt(formData.society_id) : null;
+      const societyName             = societyId ? (formData.society_name || null) : null;
+      const manuallyEnteredSociety  = !societyId ? (formData.manually_entered_society || formData.entered_society_name || null) : null;
+
+      // Consent card shows whichever society name is relevant
+      const consentSocietyName = societyName || manuallyEnteredSociety || null;
+
       formData = {
         user_info: {
           fullName: formData.fullName || formData.participantName || formData.full_name,
           contactNumber: formData.contactNumber || formData.mobile || formData.contact_number,
         },
         individualcoaching: {
-          flat_no: formData.flat_no,
-          dob: formData.dob,
-          age: formData.age,
-          society_name: formData.society_name,
-          activities: formData.activities || formData.activity_enrolled,
-          kit_type: formData.kit_type || formData.kits || formData.Kit_type,
+          flat_no:                    formData.flat_no,
+          dob:                        formData.dob,
+          age:                        formData.age,
+          society_id:                 societyId,
+          society_name:               societyName,
+          manually_entered_society:   manuallyEnteredSociety,
+          activities:                 formData.activities || formData.activity_enrolled,
+          kit_type:                   formData.kit_type || formData.kits || formData.Kit_type,
         },
         consentDetails: {
-          society_name: formData.society_name,
-          parentName: formData.parentName || formData.parent_name,
+          society_name:       consentSocietyName,
+          parentName:         formData.parentName || formData.parent_name,
           emergencyContactNo: formData.emergencyContactNo || formData.emergency_contact_no,
-          activity_enrolled: formData.activity_enrolled,
-          consent_date: formData.consent_date,
-          signatureUrl: formData.signatureUrl || formData.signature_url,
+          activity_enrolled:  formData.activity_enrolled,
+          consent_date:       formData.consent_date,
+          signatureUrl:       formData.signatureUrl || formData.signature_url,
         },
         // Payment fields — Flutter must send these so we can look up the fee
         payment: {

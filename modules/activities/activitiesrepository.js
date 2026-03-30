@@ -4,25 +4,24 @@ const prisma = require("../../config/prisma");
  * Fetch active activities with their fee structures for a given coaching type.
  * Optionally filter by society_category (A+, A, B) — relevant for group_coaching.
  */
-exports.getActivitiesByCoachingType = async (coachingType, societyCategory = null) => {
+exports.getActivitiesByCoachingType = async (coachingType, societyCategory = null, standard = null, termMonths = null) => {
+    const feeFilter = {
+        coaching_type: coachingType,
+        ...(societyCategory && { society_category: societyCategory }),
+        ...(standard        && { standard }),
+        ...(termMonths      && { term_months: termMonths }),
+    };
+
     const where = {
         is_active: true,
-        fee_structures: {
-            some: {
-                coaching_type: coachingType,
-                ...(societyCategory && { society_category: societyCategory }),
-            },
-        },
+        fee_structures: { some: feeFilter },
     };
 
     const activities = await prisma.activities.findMany({
         where,
         include: {
             fee_structures: {
-                where: {
-                    coaching_type: coachingType,
-                    ...(societyCategory && { society_category: societyCategory }),
-                },
+                where: feeFilter,
                 select: {
                     society_category: true,
                     standard: true,

@@ -63,6 +63,13 @@ exports.deleteProduct = async (productId, vendorId) => {
     });
 };
 
+exports.getProductsByIds = async (ids) => {
+    return await prisma.vendor_products.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, product_name: true, selling_price: true },
+    });
+};
+
 // ── Public ─────────────────────────────────────────────────────────────────
 exports.getAllProductsPublic = async (sportsCategory) => {
     return await prisma.vendor_products.findMany({

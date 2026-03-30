@@ -2,6 +2,7 @@ const repo = require("./activitiesrepository");
 
 const VALID_COACHING_TYPES = ["individual_coaching", "group_coaching", "personal_tutor", "school_student"];
 const VALID_SOCIETY_CATEGORIES = ["A+", "A", "B"];
+const VALID_STANDARDS = ["1ST-2ND", "3RD-4TH", "5TH-6TH", "7TH-8TH", "8TH-10TH", "ANY"];
 
 const ALIAS_MAP = {};
 
@@ -12,7 +13,7 @@ const SOCIETY_CATEGORY_DISPLAY = {
     B:  "B",
 };
 
-exports.getActivities = async (coachingType, societyCategory = null) => {
+exports.getActivities = async (coachingType, societyCategory = null, standard = null, termMonths = null) => {
     // No coaching_type → return plain activity list
     if (!coachingType) {
         const activities = await repo.getAllActiveActivities();
@@ -42,10 +43,23 @@ exports.getActivities = async (coachingType, societyCategory = null) => {
         }
     }
 
+    if (resolved === "personal_tutor") {
+        if (!standard) {
+            const err = new Error(`standard is required for personal_tutor. Allowed values: ${VALID_STANDARDS.join(", ")}`);
+            err.status = 400;
+            throw err;
+        }
+        if (!VALID_STANDARDS.includes(standard)) {
+            const err = new Error(`Invalid standard. Allowed values: ${VALID_STANDARDS.join(", ")}`);
+            err.status = 400;
+            throw err;
+        }
+    }
+
     // Convert "A+" → "A_" for Prisma enum lookup
     const prismaCategory = societyCategory === "A+" ? "A_" : societyCategory;
 
-    const activities = await repo.getActivitiesByCoachingType(resolved, prismaCategory);
+    const activities = await repo.getActivitiesByCoachingType(resolved, prismaCategory, standard, termMonths);
 
     const result = activities.map((activity) => ({
         id: activity.id,

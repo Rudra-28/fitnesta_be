@@ -27,10 +27,18 @@ exports.validateSchoolStudent = (data) => {
     errors.push("Standard/Grade is required");
   }
 
-  // Kit Type
-  const validKits = ['Cricket', 'Football', 'Volleyball', 'Karate'];
-  if (!data.kit_type || !validKits.includes(data.kit_type)) {
-    errors.push("Kit type is required and must be Cricket, Football, Volleyball, or Karate");
+  // activity_ids — required array of activity IDs
+  if (!data.activity_ids || !Array.isArray(data.activity_ids) || data.activity_ids.length === 0)
+    errors.push("At least one activity must be selected");
+  else if (data.activity_ids.some(id => isNaN(Number(id))))
+    errors.push("All activity_ids must be valid numbers");
+
+  // product_ids — optional array of vendor product IDs for kit purchase
+  if (data.product_ids !== undefined && data.product_ids !== null) {
+    if (!Array.isArray(data.product_ids))
+      errors.push("product_ids must be an array of product IDs");
+    else if (data.product_ids.some(id => isNaN(Number(id))))
+      errors.push("All product_ids must be valid numbers");
   }
 
   return errors;

@@ -2,6 +2,7 @@ const prisma = require("../../../config/prisma");
 const crypto = require("crypto");
 const repo = require("./schoolstudentrepo");
 const activitiesRepo = require("../../activities/activitiesrepository");
+const vendorRepo = require("../../professionals/vendor/vendordashboard/vendordashboardrepo");
 const razorpay = require("../../../utils/razorpay");
 const paymentsRepo = require("../../payments/paymentsrepo");
 
@@ -15,28 +16,38 @@ const paymentsRepo = require("../../payments/paymentsrepo");
  * Returns: { tempUuid, orderId, amount, currency, keyId }
  */
 exports.initiateRegistration = async (formData, serviceType) => {
-    const { activity_id } = formData.payment || {};
+    const { activity_ids = [], product_ids = [] } = formData.payment || {};
 
-    if (!activity_id) {
-        const err = new Error("activity_id is required to calculate the fee");
+    if (!activity_ids.length) {
+        const err = new Error("At least one activity_id is required to calculate the fee");
         err.status = 400;
         throw err;
     }
 
-    // School student term is always 9 months — no need for frontend to send term_months
-    const feeRecord = await activitiesRepo.getFeeForActivity(
-        parseInt(activity_id),
-        "school_student",
-        9
+    // School student term is always 9 months — look up fee for each activity and sum
+    const feeRecords = await Promise.all(
+        activity_ids.map(id => activitiesRepo.getFeeForActivity(id, "school_student", 9))
     );
 
-    if (!feeRecord) {
-        const err = new Error("No fee found for the selected activity. Check activity_id.");
+    const missing = activity_ids.filter((_, i) => !feeRecords[i]);
+    if (missing.length > 0) {
+        const err = new Error(`No fee found for activity_id(s): ${missing.join(", ")}`);
         err.status = 400;
         throw err;
     }
 
-    const amount = parseFloat(feeRecord.total_fee);
+    let amount = feeRecords.reduce((sum, r) => sum + parseFloat(r.total_fee), 0);
+    formData.activity_ids = activity_ids; // persist for finalize phase
+
+    // Add kit costs from vendor products if any were selected
+    if (product_ids.length > 0) {
+        const products = await vendorRepo.getProductsByIds(product_ids);
+        if (products.length > 0) {
+            const kitTotal = products.reduce((sum, p) => sum + parseFloat(p.selling_price), 0);
+            amount += kitTotal;
+            formData.product_ids = products.map(p => p.id); // only store found IDs
+        }
+    }
     const tempUuid = crypto.randomUUID();
 
     const order = await razorpay.createOrder(amount, tempUuid, {
@@ -86,6 +97,7 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
         razorpayPaymentId,
         serviceType:       pending.service_type,
         amount,
+        termMonths:        9, // school_student term is always 9 months
         studentUserId:     result.userId,
     });
 
