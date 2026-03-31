@@ -45,8 +45,16 @@ exports.registerSociety = async (data) => {
     };
 };
 
+const SOCIETY_CATEGORY_DISPLAY = { A_: "A+", A: "A", B: "B" };
+
 exports.getSocieties = async () => {
-    return await repo.getAllSocieties();
+    const societies = await repo.getAllSocieties();
+    return societies.map((s) => ({
+        ...s,
+        society_category: s.society_category
+            ? (SOCIETY_CATEGORY_DISPLAY[s.society_category] ?? s.society_category)
+            : null,
+    }));
 };
 
 // ── helpers ────────────────────────────────────────────────────────────────

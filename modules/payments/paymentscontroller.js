@@ -1,0 +1,118 @@
+const crypto = require("crypto");
+const { verifyWebhookSignature } = require("../../utils/razorpay");
+const paymentsRepo = require("./paymentsrepo");
+const icService = require("../student/individualcoaching/indicoachservice");
+const ptService = require("../student/personaltutor/perstutorservice");
+const ssService = require("../student/school-student/schoolstudentservice");
+
+const SERVICE_MAP = {
+    individual_coaching: icService,
+    group_coaching:      icService, // group coaching reuses the same finalizeRegistration
+    personal_tutor:      ptService,
+    school_student:      ssService,
+};
+
+/**
+ * Client-side payment verification — called by Flutter after the Razorpay SDK closes.
+ *
+ * Flutter sends: { temp_uuid, razorpay_order_id, razorpay_payment_id, razorpay_signature }
+ * We verify the signature, look up the service_type from pending_registrations,
+ * and finalize the registration immediately — no webhook needed.
+ *
+ * Signature formula (Razorpay spec):
+ *   HMAC-SHA256(razorpay_order_id + "|" + razorpay_payment_id, KEY_SECRET)
+ */
+exports.verifyPayment = async (req, res) => {
+    try {
+        const { temp_uuid, razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+
+        if (!temp_uuid || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+            return res.status(400).json({ success: false, message: "Missing required payment fields" });
+        }
+
+        // Verify signature
+        const expected = crypto
+            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+            .update(`${razorpay_order_id}|${razorpay_payment_id}`)
+            .digest("hex");
+
+        const isValid = crypto.timingSafeEqual(
+            Buffer.from(expected, "hex"),
+            Buffer.from(razorpay_signature, "hex")
+        );
+
+        if (!isValid) {
+            return res.status(400).json({ success: false, message: "Invalid payment signature" });
+        }
+
+        // Look up service_type from the pending registration
+        const pending = await paymentsRepo.getPendingRegistration(temp_uuid);
+        if (!pending) {
+            return res.status(404).json({ success: false, message: "Registration not found for this temp_uuid" });
+        }
+
+        if (pending.status === "approved") {
+            return res.status(200).json({ success: true, message: "Already finalized" });
+        }
+
+        const service = SERVICE_MAP[pending.service_type];
+        if (!service) {
+            return res.status(400).json({ success: false, message: `Unknown service_type: ${pending.service_type}` });
+        }
+
+        await service.finalizeRegistration(temp_uuid, razorpay_payment_id, 0);
+        return res.status(200).json({ success: true, message: "Payment verified and registration finalized" });
+    } catch (error) {
+        console.error("Payment verify error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Unified Razorpay webhook — handles payment.captured for all service types.
+ *
+ * Razorpay fires this for every payment. We read service_type from the order
+ * notes (embedded at order-creation time) and route to the correct service.
+ *
+ * Configure a single webhook URL in the Razorpay Dashboard:
+ *   POST /api/v1/payments/webhook
+ */
+exports.handlePaymentWebhook = async (req, res) => {
+    try {
+        const signature = req.headers["x-razorpay-signature"];
+
+        if (!verifyWebhookSignature(req.rawBody, signature)) {
+            return res.status(400).json({ success: false, message: "Invalid webhook signature" });
+        }
+
+        // Silently ack any event that isn't payment.captured
+        if (req.body.event !== "payment.captured") {
+            return res.status(200).json({ received: true });
+        }
+
+        const entity = req.body?.payload?.payment?.entity;
+        const temp_uuid    = entity?.notes?.temp_uuid;
+        const service_type = entity?.notes?.service_type;
+
+        if (!temp_uuid) {
+            console.error("Webhook missing temp_uuid in notes:", entity?.notes);
+            return res.status(200).json({ received: true });
+        }
+
+        const service = SERVICE_MAP[service_type];
+        if (!service) {
+            console.error("Webhook received unknown service_type:", service_type);
+            return res.status(200).json({ received: true });
+        }
+
+        const paymentId = entity.id;
+        const amount    = entity.amount / 100; // paise → INR
+
+        await service.finalizeRegistration(temp_uuid, paymentId, amount);
+        return res.status(200).json({ success: true });
+    } catch (error) {
+        // Always return 200 so Razorpay stops retrying — log for manual review
+        console.error("Unified webhook error:", error);
+        return res.status(200).json({ received: true });
+    }
+};

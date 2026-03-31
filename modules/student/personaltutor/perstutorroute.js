@@ -8,7 +8,6 @@ const ptUploads = upload.fields([
 ]);
 
 router.post("/send-PT", ptUploads, personaltutorController.submitRegistration);
-router.post("/payment-webhook", personaltutorController.handlePaymentWebhook);
 router.get("/status/:temp_uuid", personaltutorController.checkRegistrationStatus);
 
 module.exports = router;

@@ -17,8 +17,10 @@ exports.insertPending = async (data) => {
 
 // ── STEP 2: Called inside a Prisma transaction on admin approval ──────────
 exports.insertUser = async (tx, data) => {
+    const uuid = crypto.randomUUID();
     const user = await tx.users.create({
         data: {
+            uuid,
             role: "professional",
             subrole: "trainer",
             full_name: data.fullName,
@@ -29,16 +31,14 @@ exports.insertUser = async (tx, data) => {
             approval_status: "approved",
         },
     });
-    return user.id;
+    return { id: user.id, uuid };
 };
 
-exports.insertProfessional = async (tx, data, userId) => {
-    const uuid = crypto.randomUUID();
+exports.insertProfessional = async (tx, data, userId, uuid) => {
     const referralCode = "FIT-" + uuid.replace(/-/g, "").substring(0, 8).toUpperCase();
 
     const professional = await tx.professionals.create({
         data: {
-            uuid,
             referral_code: referralCode,
             user_id: userId,
             profession_type: "trainer",
@@ -46,7 +46,7 @@ exports.insertProfessional = async (tx, data, userId) => {
             adhar_card: data.adharCard ?? null,
             relative_name: data.relativeName ?? null,
             relative_contact: data.relativeContact ?? null,
-            own_two_wheeler: data.ownTwoWheeler ?? false,
+            own_two_wheeler: data.ownTwoWheeler ? true : false,
             // TEXT column in DB — stored as JSON string
             communication_languages: JSON.stringify(data.communicationLanguages ?? []),
             place: data.place ?? null,

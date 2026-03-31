@@ -4,6 +4,7 @@ const repo = require("./indicoachrepo");
 const activitiesRepo = require("../../activities/activitiesrepository");
 const razorpay = require("../../../utils/razorpay");
 const paymentsRepo = require("../../payments/paymentsrepo");
+const commissionService = require("../../commissions/commissionservice");
 
 /**
  * PHASE 1 — Park form data and create a Razorpay order.
@@ -42,13 +43,13 @@ exports.initiateRegistration = async (formData, serviceType) => {
 
     const order = await razorpay.createOrder(amount, tempUuid, {
         temp_uuid: tempUuid,
-        service_type: serviceType,
+        service_type: coachingType,
     });
 
     // Embed the Razorpay order_id in form_data so we can cross-reference later if needed
     formData.razorpay_order_id = order.id;
 
-    await repo.insertPendingRegistration(tempUuid, formData, serviceType);
+    await repo.insertPendingRegistration(tempUuid, formData, coachingType);
 
     return {
         tempUuid,
@@ -96,6 +97,14 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
         termMonths,
         studentUserId:     result.userId,
     });
+
+    // Calculate ME admission commission (fire-and-forget — never throws)
+    await commissionService.calculateMEAdmissionCommission(
+        pending.service_type,
+        data,
+        result.userId,
+        amount
+    );
 
     return { userId: result.userId, success: true };
 };

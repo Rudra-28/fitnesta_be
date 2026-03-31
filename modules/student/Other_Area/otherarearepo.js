@@ -56,8 +56,13 @@ exports.findProfessionalByReferralCode = async (tx, referralCode) => {
 };
 
 exports.insertUser = async (tx, data) => {
+    const mobile = data.mobile || null;
+    if (mobile) {
+        const existing = await tx.users.findUnique({ where: { mobile }, select: { id: true } });
+        if (existing) return existing.id;
+    }
     const user = await tx.users.create({
-        data: { role: "student", mobile: data.mobile },
+        data: { uuid: crypto.randomUUID(), role: "student", mobile },
     });
     return user.id;
 };

@@ -4,6 +4,7 @@ const repo = require("./perstutorrepo");
 const activitiesRepo = require("../../activities/activitiesrepository");
 const razorpay = require("../../../utils/razorpay");
 const paymentsRepo = require("../../payments/paymentsrepo");
+const commissionService = require("../../commissions/commissionservice");
 
 /**
  * PHASE 1 — Park form data and create a Razorpay order.
@@ -112,6 +113,14 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
         amount,
         studentUserId:     result.userId,
     });
+
+    // Calculate ME admission commission (fire-and-forget — never throws)
+    await commissionService.calculateMEAdmissionCommission(
+        pending.service_type,
+        data,
+        result.userId,
+        amount
+    );
 
     return { userId: result.userId, success: true };
 };

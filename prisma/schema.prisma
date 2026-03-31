@@ -60,23 +60,25 @@ model fee_structures {
 }
 
 model individual_participants {
-  id                       Int        @id @default(autoincrement())
+  id                       Int            @id @default(autoincrement())
   student_id               Int?
-  participant_name         String?    @db.VarChar(100)
-  mobile                   String?    @db.VarChar(15)
-  flat_no                  String?    @db.VarChar(50)
-  dob                      DateTime?  @db.Date
+  participant_name         String?        @db.VarChar(100)
+  mobile                   String?        @db.VarChar(15)
+  flat_no                  String?        @db.VarChar(50)
+  dob                      DateTime?      @db.Date
   age                      Int?
   society_id               Int?
-  society_name             String?    @db.VarChar(150)
-  manually_entered_society String?    @db.VarChar(150)
-  activity                 String?    @db.VarChar(100)
-  kits                     String?    @db.Text
-  students                 students?  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
-  societies                societies? @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
+  society_name             String?        @db.VarChar(150)
+  activity                 String?        @db.VarChar(100)
+  kits                     String?        @db.Text
+  trainer_professional_id  Int?
+  students                 students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
+  societies                societies?     @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
+  professionals            professionals? @relation(fields: [trainer_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_3")
 
   @@index([student_id], map: "student_id")
   @@index([society_id], map: "society_id")
+  @@index([trainer_professional_id], map: "trainer_professional_id")
 }
 
 model marketing_executives {
@@ -136,20 +138,22 @@ model pending_registrations {
 }
 
 model personal_tutors {
-  id          Int       @id @default(autoincrement())
-  student_id  Int?
-  dob         DateTime? @db.Date
-  standard    String?   @db.VarChar(50)
-  batch       String?   @db.VarChar(50)
-  teacher_for String?   @db.VarChar(100)
-  students    students? @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_1")
+  id                      Int            @id @default(autoincrement())
+  student_id              Int?
+  dob                     DateTime?      @db.Date
+  standard                String?        @db.VarChar(50)
+  batch                   String?        @db.VarChar(50)
+  teacher_for             String?        @db.VarChar(100)
+  teacher_professional_id Int?
+  students                students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_1")
+  professionals           professionals? @relation(fields: [teacher_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_2")
 
   @@index([student_id], map: "student_id")
+  @@index([teacher_professional_id], map: "teacher_professional_id")
 }
 
 model professionals {
   id                      Int                            @id @default(autoincrement())
-  uuid                    String?                        @unique(map: "uuid") @db.Char(36)
   referral_code           String?                        @unique(map: "referral_code") @db.VarChar(12)
   user_id                 Int?
   profession_type         professionals_profession_type?
@@ -172,6 +176,8 @@ model professionals {
   travelling_allowances   travelling_allowances[]
   vendors                 vendors[]
   wallets                 wallets?
+  individual_participants individual_participants[]
+  personal_tutors         personal_tutors[]
 
   @@index([user_id], map: "user_id")
 }
@@ -345,6 +351,7 @@ model travelling_allowances {
 
 model users {
   id              Int                   @id @default(autoincrement())
+  uuid            String?               @unique(map: "users_uuid") @db.Char(36)
   role            String                @db.VarChar(50)
   subrole         String?               @db.VarChar(50)
   full_name       String?               @db.VarChar(100)
@@ -399,6 +406,18 @@ model wallets {
   balance         Decimal?      @default(0.00) @db.Decimal(10, 2)
   updated_at      DateTime?     @default(now()) @db.Timestamp(0)
   professionals   professionals @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "wallets_ibfk_1")
+}
+
+/// Stores all configurable commission rates and flat amounts.
+/// Admin can view and edit these via the admin panel.
+model commission_rules {
+  id                Int      @id @default(autoincrement())
+  rule_key          String   @unique @db.VarChar(100)
+  professional_type String   @db.VarChar(50)
+  description       String   @db.VarChar(255)
+  rule_type         String   @db.VarChar(20)
+  value             Decimal  @db.Decimal(10, 2)
+  updated_at        DateTime @default(now()) @db.Timestamp(0)
 }
 
 enum admins_scope {

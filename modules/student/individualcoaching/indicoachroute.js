@@ -9,7 +9,6 @@ const icUploads = upload.fields([
 ]);
 
 router.post("/send-IC", icUploads, indicoachcontroller.submitRegistration);
-router.post("/payment-webhook", indicoachcontroller.handlePaymentWebhook);
 router.get("/status/:temp_uuid", indicoachcontroller.checkRegistrationStatus);
 
 module.exports = router;

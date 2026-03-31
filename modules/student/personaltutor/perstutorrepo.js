@@ -1,13 +1,20 @@
 const prisma = require("../../../config/prisma");
+const crypto = require("crypto");
 
 // ── Called inside a Prisma transaction (tx) ────────────────────────────────
 exports.insertUser = async (tx, data) => {
+    const mobile = data?.contactNumber || null;
+    if (mobile) {
+        const existing = await tx.users.findUnique({ where: { mobile }, select: { id: true } });
+        if (existing) return existing.id;
+    }
     const user = await tx.users.create({
         data: {
+            uuid: crypto.randomUUID(),
             role: "student",
             full_name: data?.fullName || null,
             address: data?.address || null,
-            mobile: data?.contactNumber || null,
+            mobile,
         },
     });
     return user.id;

@@ -1,6 +1,5 @@
 const service = require("./indicoachservice");
 const jwt = require("jsonwebtoken");
-const { verifyWebhookSignature } = require("../../../utils/razorpay");
 
 function toYYYYMMDD(dateStr) {
   if (!dateStr) return null;
@@ -27,12 +26,14 @@ function toYYYYMMDD(dateStr) {
  */
 exports.submitRegistration = async (req, res) => {
   try {
+    console.log("[IC] submitRegistration called");
     let { formData, serviceType } = req.body;
 
     if (typeof formData === "string") {
       try {
         formData = JSON.parse(formData);
       } catch {
+        console.warn("[IC] Failed to parse formData JSON");
         return res.status(400).json({ success: false, message: "Invalid formData JSON" });
       }
     } else if (!formData || Object.keys(formData).length === 0) {
@@ -41,6 +42,7 @@ exports.submitRegistration = async (req, res) => {
 
     if (!serviceType) serviceType = formData.serviceType || "individual_coaching";
     delete formData.serviceType;
+    console.log(`[IC] serviceType: ${serviceType}, coaching_type: ${formData.coaching_type || "not provided"}`);
 
     const signatureFile =
       (req.files?.["signatureUrl"] && req.files["signatureUrl"][0]) ||
@@ -51,24 +53,32 @@ exports.submitRegistration = async (req, res) => {
     formData.consent_date = toYYYYMMDD(formData.consent_date);
 
     if (formData && !formData.user_info) {
-      /*
-       * Society name resolution for Individual Game Coaching:
-       *
-       *   Dropdown selected  → society_id + society_name both sent by Flutter.
-       *                        manually_entered_society is null.
-       *
-       *   Manually entered   → society_id is null, society_name is null.
-       *                        Flutter sends the typed value as manually_entered_society.
-       *
-       * Both paths are stored in separate columns so admin can distinguish
-       * registered vs unregistered society enrollments.
-       */
-      const societyId               = formData.society_id ? parseInt(formData.society_id) : null;
-      const societyName             = societyId ? (formData.society_name || null) : null;
-      const manuallyEnteredSociety  = !societyId ? (formData.manually_entered_society || formData.entered_society_name || null) : null;
+      // Resolve activity_id — accept singular or first element of an array
+      let rawActivityId = formData.activity_id;
+      if (!rawActivityId && formData.activity_ids) {
+        let ids = formData.activity_ids;
+        if (typeof ids === "string") {
+          try { ids = JSON.parse(ids); } catch { /* keep */ }
+        }
+        if (typeof ids === "number") ids = [ids];
+        if (typeof ids === "string") ids = [Number(ids)];
+        rawActivityId = Array.isArray(ids) && ids.length > 0 ? ids[0] : null;
+      }
+      formData.activity_id = rawActivityId ? parseInt(rawActivityId) : null;
 
-      // Consent card shows whichever society name is relevant
-      const consentSocietyName = societyName || manuallyEnteredSociety || null;
+      // Resolve term_months — ensure it's an integer
+      if (formData.term_months) {
+        formData.term_months = parseInt(formData.term_months);
+      }
+
+      // society_id is set when student picks a registered society from the dropdown.
+      // society_name holds the name in both cases — registered (from dropdown) or
+      // unregistered (typed manually). society_id being null is the signal that
+      // the society is unregistered; no separate column needed.
+      const societyId   = formData.society_id ? parseInt(formData.society_id) : null;
+      const societyName = formData.society_name || formData.manually_entered_society || formData.entered_society_name || null;
+
+      const consentSocietyName = societyName;
 
       formData = {
         user_info: {
@@ -76,14 +86,13 @@ exports.submitRegistration = async (req, res) => {
           contactNumber: formData.contactNumber || formData.mobile || formData.contact_number,
         },
         individualcoaching: {
-          flat_no:                    formData.flat_no,
-          dob:                        formData.dob,
-          age:                        formData.age,
-          society_id:                 societyId,
-          society_name:               societyName,
-          manually_entered_society:   manuallyEnteredSociety,
-          activities:                 formData.activities || formData.activity_enrolled,
-          kit_type:                   formData.kit_type || formData.kits || formData.Kit_type,
+          flat_no:    formData.flat_no,
+          dob:        formData.dob,
+          age:        formData.age,
+          society_id: societyId,
+          society_name: societyName,
+          activities: formData.activities || formData.activity_enrolled,
+          kit_type:   formData.kit_type || formData.kits || formData.Kit_type,
         },
         consentDetails: {
           society_name:       consentSocietyName,
@@ -108,6 +117,7 @@ exports.submitRegistration = async (req, res) => {
     }
 
     const result = await service.initiateRegistration(formData, serviceType);
+    console.log(`[IC] Registration parked — temp_uuid: ${result.tempUuid}, order_id: ${result.orderId}, amount: ${result.amount}`);
 
     return res.status(200).json({
       success: true,
@@ -119,59 +129,8 @@ exports.submitRegistration = async (req, res) => {
       key_id: result.keyId,
     });
   } catch (error) {
+    console.error(`[IC] submitRegistration error: ${error.message}`);
     return res.status(error.status ?? 500).json({ success: false, message: error.message });
-  }
-};
-
-/**
- * PHASE 2 — Razorpay webhook (payment.captured event).
- *
- * Razorpay POST body structure:
- * {
- *   event: "payment.captured",
- *   payload: {
- *     payment: {
- *       entity: {
- *         id: "pay_xxx",
- *         order_id: "order_xxx",
- *         notes: { temp_uuid: "...", service_type: "..." }
- *       }
- *     }
- *   }
- * }
- *
- * The X-Razorpay-Signature header must match our HMAC-SHA256 of the raw body.
- * Configure this URL in the Razorpay dashboard under Webhooks.
- */
-exports.handlePaymentWebhook = async (req, res) => {
-  try {
-    const signature = req.headers["x-razorpay-signature"];
-
-    if (!verifyWebhookSignature(req.rawBody, signature)) {
-      return res.status(400).json({ success: false, message: "Invalid webhook signature" });
-    }
-
-    const entity = req.body?.payload?.payment?.entity;
-    const temp_uuid = entity?.notes?.temp_uuid;
-
-    if (!temp_uuid) {
-      return res.status(400).json({ success: false, message: "temp_uuid missing from payment notes" });
-    }
-
-    // Only finalize on payment.captured; ignore other events silently
-    if (req.body.event !== "payment.captured") {
-      return res.status(200).json({ received: true });
-    }
-
-    const paymentId = entity.id;
-    const amount = entity.amount / 100; // Razorpay sends paise → convert to INR
-
-    await service.finalizeRegistration(temp_uuid, paymentId, amount);
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    // Return 200 so Razorpay does not keep retrying — error is logged for manual review
-    console.error("IC Webhook error:", error);
-    return res.status(200).json({ received: true });
   }
 };
 
@@ -182,9 +141,11 @@ exports.handlePaymentWebhook = async (req, res) => {
 exports.checkRegistrationStatus = async (req, res) => {
   try {
     const { temp_uuid } = req.params;
+    console.log(`[IC] checkRegistrationStatus — temp_uuid: ${temp_uuid}`);
     const registration = await service.getRegistrationStatus(temp_uuid);
 
     if (registration.status === "approved") {
+      console.log(`[IC] Registration approved — userId: ${registration.userId}, issuing JWT`);
       const token = jwt.sign(
         { id: registration.userId, role: "student" },
         process.env.JWT_ACCESS_SECRET,
@@ -198,8 +159,10 @@ exports.checkRegistrationStatus = async (req, res) => {
       });
     }
 
+    console.log(`[IC] Registration status: ${registration.status}`);
     return res.status(200).json({ success: true, isCompleted: false, status: registration.status });
   } catch (error) {
+    console.error(`[IC] checkRegistrationStatus error: ${error.message}`);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -1,6 +1,5 @@
 const service = require("./schoolstudentservice");
 const jwt = require("jsonwebtoken");
-const { verifyWebhookSignature } = require("../../../utils/razorpay");
 const { validateSchoolStudent } = require("./schoolstudentvalidation");
 const schoolRepo = require("../../school/schoolrepo");
 
@@ -15,19 +14,23 @@ const schoolRepo = require("../../school/schoolrepo");
  */
 exports.submitRegistration = async (req, res) => {
     try {
+        console.log("[SS] submitRegistration called");
         const formData = req.body;
         const serviceType = "school_student";
 
         const errors = validateSchoolStudent(formData);
         if (errors.length > 0) {
+            console.warn("[SS] Validation failed:", errors);
             return res.status(400).json({ success: false, errors });
         }
 
         const school = await schoolRepo.getSchoolByName(formData.schoolName);
         if (!school) {
+            console.warn(`[SS] School not found: ${formData.schoolName}`);
             return res.status(404).json({ success: false, message: "Selected school does not exist in our system." });
         }
         formData.school_id = school.id;
+        console.log(`[SS] School resolved — name: ${formData.schoolName}, id: ${school.id}`);
 
         // Attach payment info so the service can look up the fee + kit prices
         formData.payment = {
@@ -40,6 +43,7 @@ exports.submitRegistration = async (req, res) => {
         };
 
         const result = await service.initiateRegistration(formData, serviceType);
+        console.log(`[SS] Registration parked — temp_uuid: ${result.tempUuid}, order_id: ${result.orderId}, amount: ${result.amount}`);
 
         return res.status(200).json({
             success: true,
@@ -51,40 +55,8 @@ exports.submitRegistration = async (req, res) => {
             key_id: result.keyId,
         });
     } catch (error) {
+        console.error(`[SS] submitRegistration error: ${error.message}`);
         return res.status(error.status ?? 500).json({ success: false, message: error.message });
-    }
-};
-
-/**
- * PHASE 2 — Razorpay webhook (payment.captured event).
- */
-exports.handlePaymentWebhook = async (req, res) => {
-    try {
-        const signature = req.headers["x-razorpay-signature"];
-
-        if (!verifyWebhookSignature(req.rawBody, signature)) {
-            return res.status(400).json({ success: false, message: "Invalid webhook signature" });
-        }
-
-        const entity = req.body?.payload?.payment?.entity;
-        const temp_uuid = entity?.notes?.temp_uuid;
-
-        if (!temp_uuid) {
-            return res.status(400).json({ success: false, message: "temp_uuid missing from payment notes" });
-        }
-
-        if (req.body.event !== "payment.captured") {
-            return res.status(200).json({ received: true });
-        }
-
-        const paymentId = entity.id;
-        const amount = entity.amount / 100; // paise → INR
-
-        await service.finalizeRegistration(temp_uuid, paymentId, amount);
-        return res.status(200).json({ success: true });
-    } catch (error) {
-        console.error("SS Webhook error:", error);
-        return res.status(200).json({ received: true });
     }
 };
 
@@ -97,9 +69,12 @@ exports.devFinalize = async (req, res) => {
     }
     try {
         const { temp_uuid } = req.params;
+        console.log(`[SS] devFinalize called — temp_uuid: ${temp_uuid}`);
         await service.finalizeRegistration(temp_uuid, "dev_payment_" + Date.now(), 0);
+        console.log(`[SS] devFinalize successful — temp_uuid: ${temp_uuid}`);
         return res.status(200).json({ success: true, message: "Registration finalized (dev mode)" });
     } catch (error) {
+        console.error(`[SS] devFinalize error: ${error.message}`);
         return res.status(error.status ?? 500).json({ success: false, message: error.message });
     }
 };
@@ -107,9 +82,11 @@ exports.devFinalize = async (req, res) => {
 exports.checkRegistrationStatus = async (req, res) => {
     try {
         const { temp_uuid } = req.params;
+        console.log(`[SS] checkRegistrationStatus — temp_uuid: ${temp_uuid}`);
         const registration = await service.getRegistrationStatus(temp_uuid);
 
         if (registration.status === "approved") {
+            console.log(`[SS] Registration approved — userId: ${registration.userId}, issuing JWT`);
             const token = jwt.sign(
                 { id: registration.userId, role: "student" },
                 process.env.JWT_ACCESS_SECRET,
@@ -123,8 +100,10 @@ exports.checkRegistrationStatus = async (req, res) => {
             });
         }
 
+        console.log(`[SS] Registration status: ${registration.status}`);
         return res.status(200).json({ success: true, isCompleted: false, status: registration.status });
     } catch (error) {
+        console.error(`[SS] checkRegistrationStatus error: ${error.message}`);
         return res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -1,12 +1,19 @@
 const prisma = require("../../../config/prisma");
+const crypto = require("crypto");
 
 // ── Called inside a Prisma transaction (tx) ────────────────────────────────
 exports.insertUser = async (tx, data) => {
+    const mobile = data?.contactNumber || null;
+    if (mobile) {
+        const existing = await tx.users.findUnique({ where: { mobile }, select: { id: true } });
+        if (existing) return existing.id;
+    }
     const user = await tx.users.create({
         data: {
+            uuid: crypto.randomUUID(),
             role: "student",
             full_name: data?.fullName || null,
-            mobile: data?.contactNumber || null,
+            mobile,
         },
     });
     return user.id;
@@ -22,15 +29,14 @@ exports.insertStudent = async (tx, userId, type) => {
 exports.insertindividualcoaching = async (tx, studentId, data) => {
     await tx.individual_participants.create({
         data: {
-            student_id:                 studentId,
-            flat_no:                    data?.flat_no || null,
-            dob:                        data?.dob ? new Date(data.dob) : null,
-            age:                        data?.age || null,
-            society_id:                 data?.society_id ? parseInt(data.society_id) : null,
-            society_name:               data?.society_name || null,              // from dropdown
-            manually_entered_society:   data?.manually_entered_society || null,  // typed manually
-            activity:                   data?.activities || null,
-            kits:                       data?.kit_type || null,
+            student_id:  studentId,
+            flat_no:     data?.flat_no || null,
+            dob:         data?.dob ? new Date(data.dob) : null,
+            age:         data?.age || null,
+            society_id:  data?.society_id ? parseInt(data.society_id) : null,
+            society_name: data?.society_name || null,
+            activity:    data?.activities || null,
+            kits:        data?.kit_type || null,
         },
     });
 };

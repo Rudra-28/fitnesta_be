@@ -4,7 +4,6 @@ const schoolStudentController = require("./schoolstudentcontroller");
 const { verifyMobileUnique } = require("../../../middleware/checkduplicate");
 
 router.post("/submit", verifyMobileUnique, schoolStudentController.submitRegistration);
-router.post("/payment-webhook", schoolStudentController.handlePaymentWebhook);
 router.get("/status/:temp_uuid", schoolStudentController.checkRegistrationStatus);
 
 // ── Dev only — manually finalize a pending registration (DEV_SKIP_PAYMENT mode) ──

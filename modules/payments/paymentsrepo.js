@@ -34,3 +34,13 @@ exports.getPaymentByTempUuid = async (tempUuid) => {
     `;
     return rows[0] ?? null;
 };
+
+/**
+ * Fetch a pending registration by temp_uuid (any status).
+ * Used by the verify endpoint to look up service_type before finalizing.
+ */
+exports.getPendingRegistration = async (tempUuid) => {
+    return await prisma.pending_registrations.findFirst({
+        where: { temp_uuid: tempUuid },
+    });
+};

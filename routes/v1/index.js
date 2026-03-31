@@ -19,5 +19,6 @@ router.use("/school-student", require('../../modules/student/school-student/scho
 router.use("/admin", require('../../modules/admin/adminroute'));
 router.use("/me-dashboard", require('../../modules/professionals/marketingExe/dashboard/medashboardroute'));
 router.use("/activities", require('../../modules/activities/activitiesroute'));
+router.use("/payments", require('../../modules/payments/paymentsroute'));
 
 module.exports = router;

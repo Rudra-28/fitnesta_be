@@ -1,6 +1,5 @@
 const service = require("./perstutorservice");
 const jwt = require("jsonwebtoken");
-const { verifyWebhookSignature } = require("../../../utils/razorpay");
 const { validatePersonalTutor } = require("./validatepersonaltutor");
 const { validateParentConsent } = require("./validateparentconsent");
 
@@ -27,6 +26,7 @@ function toYYYYMMDD(dateStr) {
  */
 exports.submitRegistration = async (req, res) => {
     try {
+        console.log("[PT] submitRegistration called");
         let formData = req.body.formData;
         let serviceType = req.body.serviceType || "personal_tutor";
 
@@ -34,6 +34,7 @@ exports.submitRegistration = async (req, res) => {
             try {
                 formData = JSON.parse(formData);
             } catch {
+                console.warn("[PT] Failed to parse formData JSON");
                 return res.status(400).json({ success: false, message: "Invalid formData JSON" });
             }
         } else if (!formData || Object.keys(formData).length === 0) {
@@ -74,13 +75,32 @@ exports.submitRegistration = async (req, res) => {
         const errors = [...errors1, ...errors2];
 
         if (errors.length > 0) {
+            console.warn("[PT] Validation failed:", errors);
             return res.status(400).json({ success: false, errors });
         }
 
-        // Parse activity_ids — Flutter must send this array for fee calculation
+        // Parse activity_ids — Flutter sends this as multipart field(s)
+        // multer gives a string for a single value, an array for repeated fields
         let activity_ids = formData.activity_ids;
         if (typeof activity_ids === "string") {
-            try { activity_ids = JSON.parse(activity_ids); } catch { activity_ids = null; }
+            // Try JSON parse first (handles "[18]" or "18")
+            try { activity_ids = JSON.parse(activity_ids); } catch { /* keep as string */ }
+        }
+        // After JSON.parse, a bare number like 18 is not an array — wrap it
+        if (typeof activity_ids === "number") {
+            activity_ids = [activity_ids];
+        }
+        // Still a plain string (e.g. "18") — wrap it
+        if (typeof activity_ids === "string" && activity_ids.trim() !== "") {
+            activity_ids = [Number(activity_ids)];
+        }
+        // Fallback: accept singular activity_id if activity_ids still missing/empty
+        if ((!Array.isArray(activity_ids) || activity_ids.length === 0) && formData.activity_id) {
+            activity_ids = [formData.activity_id];
+        }
+        // Ensure all elements are numbers
+        if (Array.isArray(activity_ids)) {
+            activity_ids = activity_ids.map(Number).filter(n => !isNaN(n));
         }
 
         const term_months = formData.term_months ? parseInt(formData.term_months) : null;
@@ -114,6 +134,7 @@ exports.submitRegistration = async (req, res) => {
         };
 
         const result = await service.initiateRegistration(structuredPayload, serviceType);
+        console.log(`[PT] Registration parked — temp_uuid: ${result.tempUuid}, order_id: ${result.orderId}, amount: ${result.amount}`);
 
         return res.status(200).json({
             success: true,
@@ -125,40 +146,8 @@ exports.submitRegistration = async (req, res) => {
             key_id: result.keyId,
         });
     } catch (error) {
+        console.error(`[PT] submitRegistration error: ${error.message}`);
         return res.status(error.status ?? 500).json({ success: false, message: error.message });
-    }
-};
-
-/**
- * PHASE 2 — Razorpay webhook (payment.captured event).
- */
-exports.handlePaymentWebhook = async (req, res) => {
-    try {
-        const signature = req.headers["x-razorpay-signature"];
-
-        if (!verifyWebhookSignature(req.rawBody, signature)) {
-            return res.status(400).json({ success: false, message: "Invalid webhook signature" });
-        }
-
-        const entity = req.body?.payload?.payment?.entity;
-        const temp_uuid = entity?.notes?.temp_uuid;
-
-        if (!temp_uuid) {
-            return res.status(400).json({ success: false, message: "temp_uuid missing from payment notes" });
-        }
-
-        if (req.body.event !== "payment.captured") {
-            return res.status(200).json({ received: true });
-        }
-
-        const paymentId = entity.id;
-        const amount = entity.amount / 100; // paise → INR
-
-        await service.finalizeRegistration(temp_uuid, paymentId, amount);
-        return res.status(200).json({ success: true });
-    } catch (error) {
-        console.error("PT Webhook error:", error);
-        return res.status(200).json({ received: true });
     }
 };
 
@@ -168,9 +157,11 @@ exports.handlePaymentWebhook = async (req, res) => {
 exports.checkRegistrationStatus = async (req, res) => {
     try {
         const { temp_uuid } = req.params;
+        console.log(`[PT] checkRegistrationStatus — temp_uuid: ${temp_uuid}`);
         const registration = await service.getRegistrationStatus(temp_uuid);
 
         if (registration.status === "approved") {
+            console.log(`[PT] Registration approved — userId: ${registration.userId}, issuing JWT`);
             const token = jwt.sign(
                 { id: registration.userId, role: "student" },
                 process.env.JWT_ACCESS_SECRET,
@@ -184,8 +175,10 @@ exports.checkRegistrationStatus = async (req, res) => {
             });
         }
 
+        console.log(`[PT] Registration status: ${registration.status}`);
         return res.status(200).json({ success: true, isCompleted: false, status: registration.status });
     } catch (error) {
+        console.error(`[PT] checkRegistrationStatus error: ${error.message}`);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
