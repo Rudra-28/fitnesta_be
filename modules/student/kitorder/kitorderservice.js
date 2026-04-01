@@ -93,7 +93,8 @@ const ALLOWED_TRANSITIONS = {
     new_order:          ["in_progress", "rejected"],
     in_progress:        ["ready_for_delivery"],
     ready_for_delivery: ["out_for_delivery"],
-    out_for_delivery:   ["completed"],
+    out_for_delivery:   ["marked_as_delivered"],
+    marked_as_delivered: ["completed"]
 };
 
 exports.updateOrderStatus = async (vendorId, orderId, newStatus) => {

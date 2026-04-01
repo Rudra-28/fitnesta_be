@@ -126,15 +126,20 @@ model parent_consents {
 }
 
 model pending_registrations {
-  id           Int                           @id @default(autoincrement())
-  temp_uuid    String                        @unique(map: "temp_uuid") @db.VarChar(255)
-  form_data    Json
-  service_type String                        @db.VarChar(50)
-  status       pending_registrations_status? @default(pending)
-  created_at   DateTime?                     @default(now()) @db.Timestamp(0)
-  reviewed_by  Int?
-  review_note  String?                       @db.Text
-  reviewed_at  DateTime?                     @db.Timestamp(0)
+  id             Int                           @id @default(autoincrement())
+  temp_uuid      String                        @unique(map: "temp_uuid") @db.VarChar(255)
+  form_data      Json
+  service_type   String                        @db.VarChar(50)
+  status         pending_registrations_status? @default(pending)
+  created_at     DateTime?                     @default(now()) @db.Timestamp(0)
+  reviewed_by    Int?
+  review_note    String?                       @db.Text
+  reviewed_at    DateTime?                     @db.Timestamp(0)
+  assigned_me_id Int?
+  assigned_me_at DateTime?                     @db.Timestamp(0)
+  professionals  professionals?                @relation(fields: [assigned_me_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "pending_registrations_fk_me")
+
+  @@index([assigned_me_id], map: "pending_registrations_fk_me")
 }
 
 model personal_tutors {
@@ -178,6 +183,7 @@ model professionals {
   wallets                 wallets?
   individual_participants individual_participants[]
   personal_tutors         personal_tutors[]
+  pending_registrations   pending_registrations[]
 
   @@index([user_id], map: "user_id")
 }
@@ -575,6 +581,7 @@ enum kit_orders_status {
   in_progress
   ready_for_delivery
   out_for_delivery
+  mark_as_delivered
   completed
   rejected
 }

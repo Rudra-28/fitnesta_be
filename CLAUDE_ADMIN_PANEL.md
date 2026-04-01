@@ -114,21 +114,18 @@ export default api;
 | `teacher` | YES | Professional — admin verifies documents |
 | `vendor` | YES | Professional — admin verifies documents |
 | `marketing_executive` | YES | Professional — admin verifies documents |
-| `society_request` | YES | Society registration — admin verifies authority |
-| `society_enrollment` | YES | Society via ME referral — admin verifies |
+| `society_request` | YES | Society registration request — admin assigns an ME for a visit |
 | `personal_tutor` | NO | Student pays Razorpay → registered automatically |
 | `individual_coaching` | NO | Student pays Razorpay → registered automatically |
 
 **Students never appear in Pending Approvals.** After payment they go directly into the Students list.
 
 ```
-GET  /api/v1/admin/pending                           # all (professionals + societies only)
+GET  /api/v1/admin/pending                           # all (professionals only — society requests have their own endpoints)
 GET  /api/v1/admin/pending?type=trainer
 GET  /api/v1/admin/pending?type=teacher
 GET  /api/v1/admin/pending?type=vendor
 GET  /api/v1/admin/pending?type=marketing_executive
-GET  /api/v1/admin/pending?type=society_request
-GET  /api/v1/admin/pending?type=society_enrollment
 GET  /api/v1/admin/pending/:id
 
 POST /api/v1/admin/approve/:id    body: { note?: string }
@@ -160,8 +157,6 @@ POST /api/v1/admin/reject/:id     body: { note?: string }
 | `teacher` | `fullName`, `contactNumber`, `dob`, `subject`, `experienceDetails`, `panCard`, `adharCard` |
 | `vendor` | `fullName`, `contactNumber`, `storeName`, `storeAddress`, `storeLocation`, `GSTCertificate` |
 | `marketing_executive` | `fullName`, `contactNumber`, `dob`, `educationQualification`, `previousExperience`, `panCard`, `adharCard` |
-| `society_request` | `fullName`, `contactNumber`, `societyName`, `societyCategory`, `address`, `totalParticipants`, `noOfFlats` |
-| `society_enrollment` | `fullName`, `contactNumber`, `societyName`, `referralCode` |
 
 **Error codes for approve/reject:**
 - `404` → `PENDING_NOT_FOUND`
@@ -169,7 +164,92 @@ POST /api/v1/admin/reject/:id     body: { note?: string }
 
 ---
 
-### 2. Approved Professionals List
+### 2. Society Requests (Separate from Professional Pending)
+
+When a user submits a society registration from the Flutter app, it creates a `society_request`. The admin reviews it and **assigns a Marketing Executive** to visit the society.
+
+**Flow:**
+1. User submits society form → `society_request` created in DB
+2. Admin views pending society requests
+3. Admin fetches ME list and picks one
+4. Admin assigns the ME → request records `assigned_me_id` + `assigned_me_at` (status stays `pending`)
+5. Admin can then approve or reject after ME visits
+
+**Endpoints:**
+
+```
+GET  /api/v1/society/admin/requests/pending          # list all pending society_request entries
+GET  /api/v1/society/admin/me-list                   # list all approved MEs to pick from
+
+POST /api/v1/society/admin/requests/:id/assign-me    body: { me_professional_id: number }
+POST /api/v1/society/admin/requests/approve/:id      body: { note?: string }
+POST /api/v1/society/admin/requests/reject/:id       body: { note?: string }
+```
+
+**GET /society/admin/requests/pending response:**
+```json
+{
+  "success": true,
+  "count": 2,
+  "data": [
+    {
+      "id": 12,
+      "tempUuid": "uuid-xxx",
+      "serviceType": "society_request",
+      "submittedAt": "2026-04-01T10:00:00Z",
+      "assignedMeId": null,
+      "assignedMeAt": null,
+      "formData": {
+        "societyUniqueId": "SOC001",
+        "societyName": "Green Valley Society",
+        "societyCategory": "A",
+        "address": "123 Main Road, Andheri West",
+        "pinCode": "400053",
+        "totalParticipants": 150,
+        "noOfFlats": 80,
+        "proposedWing": "A",
+        "authorityRole": "Secretary",
+        "authorityPersonName": "Rajesh Kumar",
+        "contactNumber": "9876543210",
+        "playgroundAvailable": true
+      }
+    }
+  ]
+}
+```
+
+**GET /society/admin/me-list response:**
+```json
+{
+  "success": true,
+  "count": 3,
+  "data": [
+    {
+      "professional_id": 4,
+      "name": "Rahul Mehta",
+      "mobile": "9876543210",
+      "referral_code": "FIT-ABC12345"
+    }
+  ]
+}
+```
+
+**POST assign-me** — assigns an ME to the request (does NOT change `status`):
+```json
+{ "me_professional_id": 4 }
+```
+Response: `{ "success": true, "message": "ME assigned to society request successfully." }`
+
+After assignment, `assignedMeId` will be set when you re-fetch the list. ME goes for a visit. Once visit is done, admin calls approve/reject.
+
+**Error codes:**
+- `400` → `me_professional_id` missing or request is not a `society_request`
+- `404` → request not found or ME not found
+- `409` → request already approved/rejected
+
+---
+
+### 3. Approved Professionals List
 
 ```
 GET /api/v1/admin/professionals                           # all 4 types
@@ -229,7 +309,7 @@ GET /api/v1/admin/professionals?type=vendor
 
 ---
 
-### 3. Students List (All — Assigned + Unassigned)
+### 4. Students List (All — Assigned + Unassigned)
 
 ```
 GET /api/v1/admin/students?type=personal_tutor
@@ -321,7 +401,7 @@ Returns ALL students with their current assignment status. Use this for both the
 
 ---
 
-### 4. Assignment Endpoints
+### 5. Assignment Endpoints
 
 ```
 GET  /api/v1/admin/professionals/available?type=teacher
@@ -370,7 +450,7 @@ POST /api/v1/admin/assign/trainer
 
 ---
 
-### 5. Fee Structures
+### 6. Fee Structures
 
 ```
 GET /api/v1/admin/fee-structures                               # all sections in one response
@@ -473,7 +553,7 @@ GET /api/v1/admin/fee-structures?section=personal_tutor
 
 ---
 
-### 6. Commission Rules
+### 7. Commission Rules
 
 ```
 GET /api/v1/admin/commission-rules
@@ -526,7 +606,7 @@ PUT /api/v1/admin/commission-rules/:ruleKey    body: { value: 80 }
 
 ---
 
-### 7. Commissions
+### 8. Commissions
 
 ```
 GET   /api/v1/admin/commissions
@@ -581,7 +661,7 @@ PATCH /api/v1/admin/commissions/:id/mark-paid
 
 ---
 
-### 8. Travelling Allowances
+### 9. Travelling Allowances
 
 ```
 GET   /api/v1/admin/travelling-allowances
@@ -725,7 +805,8 @@ src/
 ```
 Fitnesta Admin
 ├── Dashboard
-├── Pending Approvals      ← red badge with count
+├── Pending Approvals      ← red badge with count (professionals only)
+├── Society Requests       ← separate badge with pending count
 ├── Assignments
 ├── Professionals
 │   ├── Trainers
@@ -749,13 +830,14 @@ Fitnesta Admin
 | Phase | Pages | API used |
 |---|---|---|
 | 1 | Login + Pending Approvals | `/auth/login`, `/admin/pending`, `/admin/approve`, `/admin/reject` |
-| 2 | Assignments | `/admin/students?type=...`, `/admin/professionals/available`, `/admin/assign/teacher`, `/admin/assign/trainer` |
-| 3 | Dashboard | counts from existing endpoints |
-| 4 | Professionals | `/admin/professionals?type=...` |
-| 5 | Students | `/admin/students?type=...` |
-| 6 | Fee Structures | `/admin/fee-structures?section=...` |
-| 7 | Commissions | `/admin/commission-rules`, `/admin/commissions`, `/admin/travelling-allowances` |
-| 8 | Societies, Schools, Payments | (read-only views from DB) |
+| 2 | Society Requests | `/society/admin/requests/pending`, `/society/admin/me-list`, `/society/admin/requests/:id/assign-me`, approve, reject |
+| 3 | Assignments | `/admin/students?type=...`, `/admin/professionals/available`, `/admin/assign/teacher`, `/admin/assign/trainer` |
+| 4 | Dashboard | counts from existing endpoints |
+| 5 | Professionals | `/admin/professionals?type=...` |
+| 6 | Students | `/admin/students?type=...` |
+| 7 | Fee Structures | `/admin/fee-structures?section=...` |
+| 8 | Commissions | `/admin/commission-rules`, `/admin/commissions`, `/admin/travelling-allowances` |
+| 9 | Societies, Schools, Payments | (read-only views from DB) |
 
 ---
 
@@ -763,9 +845,9 @@ Fitnesta Admin
 
 ### Pending Approvals (Phase 1)
 
-**Filter tabs:** All | Trainer | Teacher | Vendor | Marketing Executive | Society Request | Society Enrollment
+**Filter tabs:** All | Trainer | Teacher | Vendor | Marketing Executive
 
-**Do NOT add Personal Tutor or Individual Coaching tabs here.**
+**Do NOT add Society Request, Personal Tutor, or Individual Coaching tabs here.** Society requests have their own dedicated page (see Society Requests page spec below).
 
 **Table:** ID | Type badge | Name | Mobile | Submitted date | Actions (View / Approve / Reject)
 
@@ -775,7 +857,25 @@ Fitnesta Admin
 
 ---
 
-### Assignments (Phase 2)
+### Society Requests (Phase 2)
+
+Separate page — **not** part of Pending Approvals.
+
+**Page layout:**
+- Table: ID | Society Name | Category | Authority | Contact | Flats | Submitted At | Assigned ME | Status badge | Actions
+- "View" → right drawer showing all `formData` fields as key-value pairs
+- "Assign ME" button (always visible while status is `pending`) → opens a modal:
+  - Fetches `GET /society/admin/me-list` and shows a dropdown of ME names + mobile
+  - Confirm → `POST /society/admin/requests/:id/assign-me` with `{ me_professional_id }`
+  - On success: row updates to show the assigned ME name + assigned time (re-fetch list)
+- "Approve" / "Reject" → confirmation modal with optional note → `POST /society/admin/requests/approve/:id` or `reject/:id`
+- Rows where `assignedMeId !== null` → show the ME name in the "Assigned ME" column (you can look up the name from the already-fetched ME list)
+
+**Data source for ME name in table:** After fetching `me-list`, build a `Map<professional_id, name>` and use it to resolve `assignedMeId` → name.
+
+---
+
+### Assignments (Phase 3)
 
 **Two tabs: "Assign Teacher" | "Assign Trainer"**
 
@@ -793,7 +893,7 @@ Fitnesta Admin
 
 ---
 
-### Students (Phase 5)
+### Students (Phase 6)
 
 **Two tabs: "Individual Coaching" | "Personal Tutor"**
 
@@ -807,7 +907,7 @@ Uses `GET /admin/students?type=...` for each tab.
 
 ---
 
-### Professionals (Phase 4)
+### Professionals (Phase 5)
 
 **Four tabs: Trainers | Teachers | Marketing Executives | Vendors**
 
@@ -873,7 +973,6 @@ Uses `GET /admin/fee-structures?section=...` per tab.
 | `vendor` | Orange |
 | `marketing_executive` | Teal |
 | `society_request` | Pink |
-| `society_enrollment` | Indigo |
 
 ---
 
@@ -887,7 +986,7 @@ Uses `GET /admin/fee-structures?section=...` per tab.
 
 4. **Society category** (A+/A/B) affects group coaching fees. A+ is the highest fee tier.
 
-5. **ME referral code** — each ME has a unique `referral_code` (e.g. `FIT-ABC12345`). When a society registers via `society_enrollment`, they use an ME's referral code. If invalid at approval time, the approval fails.
+5. **ME referral code** — each ME has a unique `referral_code` (e.g. `FIT-ABC12345`). This is shown in the ME list when assigning an ME to a society request.
 
 6. **Payments** are recorded BEFORE admin approval. Student pays → payment recorded → admin approves registration. Payment records are permanent.
 
