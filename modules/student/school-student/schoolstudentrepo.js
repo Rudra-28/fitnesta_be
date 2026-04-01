@@ -14,6 +14,7 @@ exports.insertUser = async (tx, data) => {
             role: "student",
             full_name: data.fullName || null,
             mobile,
+            approval_status: "approved",
         },
     });
     return user.id;
@@ -36,9 +37,6 @@ exports.insertSchoolStudent = async (tx, studentId, data) => {
             address: data.address,
             activities: data.activity_ids && data.activity_ids.length > 0
                 ? JSON.stringify(data.activity_ids)
-                : null,
-            kit_type: data.product_ids && data.product_ids.length > 0
-                ? JSON.stringify(data.product_ids)
                 : null,
         },
     });

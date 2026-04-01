@@ -117,6 +117,102 @@ exports.getUnassignedIndividualParticipants = async () => {
     });
 };
 
+// ── All students (assigned + unassigned) ──────────────────────────────────
+
+exports.getAllPersonalTutors = async () => {
+    return await prisma.personal_tutors.findMany({
+        select: {
+            id: true,
+            standard: true,
+            batch: true,
+            teacher_for: true,
+            dob: true,
+            // Who is assigned (null if not yet assigned)
+            teacher_professional_id: true,
+            professionals: {
+                select: {
+                    id: true,
+                    users: { select: { full_name: true, mobile: true } },
+                    teachers: { select: { subject: true } },
+                },
+            },
+            // Student & user info
+            students: {
+                select: {
+                    id: true,
+                    users: { select: { full_name: true, mobile: true } },
+                },
+            },
+        },
+        orderBy: { id: "desc" },
+    });
+};
+
+exports.getAllIndividualParticipants = async () => {
+    return await prisma.individual_participants.findMany({
+        select: {
+            id: true,
+            activity: true,
+            flat_no: true,
+            society_name: true,
+            dob: true,
+            age: true,
+            kits: true,
+            // Who is assigned (null if not yet assigned)
+            trainer_professional_id: true,
+            professionals: {
+                select: {
+                    id: true,
+                    users: { select: { full_name: true, mobile: true } },
+                    trainers: { select: { category: true, specified_game: true } },
+                },
+            },
+            // Student & user info
+            students: {
+                select: {
+                    id: true,
+                    users: { select: { full_name: true, mobile: true } },
+                },
+            },
+        },
+        orderBy: { id: "desc" },
+    });
+};
+
+// ── Fee structures ────────────────────────────────────────────────────────
+
+exports.getFeeStructures = async (coachingType) => {
+    return await prisma.activities.findMany({
+        where: {
+            is_active: true,
+            fee_structures: {
+                some: coachingType ? { coaching_type: coachingType } : {},
+            },
+        },
+        select: {
+            id: true,
+            name: true,
+            fee_structures: {
+                where: coachingType ? { coaching_type: coachingType } : {},
+                select: {
+                    coaching_type: true,
+                    society_category: true,
+                    standard: true,
+                    term_months: true,
+                    total_fee: true,
+                    effective_monthly: true,
+                },
+                orderBy: [
+                    { society_category: "asc" },
+                    { standard: "asc" },
+                    { term_months: "asc" },
+                ],
+            },
+        },
+        orderBy: { name: "asc" },
+    });
+};
+
 // ── Available professionals ────────────────────────────────────────────────
 
 exports.getAvailableTeachers = async () => {
@@ -180,11 +276,16 @@ exports.findProfessionalById = async (id, type) => {
     });
 };
 
+// Student types are registered automatically after payment — never need admin approval
+const STUDENT_SERVICE_TYPES = ["personal_tutor", "individual_coaching", "school_student"];
+
 exports.getAllPending = async (serviceType) => {
     return await prisma.pending_registrations.findMany({
         where: {
             status: "pending",
-            ...(serviceType && { service_type: serviceType }),
+            service_type: serviceType
+                ? serviceType
+                : { notIn: STUDENT_SERVICE_TYPES },
         },
         select: {
             id: true,

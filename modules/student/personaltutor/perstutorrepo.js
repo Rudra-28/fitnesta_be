@@ -15,6 +15,7 @@ exports.insertUser = async (tx, data) => {
             full_name: data?.fullName || null,
             address: data?.address || null,
             mobile,
+            approval_status: "approved",
         },
     });
     return user.id;

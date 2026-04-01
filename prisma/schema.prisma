@@ -369,6 +369,7 @@ model users {
   societies       societies[]
   students        students[]
   payments        payments[]
+  kit_orders      kit_orders[]
 }
 
 model vendors {
@@ -380,22 +381,28 @@ model vendors {
   gst_certificate String?          @db.VarChar(255)
   professionals   professionals?   @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "vendors_ibfk_1")
   vendor_products vendor_products[]
+  kit_orders      kit_orders[]
 
   @@index([professional_id], map: "professional_id")
 }
 
 model vendor_products {
-  id              Int      @id @default(autoincrement())
-  vendor_id       Int
-  product_image   String?  @db.VarChar(255)
-  product_name    String   @db.VarChar(150)
-  sports_category String   @db.VarChar(100)
-  price           Decimal  @db.Decimal(10, 2)
-  selling_price   Decimal  @db.Decimal(10, 2)
-  stock           Int      @default(0)
-  description     String?  @db.Text
-  created_at      DateTime @default(now()) @db.Timestamp(0)
-  vendors         vendors  @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "vendor_products_ibfk_1")
+  id                   Int      @id @default(autoincrement())
+  vendor_id            Int
+  product_image        String?  @db.VarChar(255)
+  product_name         String   @db.VarChar(150)
+  sports_category      String   @db.VarChar(100)
+  price                Decimal  @db.Decimal(10, 2)
+  selling_price        Decimal  @db.Decimal(10, 2)
+  stock                Int      @default(0)
+  description          String?  @db.Text
+  within_city_charge   Decimal  @default(0.00) @db.Decimal(10, 2)
+  within_state_charge  Decimal  @default(0.00) @db.Decimal(10, 2)
+  outside_state_charge Decimal  @default(0.00) @db.Decimal(10, 2)
+  age_groups           Json?
+  created_at           DateTime @default(now()) @db.Timestamp(0)
+  vendors              vendors    @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "vendor_products_ibfk_1")
+  kit_orders           kit_orders[]
 
   @@index([vendor_id], map: "vendor_id")
 }
@@ -519,4 +526,55 @@ enum payments_status {
   captured
   refunded
   failed
+}
+
+model kit_orders {
+  id                  Int                    @id @default(autoincrement())
+  student_user_id     Int
+  product_id          Int
+  vendor_id           Int
+  quantity            Int                    @default(1)
+  unit_price          Decimal                @db.Decimal(10, 2)
+  delivery_charge     Decimal                @db.Decimal(10, 2)
+  delivery_zone       kit_orders_zone
+  total_amount        Decimal                @db.Decimal(10, 2)
+  payment_status      kit_orders_pay_status  @default(pending)
+  order_status        kit_orders_status      @default(new_order)
+  razorpay_order_id   String?                @db.VarChar(100)
+  razorpay_payment_id String?                @unique @db.VarChar(100)
+  delivery_name       String                 @db.VarChar(100)
+  delivery_phone      String                 @db.VarChar(15)
+  delivery_address    String                 @db.Text
+  delivery_city       String                 @db.VarChar(100)
+  delivery_state      String                 @db.VarChar(100)
+  delivery_pincode    String                 @db.VarChar(10)
+  created_at          DateTime               @default(now()) @db.Timestamp(0)
+  users               users                  @relation(fields: [student_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendor_products     vendor_products        @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  vendors             vendors                @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([student_user_id])
+  @@index([product_id])
+  @@index([vendor_id])
+}
+
+enum kit_orders_zone {
+  within_city
+  within_state
+  outside_state
+}
+
+enum kit_orders_pay_status {
+  pending
+  paid
+  failed
+}
+
+enum kit_orders_status {
+  new_order
+  in_progress
+  ready_for_delivery
+  out_for_delivery
+  completed
+  rejected
 }

@@ -172,6 +172,7 @@ exports.checkRegistrationStatus = async (req, res) => {
                 isCompleted: true,
                 token,
                 userId: registration.userId,
+                user: registration.user,
             });
         }
 

@@ -17,14 +17,18 @@ exports.findVendorByUserId = async (userId) => {
 exports.insertProduct = async (data, vendorId) => {
     return await prisma.vendor_products.create({
         data: {
-            vendor_id:       vendorId,
-            product_image:   data.productImage ?? null,
-            product_name:    data.productName,
-            sports_category: data.sportsCategory,
-            price:           parseFloat(data.price),
-            selling_price:   parseFloat(data.sellingPrice),
-            stock:           parseInt(data.stock, 10),
-            description:     data.description ?? null,
+            vendor_id:            vendorId,
+            product_image:        data.productImage ?? null,
+            product_name:         data.productName,
+            sports_category:      data.sportsCategory,
+            price:                parseFloat(data.price),
+            selling_price:        parseFloat(data.sellingPrice),
+            stock:                parseInt(data.stock, 10),
+            description:          data.description ?? null,
+            within_city_charge:   parseFloat(data.withinCityCharge),
+            within_state_charge:  parseFloat(data.withinStateCharge),
+            outside_state_charge: parseFloat(data.outsideStateCharge),
+            age_groups:           data.ageGroups ?? [],
         },
     });
 };
@@ -46,13 +50,17 @@ exports.updateProduct = async (productId, vendorId, data) => {
     return await prisma.vendor_products.updateMany({
         where: { id: productId, vendor_id: vendorId },
         data: {
-            ...(data.productImage   !== undefined && { product_image:   data.productImage }),
-            ...(data.productName    !== undefined && { product_name:    data.productName }),
-            ...(data.sportsCategory !== undefined && { sports_category: data.sportsCategory }),
-            ...(data.price          !== undefined && { price:           parseFloat(data.price) }),
-            ...(data.sellingPrice   !== undefined && { selling_price:   parseFloat(data.sellingPrice) }),
-            ...(data.stock          !== undefined && { stock:           parseInt(data.stock, 10) }),
-            ...(data.description    !== undefined && { description:     data.description }),
+            ...(data.productImage        !== undefined && { product_image:        data.productImage }),
+            ...(data.productName         !== undefined && { product_name:         data.productName }),
+            ...(data.sportsCategory      !== undefined && { sports_category:      data.sportsCategory }),
+            ...(data.price               !== undefined && { price:                parseFloat(data.price) }),
+            ...(data.sellingPrice        !== undefined && { selling_price:        parseFloat(data.sellingPrice) }),
+            ...(data.stock               !== undefined && { stock:                parseInt(data.stock, 10) }),
+            ...(data.description         !== undefined && { description:          data.description }),
+            ...(data.withinCityCharge    !== undefined && { within_city_charge:   parseFloat(data.withinCityCharge) }),
+            ...(data.withinStateCharge   !== undefined && { within_state_charge:  parseFloat(data.withinStateCharge) }),
+            ...(data.outsideStateCharge  !== undefined && { outside_state_charge: parseFloat(data.outsideStateCharge) }),
+            ...(data.ageGroups           !== undefined && { age_groups:           data.ageGroups }),
         },
     });
 };

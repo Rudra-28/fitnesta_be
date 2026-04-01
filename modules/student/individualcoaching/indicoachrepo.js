@@ -14,6 +14,7 @@ exports.insertUser = async (tx, data) => {
             role: "student",
             full_name: data?.fullName || null,
             mobile,
+            approval_status: "approved",
         },
     });
     return user.id;

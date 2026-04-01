@@ -1,15 +1,17 @@
 const crypto = require("crypto");
 const { verifyWebhookSignature } = require("../../utils/razorpay");
 const paymentsRepo = require("./paymentsrepo");
-const icService = require("../student/individualcoaching/indicoachservice");
-const ptService = require("../student/personaltutor/perstutorservice");
-const ssService = require("../student/school-student/schoolstudentservice");
+const icService      = require("../student/individualcoaching/indicoachservice");
+const ptService      = require("../student/personaltutor/perstutorservice");
+const ssService      = require("../student/school-student/schoolstudentservice");
+const kitOrderService = require("../student/kitorder/kitorderservice");
 
 const SERVICE_MAP = {
     individual_coaching: icService,
     group_coaching:      icService, // group coaching reuses the same finalizeRegistration
     personal_tutor:      ptService,
     school_student:      ssService,
+    kit_order:           { finalizeRegistration: (_, paymentId, __, orderId) => kitOrderService.finalizeKitOrder(orderId, paymentId) },
 };
 
 /**
@@ -60,10 +62,62 @@ exports.verifyPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: `Unknown service_type: ${pending.service_type}` });
         }
 
-        await service.finalizeRegistration(temp_uuid, razorpay_payment_id, 0);
+        const formDataParsed = typeof pending.form_data === "string"
+            ? JSON.parse(pending.form_data)
+            : pending.form_data;
+        const realAmount = formDataParsed?.calculated_amount ?? 0;
+
+        await service.finalizeRegistration(temp_uuid, razorpay_payment_id, realAmount);
         return res.status(200).json({ success: true, message: "Payment verified and registration finalized" });
     } catch (error) {
         console.error("Payment verify error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * DEV ONLY — Finalize any pending registration without going through Razorpay.
+ * Only available when DEV_SKIP_PAYMENT=true in .env.
+ *
+ * POST /api/v1/payments/dev-finalize/:temp_uuid
+ *
+ * Usage (Postman / Flutter dev):
+ *   1. POST to the registration endpoint → get back temp_uuid
+ *   2. POST to this endpoint with that temp_uuid → registration finalized
+ *   3. GET /status/:temp_uuid → get JWT
+ */
+exports.devFinalize = async (req, res) => {
+    try {
+        const { temp_uuid } = req.params;
+
+        const pending = await paymentsRepo.getPendingRegistration(temp_uuid);
+        if (!pending) {
+            return res.status(404).json({ success: false, message: "No pending registration found for this temp_uuid" });
+        }
+
+        if (pending.status === "approved") {
+            return res.status(200).json({ success: true, message: "Already finalized" });
+        }
+
+        const service = SERVICE_MAP[pending.service_type];
+        if (!service) {
+            return res.status(400).json({ success: false, message: `Unknown service_type: ${pending.service_type}` });
+        }
+
+        const formDataParsed = typeof pending.form_data === "string"
+            ? JSON.parse(pending.form_data)
+            : pending.form_data;
+        const amount = formDataParsed?.calculated_amount ?? 0;
+
+        await service.finalizeRegistration(temp_uuid, `dev_payment_${Date.now()}`, amount);
+
+        return res.status(200).json({
+            success: true,
+            message: `[DEV] Registration finalized for service_type: ${pending.service_type}`,
+            temp_uuid,
+        });
+    } catch (error) {
+        console.error("[DEV] devFinalize error:", error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };

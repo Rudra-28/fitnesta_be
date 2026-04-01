@@ -1,0 +1,172 @@
+{
+  "info": {
+    "name": "Fitnesta — Personal Tutor (Dev Testing)",
+    "description": "Full registration + dev-finalize + status poll for Personal Tutor.\nRequires DEV_SKIP_PAYMENT=true in .env.\n\nRun Flow A (Adult) or Flow B (Under-18) top to bottom.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "temp_uuid",
+      "value": "",
+      "type": "string",
+      "description": "Auto-filled by the register request's test script"
+    }
+  ],
+  "item": [
+    {
+      "name": "── FLOW A — Adult (age ≥ 18) ──",
+      "item": [
+        {
+          "name": "1. Register — Adult PT (JSON)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.temp_uuid) {",
+                  "    pm.collectionVariables.set('temp_uuid', res.temp_uuid);",
+                  "    console.log('temp_uuid saved:', res.temp_uuid);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/personal-tutor/send-PT",
+              "host": ["{{base_url}}"],
+              "path": ["personal-tutor", "send-PT"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Arjun Mehta\",\n  \"contactNumber\": \"9876543210\",\n  \"address\": \"Flat 12, Sunshine Society, Pune 411001\",\n  \"dob\": \"1998-05-15\",\n  \"standard\": \"3rd-4th\",\n  \"batch\": \"Morning\",\n  \"teacherFor\": \"Mathematics\",\n  \"activity_ids\": [1],\n  \"term_months\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2. Dev Finalize — Adult PT",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/payments/dev-finalize/{{temp_uuid}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "dev-finalize", "{{temp_uuid}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3. Status Poll — Adult PT",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/personal-tutor/status/{{temp_uuid}}",
+              "host": ["{{base_url}}"],
+              "path": ["personal-tutor", "status", "{{temp_uuid}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "── FLOW B — Under-18 (with consent + signature) ──",
+      "item": [
+        {
+          "name": "1. Register — Under-18 PT (multipart/form-data)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.temp_uuid) {",
+                  "    pm.collectionVariables.set('temp_uuid', res.temp_uuid);",
+                  "    console.log('temp_uuid saved:', res.temp_uuid);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/personal-tutor/send-PT",
+              "host": ["{{base_url}}"],
+              "path": ["personal-tutor", "send-PT"]
+            },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "fullName",           "value": "Riya Sharma",               "type": "text" },
+                { "key": "contactNumber",      "value": "9123456780",                "type": "text" },
+                { "key": "address",            "value": "B-5, Green Park, Pune 411002", "type": "text" },
+                { "key": "dob",                "value": "2010-03-20",                "type": "text", "description": "age = 15 → triggers under-18 consent" },
+                { "key": "standard",           "value": "5th-6th",                   "type": "text" },
+                { "key": "batch",              "value": "Afternoon",                 "type": "text" },
+                { "key": "teacherFor",         "value": "Science",                   "type": "text" },
+                { "key": "activity_ids",       "value": "[1]",                       "type": "text", "description": "JSON-encoded array or repeat the key for multiple" },
+                { "key": "term_months",        "value": "1",                         "type": "text" },
+                { "key": "parentName",         "value": "Suresh Sharma",             "type": "text" },
+                { "key": "emergencyContactNo", "value": "9988776655",                "type": "text" },
+                { "key": "society_name",       "value": "Green Park Society",        "type": "text" },
+                { "key": "activity_enrolled",  "value": "Science",                   "type": "text" },
+                { "key": "consent_date",       "value": "2026-04-01",                "type": "text" },
+                {
+                  "key": "signatureUrl",
+                  "type": "file",
+                  "src": [],
+                  "description": "Attach any PDF file here — parent consent signature"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "2. Dev Finalize — Under-18 PT",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/payments/dev-finalize/{{temp_uuid}}",
+              "host": ["{{base_url}}"],
+              "path": ["payments", "dev-finalize", "{{temp_uuid}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "3. Status Poll — Under-18 PT",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/personal-tutor/status/{{temp_uuid}}",
+              "host": ["{{base_url}}"],
+              "path": ["personal-tutor", "status", "{{temp_uuid}}"]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

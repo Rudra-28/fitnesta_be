@@ -1,5 +1,30 @@
 const service = require("./adminservice");
 
+exports.listFeeStructures = async (req, res) => {
+    try {
+        const { section } = req.query; // optional: school | society | individual_coaching | personal_tutor
+        const data = await service.listFeeStructures(section);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "INVALID_SECTION" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.listStudents = async (req, res) => {
+    try {
+        const { type } = req.query; // personal_tutor | individual_coaching
+        if (!type) {
+            return res.status(400).json({ success: false, error: "Query param 'type' is required (personal_tutor | individual_coaching)" });
+        }
+        const data = await service.listStudents(type);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.message === "INVALID_TYPE" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 exports.listProfessionals = async (req, res) => {
     try {
         const { type } = req.query; // optional: ?type=trainer|teacher|marketing_executive|vendor

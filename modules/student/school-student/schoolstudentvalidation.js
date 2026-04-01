@@ -33,13 +33,5 @@ exports.validateSchoolStudent = (data) => {
   else if (data.activity_ids.some(id => isNaN(Number(id))))
     errors.push("All activity_ids must be valid numbers");
 
-  // product_ids — optional array of vendor product IDs for kit purchase
-  if (data.product_ids !== undefined && data.product_ids !== null) {
-    if (!Array.isArray(data.product_ids))
-      errors.push("product_ids must be an array of product IDs");
-    else if (data.product_ids.some(id => isNaN(Number(id))))
-      errors.push("All product_ids must be valid numbers");
-  }
-
   return errors;
 };

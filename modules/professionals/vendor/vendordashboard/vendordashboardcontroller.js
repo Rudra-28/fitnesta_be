@@ -4,6 +4,9 @@ exports.addProduct = async (req, res) => {
     try {
         const data = { ...req.body };
         if (req.file) data.productImage = req.file.path;
+        if (data.ageGroups && typeof data.ageGroups === "string") {
+            try { data.ageGroups = JSON.parse(data.ageGroups); } catch { data.ageGroups = [data.ageGroups]; }
+        }
 
         const result = await service.addProduct(req.vendor.id, data);
         res.status(201).json(result);

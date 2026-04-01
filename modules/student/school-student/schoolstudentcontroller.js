@@ -32,13 +32,10 @@ exports.submitRegistration = async (req, res) => {
         formData.school_id = school.id;
         console.log(`[SS] School resolved — name: ${formData.schoolName}, id: ${school.id}`);
 
-        // Attach payment info so the service can look up the fee + kit prices
+        // Attach payment info so the service can look up the fee
         formData.payment = {
             activity_ids: Array.isArray(formData.activity_ids)
                 ? formData.activity_ids.map(Number)
-                : [],
-            product_ids: Array.isArray(formData.product_ids)
-                ? formData.product_ids.map(Number)
                 : [],
         };
 
@@ -97,6 +94,7 @@ exports.checkRegistrationStatus = async (req, res) => {
                 isCompleted: true,
                 token,
                 userId: registration.userId,
+                user: registration.user,
             });
         }
 

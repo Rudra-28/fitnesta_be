@@ -14,6 +14,14 @@ exports.addProduct = async (userId, data) => {
     if (!data.price)          throw new Error("price is required.");
     if (!data.sellingPrice)   throw new Error("sellingPrice is required.");
     if (data.stock === undefined || data.stock === null) throw new Error("stock is required.");
+    if (data.withinCityCharge   === undefined || data.withinCityCharge   === null) throw new Error("withinCityCharge is required.");
+    if (data.withinStateCharge  === undefined || data.withinStateCharge  === null) throw new Error("withinStateCharge is required.");
+    if (data.outsideStateCharge === undefined || data.outsideStateCharge === null) throw new Error("outsideStateCharge is required.");
+    if (!data.ageGroups || !Array.isArray(data.ageGroups) || data.ageGroups.length === 0) throw new Error("ageGroups is required and must be a non-empty array.");
+
+    const validAgeGroups = ["under_6", "6_to_10", "11_to_14", "15_to_18", "adult"];
+    const invalid = data.ageGroups.filter(g => !validAgeGroups.includes(g));
+    if (invalid.length) throw new Error(`Invalid age group(s): ${invalid.join(", ")}. Allowed: ${validAgeGroups.join(", ")}.`);
 
     const { vendorId } = await resolveVendor(userId);
     const product = await repo.insertProduct(data, vendorId);

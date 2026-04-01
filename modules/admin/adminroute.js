@@ -13,11 +13,17 @@ router.post("/reject/:id", controller.reject);                             // PO
 // ── Approved professionals list ───────────────────────────────────────────
 router.get("/professionals", controller.listProfessionals);                // GET /api/v1/admin/professionals?type=trainer
 
+// ── All students list (assigned + unassigned) ─────────────────────────────
+router.get("/students", controller.listStudents);                              // GET /api/v1/admin/students?type=personal_tutor|individual_coaching
+
 // ── Student assignment ─────────────────────────────────────────────────────
 router.get("/students/unassigned", controller.getUnassignedStudents);         // GET  /api/v1/admin/students/unassigned?service=personal_tutor
 router.get("/professionals/available", controller.getAvailableProfessionals); // GET  /api/v1/admin/professionals/available?type=teacher
 router.post("/assign/teacher", controller.assignTeacher);                     // POST /api/v1/admin/assign/teacher
 router.post("/assign/trainer", controller.assignTrainer);                     // POST /api/v1/admin/assign/trainer
+
+// ── Fee structures ────────────────────────────────────────────────────────
+router.get("/fee-structures", controller.listFeeStructures);               // GET /api/v1/admin/fee-structures?section=school|society|individual_coaching|personal_tutor
 
 // ── Commission rules (admin can view and edit rates) ──────────────────────
 router.get("/commission-rules", controller.listCommissionRules);              // GET  /api/v1/admin/commission-rules

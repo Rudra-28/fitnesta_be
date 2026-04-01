@@ -69,6 +69,7 @@ exports.initiateRegistration = async (formData, serviceType) => {
     });
 
     formData.razorpay_order_id = order.id;
+    formData.calculated_amount = amount;
 
     await repo.insertPendingRegistration(tempUuid, formData, serviceType);
 
@@ -138,7 +139,10 @@ exports.getRegistrationStatus = async (tempUuid) => {
         : pending.form_data;
 
     const mobile = formData.user_info?.contactNumber || formData.contactNumber || formData.mobile;
-    const user = await prisma.users.findFirst({ where: { mobile }, select: { id: true } });
+    const user = await prisma.users.findFirst({
+        where: { mobile },
+        select: { id: true, full_name: true, mobile: true },
+    });
 
-    return { status: "approved", userId: user?.id ?? null };
+    return { status: "approved", userId: user?.id ?? null, user };
 };

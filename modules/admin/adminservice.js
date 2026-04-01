@@ -7,6 +7,158 @@ const meRepo = require("../professionals/marketingExe/Registration-form/marketex
 const societyRepo = require("../student/society/societyrepo");
 const commissionService = require("../commissions/commissionservice");
 
+const SOCIETY_CATEGORY_DISPLAY = { A_: "A+", A: "A", B: "B" };
+
+const VALID_SECTIONS = ["school", "society", "individual_coaching", "personal_tutor"];
+
+const SECTION_TO_COACHING_TYPE = {
+    school:               "school_student",
+    society:              "group_coaching",
+    individual_coaching:  "individual_coaching",
+    personal_tutor:       "personal_tutor",
+};
+
+exports.listFeeStructures = async (section) => {
+    if (section && !VALID_SECTIONS.includes(section)) throw new Error("INVALID_SECTION");
+
+    const coachingType = section ? SECTION_TO_COACHING_TYPE[section] : null;
+    const rows = await adminRepo.getFeeStructures(coachingType);
+
+    const formatFee = (f) => ({
+        coaching_type:     f.coaching_type,
+        society_category:  f.society_category ? (SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category) : null,
+        standard:          f.standard ?? null,
+        term_months:       f.term_months,
+        total_fee:         parseFloat(f.total_fee),
+        effective_monthly: f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
+    });
+
+    if (section === "school") {
+        // School: flat list per activity, no society_category or standard
+        return rows.map((a) => ({
+            activity_id:   a.id,
+            activity_name: a.name,
+            fees:          a.fee_structures.map(formatFee),
+        }));
+    }
+
+    if (section === "society") {
+        // Society (group_coaching): group by activity → then by society_category (A+/A/B)
+        return rows.map((a) => {
+            const byCategory = {};
+            for (const f of a.fee_structures) {
+                const cat = SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category ?? "ALL";
+                if (!byCategory[cat]) byCategory[cat] = [];
+                byCategory[cat].push({
+                    term_months:       f.term_months,
+                    total_fee:         parseFloat(f.total_fee),
+                    effective_monthly: f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
+                });
+            }
+            return { activity_id: a.id, activity_name: a.name, by_category: byCategory };
+        });
+    }
+
+    if (section === "individual_coaching") {
+        // Individual coaching: flat list per activity, no grouping needed
+        return rows.map((a) => ({
+            activity_id:   a.id,
+            activity_name: a.name,
+            fees:          a.fee_structures.map(formatFee),
+        }));
+    }
+
+    if (section === "personal_tutor") {
+        // Personal tutor: group by activity → then by standard (1ST-2ND, 3RD-4TH, etc.)
+        return rows.map((a) => {
+            const byStandard = {};
+            for (const f of a.fee_structures) {
+                const std = f.standard ?? "ANY";
+                if (!byStandard[std]) byStandard[std] = [];
+                byStandard[std].push({
+                    term_months:       f.term_months,
+                    total_fee:         parseFloat(f.total_fee),
+                    effective_monthly: f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
+                });
+            }
+            return { activity_id: a.id, activity_name: a.name, by_standard: byStandard };
+        });
+    }
+
+    // No section filter — return everything grouped by coaching_type
+    const grouped = { school: [], society: [], individual_coaching: [], personal_tutor: [] };
+    const sectionForType = {
+        school_student:      "school",
+        group_coaching:      "society",
+        individual_coaching: "individual_coaching",
+        personal_tutor:      "personal_tutor",
+    };
+    for (const a of rows) {
+        for (const f of a.fee_structures) {
+            const key = sectionForType[f.coaching_type];
+            if (!key) continue;
+            let entry = grouped[key].find((x) => x.activity_id === a.id);
+            if (!entry) {
+                entry = { activity_id: a.id, activity_name: a.name, fees: [] };
+                grouped[key].push(entry);
+            }
+            entry.fees.push(formatFee(f));
+        }
+    }
+    return grouped;
+};
+
+exports.listStudents = async (type) => {
+    if (type === "personal_tutor") {
+        const rows = await adminRepo.getAllPersonalTutors();
+        return rows.map((r) => ({
+            personal_tutor_id: r.id,
+            student_name: r.students?.users?.full_name ?? null,
+            student_mobile: r.students?.users?.mobile ?? null,
+            standard: r.standard,
+            batch: r.batch,
+            teacher_for: r.teacher_for,
+            dob: r.dob,
+            assigned: r.teacher_professional_id !== null,
+            assigned_teacher: r.teacher_professional_id
+                ? {
+                    professional_id: r.professionals?.id,
+                    name: r.professionals?.users?.full_name ?? null,
+                    mobile: r.professionals?.users?.mobile ?? null,
+                    subject: r.professionals?.teachers?.[0]?.subject ?? null,
+                }
+                : null,
+        }));
+    }
+
+    if (type === "individual_coaching") {
+        const rows = await adminRepo.getAllIndividualParticipants();
+        return rows.map((r) => ({
+            individual_participant_id: r.id,
+            student_name: r.students?.users?.full_name ?? null,
+            student_mobile: r.students?.users?.mobile ?? null,
+            activity: r.activity,
+            flat_no: r.flat_no,
+            society: r.society_name ?? null,
+            dob: r.dob,
+            age: r.age,
+            kits: r.kits,
+            assigned: r.trainer_professional_id !== null,
+            assigned_trainer: r.trainer_professional_id
+                ? {
+                    professional_id: r.professionals?.id,
+                    name: r.professionals?.users?.full_name ?? null,
+                    mobile: r.professionals?.users?.mobile ?? null,
+                    category: r.professionals?.trainers?.[0]?.category ?? null,
+                    specified_game: r.professionals?.trainers?.[0]?.specified_game ?? null,
+                }
+                : null,
+        }));
+    }
+
+    throw new Error("INVALID_TYPE");
+};
+
 exports.listProfessionals = async (type) => {
     const rows = await adminRepo.getApprovedProfessionals(type);
     return rows.map((r) => ({

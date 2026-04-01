@@ -2,7 +2,6 @@ const prisma = require("../../../config/prisma");
 const crypto = require("crypto");
 const repo = require("./schoolstudentrepo");
 const activitiesRepo = require("../../activities/activitiesrepository");
-const vendorRepo = require("../../professionals/vendor/vendordashboard/vendordashboardrepo");
 const razorpay = require("../../../utils/razorpay");
 const paymentsRepo = require("../../payments/paymentsrepo");
 
@@ -16,7 +15,7 @@ const paymentsRepo = require("../../payments/paymentsrepo");
  * Returns: { tempUuid, orderId, amount, currency, keyId }
  */
 exports.initiateRegistration = async (formData, serviceType) => {
-    const { activity_ids = [], product_ids = [] } = formData.payment || {};
+    const { activity_ids = [] } = formData.payment || {};
 
     if (!activity_ids.length) {
         const err = new Error("At least one activity_id is required to calculate the fee");
@@ -36,18 +35,10 @@ exports.initiateRegistration = async (formData, serviceType) => {
         throw err;
     }
 
-    let amount = feeRecords.reduce((sum, r) => sum + parseFloat(r.total_fee), 0);
+    const amount = feeRecords.reduce((sum, r) => sum + parseFloat(r.total_fee), 0);
     formData.activity_ids = activity_ids; // persist for finalize phase
+    formData.calculated_amount = amount;
 
-    // Add kit costs from vendor products if any were selected
-    if (product_ids.length > 0) {
-        const products = await vendorRepo.getProductsByIds(product_ids);
-        if (products.length > 0) {
-            const kitTotal = products.reduce((sum, p) => sum + parseFloat(p.selling_price), 0);
-            amount += kitTotal;
-            formData.product_ids = products.map(p => p.id); // only store found IDs
-        }
-    }
     const tempUuid = crypto.randomUUID();
 
     const order = await razorpay.createOrder(amount, tempUuid, {
@@ -118,7 +109,10 @@ exports.getRegistrationStatus = async (tempUuid) => {
 
     // School student form stores mobile at the top level (flat structure)
     const mobile = formData.mobile || formData.contactNumber || formData.contact_number;
-    const user = await prisma.users.findFirst({ where: { mobile }, select: { id: true } });
+    const user = await prisma.users.findFirst({
+        where: { mobile },
+        select: { id: true, full_name: true, mobile: true },
+    });
 
-    return { status: "approved", userId: user?.id ?? null };
+    return { status: "approved", userId: user?.id ?? null, user };
 };
