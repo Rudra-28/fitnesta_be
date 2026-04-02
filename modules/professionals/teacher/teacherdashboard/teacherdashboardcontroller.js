@@ -21,3 +21,23 @@ exports.getStudents = async (req, res) => {
         res.status(400).json({ success: false, error: err.message });
     }
 };
+
+// GET /teacher-dashboard/sessions
+exports.getUpcomingSessions = async (req, res) => {
+    try {
+        const result = await service.getUpcomingSessions(req.teacher.id);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// GET /teacher-dashboard/sessions/history
+exports.getSessionHistory = async (req, res) => {
+    try {
+        const result = await service.getSessionHistory(req.teacher.id);
+        res.json(result);
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};

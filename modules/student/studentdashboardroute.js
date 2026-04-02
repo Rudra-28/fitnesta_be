@@ -3,16 +3,21 @@ const router = express.Router();
 const vendorController = require("../professionals/vendor/vendordashboard/vendordashboardcontroller");
 const kitOrderController = require("./kitorder/kitordercontroller");
 const studentGuard = require("./studentmiddleware");
+const sessionController = require("./studentdashboardcontroller");
 
 // ── Products (Kits) — public ───────────────────────────────────────────────
 router.get("/products", vendorController.getAllProductsPublic);
 
 // ── Kit Orders ─────────────────────────────────────────────────────────────
-router.post("/orders", studentGuard, kitOrderController.createKitOrder);
+router.post("/orders", studentGuard, kitOrderController.initiateKitOrder);
 
 // DEV ONLY — simulate payment confirmation without Razorpay
 if (process.env.DEV_SKIP_PAYMENT === "true") {
-    router.post("/orders/:kit_order_id/dev-confirm", studentGuard, kitOrderController.devFinalizeKitOrder);
+    router.post("/orders/:temp_uuid/dev-confirm", studentGuard, kitOrderController.devFinalizeKitOrder);
 }
+
+// ── Session schedule ───────────────────────────────────────────────────────
+router.get("/sessions", studentGuard, sessionController.getUpcomingSessions);
+router.get("/sessions/history", studentGuard, sessionController.getSessionHistory);
 
 module.exports = router;

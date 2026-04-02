@@ -23,6 +23,31 @@ exports.initiateRegistration = async (formData, serviceType) => {
         throw err;
     }
 
+    // Duplicate check — same mobile + any of the selected activities already pending or approved
+    const mobile = formData.mobile || formData.contactNumber || null;
+    if (mobile) {
+        for (const actId of activity_ids) {
+            const duplicate = await prisma.$queryRaw`
+                SELECT id FROM pending_registrations
+                WHERE status IN ('pending', 'approved')
+                  AND (
+                        JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.mobile')) = ${mobile}
+                        OR JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ${mobile}
+                      )
+                  AND JSON_CONTAINS(
+                        JSON_EXTRACT(form_data, '$.payment.activity_ids'),
+                        CAST(${actId} AS JSON)
+                      )
+                LIMIT 1
+            `;
+            if (duplicate.length > 0) {
+                const err = new Error("You have already registered for one or more of the selected activities.");
+                err.status = 409;
+                throw err;
+            }
+        }
+    }
+
     // School student term is always 9 months — look up fee for each activity and sum
     const feeRecords = await Promise.all(
         activity_ids.map(id => activitiesRepo.getFeeForActivity(id, "school_student", 9))

@@ -80,15 +80,33 @@ exports.getUnassignedStudents = async (req, res) => {
 
 exports.getAvailableProfessionals = async (req, res) => {
     try {
-        const { type } = req.query; // teacher | trainer
+        const { type, date, start_time, end_time } = req.query; // teacher | trainer
         if (!type) {
             return res.status(400).json({ success: false, error: "Query param 'type' is required (teacher | trainer)" });
         }
-        const data = await service.getAvailableProfessionals(type);
+        const data = await service.getAvailableProfessionals(type, { date, startTime: start_time, endTime: end_time });
         res.json({ success: true, count: data.length, data });
     } catch (err) {
         const status = err.message === "INVALID_TYPE" ? 400 : 500;
         res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getApprovedSocieties = async (req, res) => {
+    try {
+        const data = await service.getApprovedSocieties();
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getApprovedSchools = async (req, res) => {
+    try {
+        const data = await service.getApprovedSchools();
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 };
 
@@ -205,6 +223,17 @@ exports.markTravellingAllowancePaid = async (req, res) => {
 };
 
 // ── Reject ─────────────────────────────────────────────────────────────────
+
+// ── Activities dropdown ────────────────────────────────────────────────────
+
+exports.listActivities = async (req, res) => {
+    try {
+        const data = await service.listActivities(req.query.coaching_type);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
 
 exports.reject = async (req, res) => {
     try {

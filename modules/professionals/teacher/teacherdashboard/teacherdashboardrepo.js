@@ -54,3 +54,59 @@ exports.countStudentsByStandard = async (professionalId) => {
     });
     return rows; // [{ standard: "5TH-6TH", _count: { id: 3 } }, ...]
 };
+
+// ── Session queries ───────────────────────────────────────────────────────────
+
+exports.getUpcomingSessions = async (professionalId) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return prisma.sessions.findMany({
+        where: {
+            professional_id: Number(professionalId),
+            scheduled_date: { gte: today },
+            status: { in: ["scheduled", "ongoing"] },
+        },
+        include: {
+            batches: {
+                select: {
+                    id: true,
+                    batch_name: true,
+                    batch_type: true,
+                    schools: { select: { id: true, school_name: true } },
+                    activities: { select: { id: true, name: true } },
+                },
+            },
+            students: {
+                select: { id: true, users: { select: { full_name: true, mobile: true } } },
+            },
+            _count: { select: { session_participants: true } },
+        },
+        orderBy: [{ scheduled_date: "asc" }, { start_time: "asc" }],
+    });
+};
+
+exports.getSessionHistory = async (professionalId) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return prisma.sessions.findMany({
+        where: {
+            professional_id: Number(professionalId),
+            OR: [
+                { scheduled_date: { lt: today } },
+                { status: { in: ["completed", "cancelled"] } },
+            ],
+        },
+        include: {
+            batches: {
+                select: { id: true, batch_name: true, batch_type: true },
+            },
+            students: {
+                select: { id: true, users: { select: { full_name: true } } },
+            },
+            _count: { select: { session_participants: true } },
+        },
+        orderBy: [{ scheduled_date: "desc" }, { start_time: "desc" }],
+    });
+};

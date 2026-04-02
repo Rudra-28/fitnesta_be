@@ -92,3 +92,17 @@ exports.getStudents = async (userId, standard) => {
         data: students,
     };
 };
+
+// ── GET /sessions ─────────────────────────────────────────────────────────────
+exports.getUpcomingSessions = async (userId) => {
+    const professionalId = await resolveTeacher(userId);
+    const sessions = await repo.getUpcomingSessions(professionalId);
+    return { success: true, data: sessions };
+};
+
+// ── GET /sessions/history ─────────────────────────────────────────────────────
+exports.getSessionHistory = async (userId) => {
+    const professionalId = await resolveTeacher(userId);
+    const sessions = await repo.getSessionHistory(professionalId);
+    return { success: true, data: sessions };
+};

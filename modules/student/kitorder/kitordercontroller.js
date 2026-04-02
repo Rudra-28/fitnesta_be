@@ -2,27 +2,27 @@ const service      = require("./kitorderservice");
 const kitOrderRepo = require("./kitorderrepo");
 const vendorRepo   = require("../../professionals/vendor/vendordashboard/vendordashboardrepo");
 
-// ── Student: Place order ───────────────────────────────────────────────────
-exports.createKitOrder = async (req, res) => {
+// ── Student: Initiate order (park + create Razorpay order) ────────────────────
+exports.initiateKitOrder = async (req, res) => {
     try {
-        const result = await service.createKitOrder(req.user.id ?? req.user.userId, req.body);
+        const result = await service.initiateKitOrder(req.user.id ?? req.user.userId, req.body);
         res.status(201).json(result);
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
     }
 };
 
-// ── DEV ONLY: Instantly confirm payment ───────────────────────────────────
+// ── DEV ONLY: Instantly confirm payment via temp_uuid ─────────────────────────
 exports.devFinalizeKitOrder = async (req, res) => {
     try {
-        const result = await service.devFinalizeKitOrder(Number(req.params.kit_order_id));
-        res.json({ success: true, message: result.alreadyPaid ? "Already paid." : "Order marked as paid." });
+        const result = await service.devFinalizeKitOrder(req.params.temp_uuid);
+        res.json({ success: true, message: result.alreadyPaid ? "Already paid." : "Order finalized." });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
     }
 };
 
-// ── Vendor: Update order status ───────────────────────────────────────────
+// ── Vendor: Update order status ───────────────────────────────────────────────
 exports.updateOrderStatus = async (req, res) => {
     try {
         const { vendorId } = await vendorRepo.findVendorByUserId(req.vendor.id);
@@ -33,14 +33,14 @@ exports.updateOrderStatus = async (req, res) => {
     }
 };
 
-// ── Vendor: Get all orders for their products ──────────────────────────────
+// ── Vendor: Get all orders for their products ─────────────────────────────────
 exports.getVendorOrders = async (req, res) => {
     try {
         const { vendorId } = await vendorRepo.findVendorByUserId(req.vendor.id);
         const raw = await kitOrderRepo.getOrdersByVendor(vendorId);
 
         const data = raw.map((order) => {
-            const buyerUser    = order.users    || {};
+            const buyerUser      = order.users    || {};
             const studentProfile = buyerUser.students?.[0] || null;
 
             return {
@@ -57,7 +57,6 @@ exports.getVendorOrders = async (req, res) => {
 
                 product: order.vendor_products ?? null,
 
-                // What the student typed at checkout (may differ from their profile)
                 delivery_info: {
                     name:    order.delivery_name,
                     phone:   order.delivery_phone,
@@ -67,7 +66,6 @@ exports.getVendorOrders = async (req, res) => {
                     pincode: order.delivery_pincode,
                 },
 
-                // Actual buyer account data fetched by mapping student_user_id → users
                 buyer: {
                     user_id:      buyerUser.id        ?? null,
                     full_name:    buyerUser.full_name  ?? null,

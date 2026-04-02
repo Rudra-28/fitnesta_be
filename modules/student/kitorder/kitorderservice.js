@@ -1,14 +1,9 @@
-const repo       = require("./kitorderrepo");
+const crypto       = require("crypto");
+const repo         = require("./kitorderrepo");
+const paymentsRepo = require("../../payments/paymentsrepo");
 const { createOrder } = require("../../../utils/razorpay");
 
-// ── Resolve delivery zone by comparing student city/state vs vendor city/state
-const resolveZone = (studentCity, studentState, vendorAddress) => {
-    // vendorAddress is a free-text field — we do a case-insensitive city/state match
-    const addr = (vendorAddress || "").toLowerCase();
-    if (addr.includes(studentCity.toLowerCase()))  return "within_city";
-    if (addr.includes(studentState.toLowerCase())) return "within_state";
-    return "outside_state";
-};
+const VALID_ZONES = ["within_city", "within_state", "outside_state"];
 
 const ZONE_CHARGE_MAP = {
     within_city:   "within_city_charge",
@@ -16,85 +11,134 @@ const ZONE_CHARGE_MAP = {
     outside_state: "outside_state_charge",
 };
 
-// ── Create kit order + Razorpay order ─────────────────────────────────────
-exports.createKitOrder = async (studentUserId, body) => {
+// ── PHASE 1: Park order data + create Razorpay order ─────────────────────────
+exports.initiateKitOrder = async (studentUserId, body) => {
     const {
         productId, quantity = 1,
+        deliveryZone,                   // user-selected zone from dropdown
         deliveryName, deliveryPhone, deliveryAddress,
         deliveryCity, deliveryState, deliveryPincode,
+        ageGroup,
     } = body;
 
     if (!productId)       throw new Error("productId is required.");
+    if (!deliveryZone)    throw new Error("deliveryZone is required.");
+    if (!VALID_ZONES.includes(deliveryZone)) throw new Error(`Invalid deliveryZone. Must be one of: ${VALID_ZONES.join(", ")}`);
     if (!deliveryName)    throw new Error("deliveryName is required.");
     if (!deliveryPhone)   throw new Error("deliveryPhone is required.");
     if (!deliveryAddress) throw new Error("deliveryAddress is required.");
     if (!deliveryCity)    throw new Error("deliveryCity is required.");
     if (!deliveryState)   throw new Error("deliveryState is required.");
     if (!deliveryPincode) throw new Error("deliveryPincode is required.");
+    if (!ageGroup)        throw new Error("ageGroup is required.");
 
     const product = await repo.getProductWithVendor(productId);
     if (!product) throw new Error("Product not found.");
     if (product.stock < quantity) throw new Error("Insufficient stock.");
 
-    const vendorAddress = product.vendors?.professionals?.users?.address || "";
-    const zone          = resolveZone(deliveryCity, deliveryState, vendorAddress);
-    const deliveryCharge = parseFloat(product[ZONE_CHARGE_MAP[zone]]);
+    const deliveryCharge = parseFloat(product[ZONE_CHARGE_MAP[deliveryZone]]);
     const unitPrice      = parseFloat(product.selling_price);
     const totalAmount    = (unitPrice * quantity) + deliveryCharge;
 
-    const receipt = `kit_${studentUserId}_${Date.now()}`;
-    const rzpOrder = await createOrder(totalAmount, receipt, {
+    const tempUuid = crypto.randomUUID();
+
+    const rzpOrder = await createOrder(totalAmount, tempUuid, {
+        temp_uuid:        tempUuid,
         service_type:     "kit_order",
         student_user_id:  String(studentUserId),
         product_id:       String(productId),
     });
 
-    const order = await repo.createOrder({
+    // Park everything — no kit_orders row yet
+    await repo.insertPendingKitOrder(tempUuid, {
         studentUserId,
         productId,
-        vendorId:        product.vendor_id,
+        vendorId:          product.vendor_id,
         quantity,
         unitPrice,
         deliveryCharge,
-        deliveryZone:    zone,
+        deliveryZone,
+        kitOrderZoneUser:  deliveryZone,   // what the user explicitly selected
         totalAmount,
-        razorpayOrderId: rzpOrder.id,
+        razorpayOrderId:   rzpOrder.id,
         deliveryName,
         deliveryPhone,
         deliveryAddress,
         deliveryCity,
         deliveryState,
         deliveryPincode,
+        ageGroup,
     });
 
     return {
         success: true,
         data: {
-            kit_order_id:     order.id,
+            temp_uuid:         tempUuid,
             razorpay_order_id: rzpOrder.id,
-            amount:           totalAmount,
-            currency:         "INR",
-            delivery_zone:    zone,
-            delivery_charge:  deliveryCharge,
+            amount:            totalAmount,
+            currency:          "INR",
+            delivery_zone:     deliveryZone,
+            delivery_charge:   deliveryCharge,
+            unit_price:        unitPrice,
+            quantity,
+            key_id:            process.env.RAZORPAY_KEY_ID,
         },
     };
 };
 
-// ── Finalize after Razorpay payment verified ───────────────────────────────
-exports.finalizeKitOrder = async (razorpayOrderId, razorpayPaymentId) => {
-    const order = await repo.getOrderByRazorpayOrderId(razorpayOrderId);
-    if (!order) throw new Error("Kit order not found for this razorpay_order_id.");
-    if (order.payment_status === "paid") return;
-    await repo.markOrderPaid(order.id, razorpayPaymentId);
+// ── PHASE 2: Finalize after payment verified ──────────────────────────────────
+exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, _amount) => {
+    const pending = await paymentsRepo.getPendingRegistration(tempUuid);
+    if (!pending) throw new Error("Kit order not found for this temp_uuid.");
+    if (pending.status === "approved") return { alreadyPaid: true };
+
+    const data = typeof pending.form_data === "string"
+        ? JSON.parse(pending.form_data)
+        : pending.form_data;
+
+    const order = await repo.createOrder({
+        studentUserId:     data.studentUserId,
+        productId:         data.productId,
+        vendorId:          data.vendorId,
+        quantity:          data.quantity,
+        unitPrice:         data.unitPrice,
+        deliveryCharge:    data.deliveryCharge,
+        deliveryZone:      data.deliveryZone,
+        kitOrderZoneUser:  data.kitOrderZoneUser,
+        totalAmount:       data.totalAmount,
+        razorpayOrderId:   data.razorpayOrderId,
+        razorpayPaymentId,
+        deliveryName:      data.deliveryName,
+        deliveryPhone:     data.deliveryPhone,
+        deliveryAddress:   data.deliveryAddress,
+        deliveryCity:      data.deliveryCity,
+        deliveryState:     data.deliveryState,
+        deliveryPincode:   data.deliveryPincode,
+        ageGroup:          data.ageGroup,
+    });
+
+    await paymentsRepo.recordPayment({
+        tempUuid,
+        razorpayOrderId:   data.razorpayOrderId,
+        razorpayPaymentId,
+        serviceType:       "kit_order",
+        amount:            data.totalAmount,
+        termMonths:        1,
+        studentUserId:     data.studentUserId,
+    });
+
+    await repo.updatePendingStatus(pending.id, "approved");
+
+    return { success: true, kitOrderId: order.id };
 };
 
-// ── Vendor: Update order status ───────────────────────────────────────────
+// ── Vendor: Update order status ───────────────────────────────────────────────
 const ALLOWED_TRANSITIONS = {
     new_order:          ["in_progress", "rejected"],
     in_progress:        ["ready_for_delivery"],
     ready_for_delivery: ["out_for_delivery"],
-    out_for_delivery:   ["marked_as_delivered"],
-    marked_as_delivered: ["completed"]
+    out_for_delivery:   ["mark_as_delivered"],
+    mark_as_delivered:  ["completed"],
 };
 
 exports.updateOrderStatus = async (vendorId, orderId, newStatus) => {
@@ -111,11 +155,12 @@ exports.updateOrderStatus = async (vendorId, orderId, newStatus) => {
     return { success: true, message: `Order status updated to "${newStatus}".` };
 };
 
-// ── DEV ONLY: Instantly mark order as paid ────────────────────────────────
-exports.devFinalizeKitOrder = async (kitOrderId) => {
-    const order = await repo.getOrderById(kitOrderId);
-    if (!order) throw new Error("Kit order not found.");
-    if (order.payment_status === "paid") return { alreadyPaid: true };
-    await repo.markOrderPaid(order.id, `dev_pay_${Date.now()}`);
+// ── DEV ONLY ──────────────────────────────────────────────────────────────────
+exports.devFinalizeKitOrder = async (tempUuid) => {
+    const pending = await paymentsRepo.getPendingRegistration(tempUuid);
+    if (!pending) throw new Error("Kit order not found for this temp_uuid.");
+    if (pending.status === "approved") return { alreadyPaid: true };
+
+    await exports.finalizeRegistration(tempUuid, `dev_pay_${Date.now()}`, 0);
     return { alreadyPaid: false };
 };

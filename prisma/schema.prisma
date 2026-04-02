@@ -16,6 +16,7 @@ model activities {
   created_at      DateTime?         @default(now()) @db.Timestamp(0)
   fee_structures  fee_structures[]
   trainer_batches trainer_batches[]
+  batches         batches[]
 }
 
 model admins {
@@ -71,6 +72,7 @@ model individual_participants {
   society_name             String?        @db.VarChar(150)
   activity                 String?        @db.VarChar(100)
   kits                     String?        @db.Text
+  preferred_batch          String?        @db.VarChar(50)
   trainer_professional_id  Int?
   students                 students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
   societies                societies?     @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
@@ -184,6 +186,8 @@ model professionals {
   individual_participants individual_participants[]
   personal_tutors         personal_tutors[]
   pending_registrations   pending_registrations[]
+  batches                 batches[]
+  sessions                sessions[]
 
   @@index([user_id], map: "user_id")
 }
@@ -226,6 +230,7 @@ model schools {
   school_students               school_students[]
   professionals                 professionals?           @relation(fields: [me_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "schools_ibfk_1")
   trainer_batches               trainer_batches[]
+  batches                       batches[]
 
   @@index([me_professional_id], map: "me_professional_id")
 }
@@ -274,6 +279,7 @@ model societies {
   users                         users?                     @relation(fields: [registered_by_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "societies_fk_user")
   individual_participants       individual_participants[]
   trainer_batches               trainer_batches[]
+  batches                       batches[]
 
   @@index([me_professional_id], map: "societies_fk_me")
   @@index([registered_by_user_id], map: "societies_fk_user")
@@ -289,6 +295,9 @@ model students {
   personal_tutors         personal_tutors[]
   school_students         school_students[]
   users                   users?                    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "students_ibfk_1")
+  batch_students          batch_students[]
+  sessions                sessions[]
+  session_participants    session_participants[]
 
   @@index([user_id], map: "user_id")
 }
@@ -543,6 +552,7 @@ model kit_orders {
   unit_price          Decimal                @db.Decimal(10, 2)
   delivery_charge     Decimal                @db.Decimal(10, 2)
   delivery_zone       kit_orders_zone
+  kit_order_zone_user kit_orders_zone?
   total_amount        Decimal                @db.Decimal(10, 2)
   payment_status      kit_orders_pay_status  @default(pending)
   order_status        kit_orders_status      @default(new_order)
@@ -554,6 +564,7 @@ model kit_orders {
   delivery_city       String                 @db.VarChar(100)
   delivery_state      String                 @db.VarChar(100)
   delivery_pincode    String                 @db.VarChar(10)
+  age_group           String?                @db.VarChar(20)
   created_at          DateTime               @default(now()) @db.Timestamp(0)
   users               users                  @relation(fields: [student_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vendor_products     vendor_products        @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -584,4 +595,119 @@ enum kit_orders_status {
   mark_as_delivered
   completed
   rejected
+}
+
+// ─── Session Management ────────────────────────────────────────────────────
+
+enum batches_batch_type {
+  group_coaching
+  school_student
+}
+
+enum batches_professional_type {
+  trainer
+  teacher
+}
+
+enum sessions_status {
+  scheduled
+  ongoing
+  completed
+  cancelled
+}
+
+enum sessions_session_type {
+  group_coaching
+  school_student
+  personal_tutor
+  individual_coaching
+}
+
+model batches {
+  id                   Int                        @id @default(autoincrement())
+  batch_type           batches_batch_type
+  society_id           Int?
+  school_id            Int?
+  activity_id          Int
+  professional_id      Int
+  professional_type    batches_professional_type
+  batch_name           String?                    @db.VarChar(100)
+  days_of_week         Json
+  start_time           DateTime                   @db.Time(0)
+  end_time             DateTime                   @db.Time(0)
+  start_date           DateTime                   @db.Date
+  end_date             DateTime                   @db.Date
+  is_active            Boolean?                   @default(true)
+  created_at           DateTime?                  @default(now()) @db.Timestamp(0)
+  updated_at           DateTime?                  @default(now()) @db.Timestamp(0)
+
+  societies            societies?                 @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools              schools?                   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  activities           activities                 @relation(fields: [activity_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  professionals        professionals              @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  batch_students       batch_students[]
+  sessions             sessions[]
+
+  @@index([society_id])
+  @@index([school_id])
+  @@index([activity_id])
+  @@index([professional_id])
+  @@index([batch_type])
+  @@index([start_date, end_date])
+}
+
+model batch_students {
+  id         Int       @id @default(autoincrement())
+  batch_id   Int
+  student_id Int
+  joined_at  DateTime? @default(now()) @db.Timestamp(0)
+
+  batches    batches   @relation(fields: [batch_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  students   students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([batch_id, student_id], map: "uq_batch_student")
+  @@index([student_id])
+}
+
+model sessions {
+  id               Int                    @id @default(autoincrement())
+  session_type     sessions_session_type
+  batch_id         Int?
+  student_id       Int?
+  professional_id  Int
+  scheduled_date   DateTime               @db.Date
+  start_time       DateTime               @db.Time(0)
+  end_time         DateTime               @db.Time(0)
+  status           sessions_status?       @default(scheduled)
+  cancel_reason    String?                @db.VarChar(255)
+  created_at       DateTime?              @default(now()) @db.Timestamp(0)
+  updated_at       DateTime?              @default(now()) @db.Timestamp(0)
+
+  batches              batches?           @relation(fields: [batch_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  students             students?          @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  professionals        professionals      @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  session_participants session_participants[]
+
+  @@index([batch_id])
+  @@index([student_id])
+  @@index([professional_id])
+  @@index([scheduled_date])
+  @@index([status])
+  @@index([session_type])
+  @@index([professional_id, scheduled_date])
+  @@index([student_id, scheduled_date])
+}
+
+model session_participants {
+  id         Int       @id @default(autoincrement())
+  session_id Int
+  student_id Int
+  attended   Boolean?  @default(false)
+  created_at DateTime? @default(now()) @db.Timestamp(0)
+
+  sessions   sessions  @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  students   students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([session_id, student_id], map: "uq_session_participant")
+  @@index([student_id])
 }

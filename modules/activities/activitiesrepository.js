@@ -61,12 +61,13 @@ exports.getAllActiveActivities = async () => {
  * @param {number} termMonths    - 1 | 3 | 6 | 9
  * @returns {{ total_fee: Decimal } | null}
  */
-exports.getFeeForActivity = async (activityId, coachingType, termMonths) => {
+exports.getFeeForActivity = async (activityId, coachingType, termMonths, societyCategory = null) => {
     return await prisma.fee_structures.findFirst({
         where: {
             activity_id: activityId,
             coaching_type: coachingType,
             term_months: termMonths,
+            ...(societyCategory && { society_category: societyCategory }),
         },
         select: { total_fee: true },
     });

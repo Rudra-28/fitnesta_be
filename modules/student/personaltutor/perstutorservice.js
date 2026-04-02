@@ -38,6 +38,28 @@ exports.initiateRegistration = async (formData, serviceType) => {
 
     const ids = activity_ids.map((id) => parseInt(id));
 
+    // Duplicate check — same mobile + any of the selected activities already pending or approved
+    const mobile = formData.user_info?.contactNumber || null;
+    if (mobile) {
+        for (const actId of ids) {
+            const duplicate = await prisma.$queryRaw`
+                SELECT id FROM pending_registrations
+                WHERE status IN ('pending', 'approved')
+                  AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.user_info.contactNumber')) = ${mobile}
+                  AND JSON_CONTAINS(
+                        JSON_EXTRACT(form_data, '$.payment.activity_ids'),
+                        CAST(${actId} AS JSON)
+                      )
+                LIMIT 1
+            `;
+            if (duplicate.length > 0) {
+                const err = new Error(`You have already registered for one or more of the selected subjects.`);
+                err.status = 409;
+                throw err;
+            }
+        }
+    }
+
     const feeRecords = await activitiesRepo.getFeesForActivities(
         ids,
         "personal_tutor",

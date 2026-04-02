@@ -9,6 +9,7 @@ const icUploads = upload.fields([
 ]);
 
 router.post("/send-IC", icUploads, indicoachcontroller.submitRegistration);
+router.post("/send-GC", icUploads, indicoachcontroller.submitRegistration);
 router.get("/status/:temp_uuid", indicoachcontroller.checkRegistrationStatus);
 
 module.exports = router;

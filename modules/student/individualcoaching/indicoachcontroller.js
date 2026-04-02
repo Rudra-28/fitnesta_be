@@ -93,6 +93,10 @@ exports.submitRegistration = async (req, res) => {
           society_name: societyName,
           activities: formData.activities || formData.activity_enrolled,
           kit_type:   formData.kit_type || formData.kits || formData.Kit_type,
+          preferred_batch:
+      formData.preferred_batch ||
+      formData.batch ||
+      formData.preferredBatch || null,
         },
         consentDetails: {
           society_name:       consentSocietyName,

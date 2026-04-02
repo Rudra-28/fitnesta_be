@@ -1,5 +1,6 @@
 const prisma = require("../../config/prisma");
 const adminRepo = require("./adminrepository");
+const activitiesRepo = require("../activities/activitiesrepository");
 const trainerRepo = require("../professionals/trainer/trainerrepository");
 const teacherRepo = require("../professionals/teacher/teacherepository");
 const vendorRepo = require("../professionals/vendor/vendorregistration/vendorrepository");
@@ -113,6 +114,7 @@ exports.listStudents = async (type) => {
         const rows = await adminRepo.getAllPersonalTutors();
         return rows.map((r) => ({
             personal_tutor_id: r.id,
+            student_id: r.students?.id ?? null,
             student_name: r.students?.users?.full_name ?? null,
             student_mobile: r.students?.users?.mobile ?? null,
             standard: r.standard,
@@ -135,6 +137,7 @@ exports.listStudents = async (type) => {
         const rows = await adminRepo.getAllIndividualParticipants();
         return rows.map((r) => ({
             individual_participant_id: r.id,
+            student_id: r.students?.id ?? null,
             student_name: r.students?.users?.full_name ?? null,
             student_mobile: r.students?.users?.mobile ?? null,
             activity: r.activity,
@@ -280,9 +283,19 @@ exports.getUnassignedStudents = async (service) => {
     throw new Error("INVALID_SERVICE");
 };
 
-exports.getAvailableProfessionals = async (type) => {
+exports.getAvailableProfessionals = async (type, { date, startTime, endTime } = {}) => {
+    // Parse time strings to Date objects if provided (needed for Prisma Time comparisons)
+    const parseTime = (t) => {
+        if (!t) return undefined;
+        const [h, m, s = "0"] = String(t).split(":");
+        return new Date(1970, 0, 1, Number(h), Number(m), Number(s));
+    };
+    const timeFilter = date && startTime && endTime
+        ? { date, startTime: parseTime(startTime), endTime: parseTime(endTime) }
+        : {};
+
     if (type === "teacher") {
-        const rows = await adminRepo.getAvailableTeachers();
+        const rows = await adminRepo.getAvailableTeachers(timeFilter);
         return rows.map((r) => ({
             professional_id: r.id,
             full_name: r.users?.full_name ?? null,
@@ -293,7 +306,7 @@ exports.getAvailableProfessionals = async (type) => {
     }
 
     if (type === "trainer") {
-        const rows = await adminRepo.getAvailableTrainers();
+        const rows = await adminRepo.getAvailableTrainers(timeFilter);
         return rows.map((r) => ({
             professional_id: r.id,
             full_name: r.users?.full_name ?? null,
@@ -305,6 +318,14 @@ exports.getAvailableProfessionals = async (type) => {
     }
 
     throw new Error("INVALID_TYPE");
+};
+
+exports.getApprovedSocieties = async () => {
+    return await adminRepo.getApprovedSocieties();
+};
+
+exports.getApprovedSchools = async () => {
+    return await adminRepo.getApprovedSchools();
 };
 
 exports.assignTeacher = async (personalTutorId, teacherProfessionalId) => {
@@ -440,3 +461,8 @@ async function approveSocietyEnrollment(tx, data) {
         no_of_flats:       data.noOfFlats ? Number(data.noOfFlats) : 0,
     };
 }
+
+exports.listActivities = async (coachingType) => {
+    if (!coachingType) return activitiesRepo.getAllActiveActivities();
+    return activitiesRepo.getActivitiesByCoachingType(coachingType);
+};

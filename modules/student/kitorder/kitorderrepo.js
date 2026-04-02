@@ -24,17 +24,41 @@ exports.createOrder = async (data) => {
             quantity:           data.quantity,
             unit_price:         data.unitPrice,
             delivery_charge:    data.deliveryCharge,
-            delivery_zone:      data.deliveryZone,
-            total_amount:       data.totalAmount,
-            payment_status:     "pending",
+            delivery_zone:       data.deliveryZone,
+            kit_order_zone_user: data.kitOrderZoneUser,
+            total_amount:        data.totalAmount,
+            payment_status:      "paid",
             razorpay_order_id:  data.razorpayOrderId,
+            razorpay_payment_id: data.razorpayPaymentId,
             delivery_name:      data.deliveryName,
             delivery_phone:     data.deliveryPhone,
             delivery_address:   data.deliveryAddress,
             delivery_city:      data.deliveryCity,
             delivery_state:     data.deliveryState,
             delivery_pincode:   data.deliveryPincode,
+            age_group:          data.ageGroup,
         },
+    });
+};
+
+// ── Pending state ──────────────────────────────────────────────────────────
+exports.insertPendingKitOrder = async (tempUuid, formData) => {
+    const prismaClient = require("../../../config/prisma");
+    await prismaClient.pending_registrations.create({
+        data: {
+            temp_uuid:    tempUuid,
+            form_data:    formData,
+            service_type: "kit_order",
+            status:       "pending",
+        },
+    });
+};
+
+exports.updatePendingStatus = async (id, status) => {
+    const prismaClient = require("../../../config/prisma");
+    await prismaClient.pending_registrations.update({
+        where: { id },
+        data:  { status },
     });
 };
 

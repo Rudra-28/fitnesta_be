@@ -213,10 +213,45 @@ exports.getFeeStructures = async (coachingType) => {
     });
 };
 
+// ── Societies & Schools (for batch creation dropdowns) ────────────────────
+
+exports.getApprovedSocieties = async () => {
+    return await prisma.societies.findMany({
+        where: { approval_status: "approved" },
+        select: { id: true, society_name: true, society_category: true, address: true },
+        orderBy: { society_name: "asc" },
+    });
+};
+
+exports.getApprovedSchools = async () => {
+    return await prisma.schools.findMany({
+        where: { approval_status: "approved" },
+        select: { id: true, school_name: true, address: true },
+        orderBy: { school_name: "asc" },
+    });
+};
+
 // ── Available professionals ────────────────────────────────────────────────
 
-exports.getAvailableTeachers = async () => {
-    return await prisma.professionals.findMany({
+// When date/startTime/endTime are provided, professionals with a conflicting
+// session at that slot are excluded from the result.
+exports.getAvailableTeachers = async ({ date, startTime, endTime } = {}) => {
+    let busyIds = new Set();
+    if (date && startTime && endTime) {
+        const rows = await prisma.sessions.findMany({
+            where: {
+                scheduled_date: new Date(date),
+                status: { notIn: ["cancelled"] },
+                AND: [{ start_time: { lt: endTime } }, { end_time: { gt: startTime } }],
+                professionals: { profession_type: "teacher" },
+            },
+            select: { professional_id: true },
+            distinct: ["professional_id"],
+        });
+        busyIds = new Set(rows.map((r) => r.professional_id));
+    }
+
+    const all = await prisma.professionals.findMany({
         where: {
             profession_type: "teacher",
             users: { approval_status: "approved" },
@@ -227,10 +262,27 @@ exports.getAvailableTeachers = async () => {
             teachers: { select: { subject: true, experience_details: true } },
         },
     });
+
+    return all.filter((p) => !busyIds.has(p.id));
 };
 
-exports.getAvailableTrainers = async () => {
-    return await prisma.professionals.findMany({
+exports.getAvailableTrainers = async ({ date, startTime, endTime } = {}) => {
+    let busyIds = new Set();
+    if (date && startTime && endTime) {
+        const rows = await prisma.sessions.findMany({
+            where: {
+                scheduled_date: new Date(date),
+                status: { notIn: ["cancelled"] },
+                AND: [{ start_time: { lt: endTime } }, { end_time: { gt: startTime } }],
+                professionals: { profession_type: "trainer" },
+            },
+            select: { professional_id: true },
+            distinct: ["professional_id"],
+        });
+        busyIds = new Set(rows.map((r) => r.professional_id));
+    }
+
+    const all = await prisma.professionals.findMany({
         where: {
             profession_type: "trainer",
             users: { approval_status: "approved" },
@@ -241,6 +293,8 @@ exports.getAvailableTrainers = async () => {
             trainers: { select: { category: true, specified_game: true, experience_details: true } },
         },
     });
+
+    return all.filter((p) => !busyIds.has(p.id));
 };
 
 // ── Assign professional ────────────────────────────────────────────────────

@@ -24,13 +24,53 @@ exports.initiateRegistration = async (formData, serviceType) => {
         throw err;
     }
 
-    const coachingType = coaching_type || serviceType || "individual_coaching";
+    let coachingType = coaching_type || serviceType || "individual_coaching";
 
-    const feeRecord = await activitiesRepo.getFeeForActivity(
+    // Duplicate check — same mobile + same activity already pending or approved
+    const mobile = formData.user_info?.contactNumber || null;
+    if (mobile) {
+        const activityIdInt = parseInt(activity_id);
+        const duplicate = await prisma.$queryRaw`
+            SELECT id FROM pending_registrations
+            WHERE status IN ('pending', 'approved')
+              AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.user_info.contactNumber')) = ${mobile}
+              AND JSON_EXTRACT(form_data, '$.payment.activity_id') = ${activityIdInt}
+            LIMIT 1
+        `;
+        if (duplicate.length > 0) {
+            const err = new Error("You have already registered for this activity.");
+            err.status = 409;
+            throw err;
+        }
+    }
+
+    let feeRecord = await activitiesRepo.getFeeForActivity(
         parseInt(activity_id),
         coachingType,
         parseInt(term_months)
     );
+
+    // If not found and coachingType is individual_coaching, retry as group_coaching.
+    // This handles the group-coaching individual participant flow which shares this endpoint.
+    // Resolve society_category from the society record so the correct fee tier is used.
+    if (!feeRecord && coachingType === "individual_coaching") {
+        const societyId = formData.individualcoaching?.society_id;
+        let societyCategory = null;
+        if (societyId) {
+            const society = await prisma.societies.findUnique({
+                where: { id: parseInt(societyId) },
+                select: { society_category: true },
+            });
+            societyCategory = society?.society_category ?? null;
+        }
+        feeRecord = await activitiesRepo.getFeeForActivity(
+            parseInt(activity_id),
+            "group_coaching",
+            parseInt(term_months),
+            societyCategory
+        );
+        if (feeRecord) coachingType = "group_coaching";
+    }
 
     if (!feeRecord) {
         const err = new Error("No fee found for the selected activity and duration. Check activity_id and term_months.");

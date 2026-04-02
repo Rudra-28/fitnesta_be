@@ -33,11 +33,12 @@ exports.insertindividualcoaching = async (tx, studentId, data) => {
             student_id:  studentId,
             flat_no:     data?.flat_no || null,
             dob:         data?.dob ? new Date(data.dob) : null,
-            age:         data?.age || null,
+            age: data?.age ? parseInt(data.age) : null,
             society_id:  data?.society_id ? parseInt(data.society_id) : null,
             society_name: data?.society_name || null,
             activity:    data?.activities || null,
             kits:        data?.kit_type || null,
+            preferred_batch: data?.preferred_batch || null,
         },
     });
 };

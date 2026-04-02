@@ -13,6 +13,13 @@ router.post("/reject/:id", controller.reject);                             // PO
 // ── Approved professionals list ───────────────────────────────────────────
 router.get("/professionals", controller.listProfessionals);                // GET /api/v1/admin/professionals?type=trainer
 
+// ── Activities (for batch creation dropdown) ──────────────────────────────
+router.get("/activities", controller.listActivities);                              // GET /api/v1/admin/activities?coaching_type=group_coaching
+
+// ── Societies & Schools (for batch creation dropdowns) ────────────────────
+router.get("/societies", controller.getApprovedSocieties);                         // GET /api/v1/admin/societies
+router.get("/schools", controller.getApprovedSchools);                             // GET /api/v1/admin/schools
+
 // ── All students list (assigned + unassigned) ─────────────────────────────
 router.get("/students", controller.listStudents);                              // GET /api/v1/admin/students?type=personal_tutor|individual_coaching
 

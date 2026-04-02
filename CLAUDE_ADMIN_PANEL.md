@@ -1006,3 +1006,517 @@ Uses `GET /admin/fee-structures?section=...` per tab.
 - Other areas module
 - School students view
 - Any fee editing
+
+---
+
+## Session Management (New Module)
+
+This is the scheduling system the admin uses to create batches, generate sessions, and assign students. It covers all 4 student types. The system has two parts: **Batch Module** (for group_coaching + school_student) and **Session Module** (for personal_tutor + individual_coaching).
+
+---
+
+### 10. Batch Module
+
+#### What a Batch is
+
+A batch is a recurring group schedule. It belongs to either a society (group_coaching) or a school (school_student), has one activity, one assigned professional (trainer or teacher), a weekly schedule (days + start/end time), and a date range. Sessions are generated from the batch schedule.
+
+#### New DB Models
+
+**`batches`**
+- `id`, `batch_type` (group_coaching | school_student), `society_id` (null for school), `school_id` (null for society)
+- `activity_id`, `professional_id`, `professional_type` (trainer | teacher)
+- `batch_name` (optional label), `days_of_week` (JSON array e.g. `["Monday","Wednesday","Friday"]`)
+- `start_time`, `end_time`, `start_date`, `end_date`, `is_active` (true/false), `created_at`, `updated_at`
+
+**`batch_students`** — which students belong to a batch
+- `id`, `batch_id`, `student_id`, `joined_at`
+- Unique: `(batch_id, student_id)`
+
+**`sessions`**
+- `id`, `session_type` (group_coaching | school_student | personal_tutor | individual_coaching)
+- `batch_id` (null for individual sessions), `student_id` (null for batch sessions)
+- `professional_id`, `scheduled_date`, `start_time`, `end_time`
+- `status` (scheduled | ongoing | completed | cancelled), `cancel_reason`
+- `created_at`, `updated_at`
+
+**`session_participants`** — which students are in a batch session
+- `id`, `session_id`, `student_id`, `attended` (boolean, default false), `created_at`
+- Unique: `(session_id, student_id)`
+
+---
+
+#### Batch API Endpoints
+
+```
+POST   /api/v1/admin/batches                                    # create batch
+GET    /api/v1/admin/batches                                    # list batches
+GET    /api/v1/admin/batches/:batchId                           # single batch with students
+PUT    /api/v1/admin/batches/:batchId                           # update batch (future sessions auto-updated)
+DELETE /api/v1/admin/batches/:batchId                           # soft-delete (future sessions cancelled)
+POST   /api/v1/admin/batches/:batchId/students                  # bulk assign students to batch
+DELETE /api/v1/admin/batches/:batchId/students/:studentId       # remove student from batch
+POST   /api/v1/admin/batches/:batchId/generate-sessions         # auto-generate sessions for a date range
+```
+
+---
+
+**POST /api/v1/admin/batches** — Create batch
+
+Request body:
+```json
+{
+  "batch_type": "group_coaching",
+  "society_id": 3,
+  "school_id": null,
+  "activity_id": 1,
+  "professional_id": 5,
+  "professional_type": "trainer",
+  "batch_name": "Morning Cricket A",
+  "days_of_week": ["Monday", "Wednesday", "Friday"],
+  "start_time": "07:00",
+  "end_time": "08:00",
+  "start_date": "2026-04-07",
+  "end_date": "2026-06-30"
+}
+```
+
+Rules:
+- `batch_type = group_coaching` → `society_id` required
+- `batch_type = school_student` → `school_id` required
+- `end_date` must be after `start_date`
+- `days_of_week` must produce at least one session date in range
+- Professional must be approved and not already booked at that time on any session date (conflict check runs on create)
+
+**Success:** `201` → `{ "success": true, "data": { ...batch } }`
+
+**Error codes:**
+| code | HTTP | Meaning |
+|---|---|---|
+| `SOCIETY_OR_SCHOOL_REQUIRED` | 400 | batch_type mismatch |
+| `DATE_RANGE_INVALID` | 400 | end_date before start_date |
+| `NO_DAYS_IN_RANGE` | 400 | schedule produces 0 sessions |
+| `ACTIVITY_NOT_FOUND` | 404 | activity_id invalid |
+| `PROFESSIONAL_NOT_FOUND` | 404 | professional_id invalid or not approved |
+| `PROFESSIONAL_CONFLICT` | 409 | professional already booked at that time on a session date |
+
+---
+
+**GET /api/v1/admin/batches** — List batches
+
+Query params (all optional):
+| Param | Values |
+|---|---|
+| `batch_type` | `group_coaching` \| `school_student` |
+| `society_id` | number |
+| `school_id` | number |
+| `activity_id` | number |
+
+Response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "batch_type": "group_coaching",
+      "batch_name": "Morning Cricket A",
+      "days_of_week": ["Monday", "Wednesday", "Friday"],
+      "start_time": "1970-01-01T01:30:00.000Z",
+      "end_time": "1970-01-01T02:30:00.000Z",
+      "start_date": "2026-04-07",
+      "end_date": "2026-06-30",
+      "is_active": true,
+      "activities": { "id": 1, "name": "Cricket" },
+      "societies": { "id": 3, "society_name": "Green Valley CHS" },
+      "schools": null,
+      "professionals": {
+        "id": 5,
+        "profession_type": "trainer",
+        "users": { "full_name": "Rahul Nair" }
+      },
+      "_count": { "batch_students": 12, "sessions": 36 }
+    }
+  ]
+}
+```
+
+**Note on time fields:** `start_time` and `end_time` are stored as MySQL `TIME` and returned as ISO datetime strings with epoch date `1970-01-01`. Extract just the time portion for display: `new Date(row.start_time).toTimeString().slice(0,5)` → `"07:30"`.
+
+---
+
+**GET /api/v1/admin/batches/:batchId** — Single batch
+
+Returns same shape as list item, plus:
+- `batch_students[]` — array of students enrolled, each with `student_id`, `student_type`, and `users.full_name`, `users.mobile`
+
+---
+
+**PUT /api/v1/admin/batches/:batchId** — Update batch
+
+Updatable fields (all optional — send only what changed):
+```json
+{
+  "professional_id": 7,
+  "professional_type": "trainer",
+  "start_time": "08:00",
+  "end_time": "09:00",
+  "days_of_week": ["Tuesday", "Thursday"],
+  "end_date": "2026-09-30",
+  "batch_name": "New Name"
+}
+```
+
+**What happens automatically:**
+- If `professional_id` changed → new professional is conflict-checked on all future session dates. If clear, all future `scheduled` sessions are updated to new professional.
+- If `start_time` / `end_time` changed → all future `scheduled` sessions updated.
+- If `days_of_week` changed → sessions on days **removed** from the schedule are cancelled (`cancel_reason: "Batch schedule updated"`). Sessions on newly added days are NOT auto-generated — admin must call `/generate-sessions` manually after.
+
+**Error codes:** same as create, plus `BATCH_NOT_FOUND` (404), `BATCH_INACTIVE` (409).
+
+---
+
+**DELETE /api/v1/admin/batches/:batchId** — Soft-delete batch
+
+Sets `is_active = false`. All future `scheduled` sessions are cancelled with `cancel_reason: "Batch deactivated"`.
+
+Response: `{ "success": true }`
+
+---
+
+**POST /api/v1/admin/batches/:batchId/generate-sessions** — Generate sessions
+
+Request body:
+```json
+{ "start_date": "2026-04-07", "end_date": "2026-06-30" }
+```
+
+The system walks the date range, picks dates that match `days_of_week`, skips already-existing session dates, and creates one `sessions` row per new date. Each new session also gets a `session_participants` row for every current `batch_students` member.
+
+Response:
+```json
+{ "success": true, "generated": 36 }
+```
+If all dates already exist: `{ "success": true, "generated": 0, "message": "No new session dates to generate in this range." }`
+
+**Error codes:** `BATCH_NOT_FOUND` (404), `BATCH_INACTIVE` (409), `DATE_RANGE_INVALID` (400).
+
+---
+
+**POST /api/v1/admin/batches/:batchId/students** — Bulk assign students
+
+Request body:
+```json
+{ "student_ids": [10, 11, 14, 15] }
+```
+
+The system:
+1. Validates all student IDs exist and match the batch's `batch_type`
+2. Checks each student for scheduling conflicts on all future batch session dates
+3. Assigns conflict-free students, adds them as `session_participants` on all future sessions
+
+Response (partial success is possible — conflicted students are skipped, not hard-failed):
+```json
+{
+  "success": true,
+  "assigned": 3,
+  "skipped_conflicts": [
+    { "student_id": 14, "name": "Priya Joshi", "date": "2026-04-09T00:00:00.000Z" }
+  ]
+}
+```
+
+**Error codes:** `BATCH_NOT_FOUND` (404), `BATCH_INACTIVE` (409), `STUDENT_NOT_FOUND` (404), `INVALID_BATCH_TYPE` (400).
+
+---
+
+**DELETE /api/v1/admin/batches/:batchId/students/:studentId** — Remove student
+
+Removes from `batch_students` and removes the student from all future `session_participants` records.
+
+Response: `{ "success": true }`
+
+---
+
+### 11. Session Module
+
+Used for both individual sessions (personal_tutor, individual_coaching) and viewing/managing all session records.
+
+#### Session API Endpoints
+
+```
+POST   /api/v1/admin/sessions                         # create individual session
+GET    /api/v1/admin/sessions                         # list sessions (with filters)
+GET    /api/v1/admin/sessions/:sessionId              # single session with participants
+PUT    /api/v1/admin/sessions/:sessionId/status       # update status
+DELETE /api/v1/admin/sessions/:sessionId              # cancel session
+```
+
+---
+
+**POST /api/v1/admin/sessions** — Create individual session
+
+Only valid for `session_type: personal_tutor` or `individual_coaching`. Batch sessions are generated via the Batch module.
+
+Request body:
+```json
+{
+  "session_type": "personal_tutor",
+  "student_id": 12,
+  "professional_id": 4,
+  "scheduled_date": "2026-04-10",
+  "start_time": "10:00",
+  "end_time": "11:00"
+}
+```
+
+Conflict checks run on both the professional and the student before creating.
+
+**Success:** `201` → `{ "success": true, "data": { ...session } }`
+
+**Error codes:**
+| code | HTTP | Meaning |
+|---|---|---|
+| `INVALID_SESSION_TYPE` | 400 | Only personal_tutor / individual_coaching allowed |
+| `MISSING_FIELDS` | 400 | Required fields absent |
+| `STUDENT_NOT_FOUND` | 404 | student_id invalid |
+| `PROFESSIONAL_NOT_FOUND` | 404 | professional_id invalid or not approved |
+| `PROFESSIONAL_CONFLICT` | 409 | Professional already booked at that time |
+| `STUDENT_CONFLICT` | 409 | Student already has a session at that time |
+
+---
+
+**GET /api/v1/admin/sessions** — List sessions
+
+Query params (all optional):
+| Param | Values |
+|---|---|
+| `student_id` | number |
+| `professional_id` | number |
+| `from` | ISO date string e.g. `2026-04-01` |
+| `to` | ISO date string e.g. `2026-06-30` |
+| `status` | `scheduled` \| `ongoing` \| `completed` \| `cancelled` |
+| `session_type` | `group_coaching` \| `school_student` \| `personal_tutor` \| `individual_coaching` |
+
+Response:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": 101,
+      "session_type": "personal_tutor",
+      "batch_id": null,
+      "student_id": 12,
+      "professional_id": 4,
+      "scheduled_date": "2026-04-10T00:00:00.000Z",
+      "start_time": "1970-01-01T04:30:00.000Z",
+      "end_time": "1970-01-01T05:30:00.000Z",
+      "status": "scheduled",
+      "cancel_reason": null,
+      "batches": null,
+      "students": { "id": 12, "users": { "full_name": "Arjun Sharma" } },
+      "professionals": {
+        "id": 4,
+        "profession_type": "teacher",
+        "users": { "full_name": "Sunita Verma" }
+      },
+      "_count": { "session_participants": 0 }
+    }
+  ]
+}
+```
+
+---
+
+**GET /api/v1/admin/sessions/:sessionId** — Single session
+
+Same shape as list item, plus:
+- `session_participants[]` — each with `student_id`, `attended`, and `students.users.full_name`
+
+---
+
+**PUT /api/v1/admin/sessions/:sessionId/status** — Update status
+
+Request body:
+```json
+{ "status": "completed" }
+```
+Or when cancelling:
+```json
+{ "status": "cancelled", "cancel_reason": "Trainer unavailable" }
+```
+
+Valid status transitions: `scheduled → ongoing → completed` or any `→ cancelled`.
+Cannot update a session that is already `completed` or `cancelled`.
+
+**Error codes:**
+| code | HTTP | Meaning |
+|---|---|---|
+| `SESSION_NOT_FOUND` | 404 | sessionId invalid |
+| `SESSION_ALREADY_FINAL` | 409 | Session is completed or already cancelled |
+| `MISSING_FIELDS` | 400 | cancel_reason missing when cancelling |
+
+---
+
+**DELETE /api/v1/admin/sessions/:sessionId** — Cancel session
+
+Request body:
+```json
+{ "cancel_reason": "Trainer unavailable" }
+```
+
+`cancel_reason` is **required**. Sets `status = cancelled`.
+
+**Error codes:** `SESSION_NOT_FOUND` (404), `SESSION_ALREADY_FINAL` (409), `MISSING_FIELDS` (400 — no cancel_reason).
+
+---
+
+### 12. Updated: Professional Availability Endpoint
+
+The existing endpoint now accepts optional time-based conflict filtering:
+
+```
+GET /api/v1/admin/professionals/available?type=teacher
+GET /api/v1/admin/professionals/available?type=teacher&date=2026-04-10&start_time=10:00&end_time=11:00
+GET /api/v1/admin/professionals/available?type=trainer&date=2026-04-10&start_time=07:00&end_time=08:00
+```
+
+When `date + start_time + end_time` are provided, professionals with a conflicting `scheduled` or `ongoing` session at that slot are excluded. Use this when the admin is about to assign a session or create a batch — pass the intended time to see only free professionals.
+
+Without the time params, behaviour is unchanged (returns all approved professionals of that type).
+
+---
+
+### Session Management UI Pages
+
+#### New Sidebar Items
+
+```
+Fitnesta Admin
+├── Dashboard
+├── Pending Approvals
+├── Society Requests
+├── Assignments
+├── Professionals
+├── Students
+├── Fee Structures
+├── Commissions
+├── Societies
+├── Schools
+├── Payments
+├── Batches                ← NEW
+│   ├── Group Coaching     ← batch_type = group_coaching
+│   └── School             ← batch_type = school_student
+└── Sessions               ← NEW (all session types, unified view)
+```
+
+---
+
+#### Batches Page
+
+**Two tabs: "Group Coaching Batches" | "School Batches"**
+
+Each tab:
+- Filters: society/school dropdown, activity dropdown
+- Table: Batch Name | Society/School | Activity | Professional | Days | Time | Date Range | Students | Sessions | Status | Actions
+- "View" → detail drawer: shows enrolled students list, upcoming sessions (next 5)
+- "Create Batch" button → slide-over form:
+  - `batch_type` pre-set by tab
+  - Society/School picker (dropdown filtered by type)
+  - Activity picker
+  - Professional picker — calls `GET /admin/professionals/available?type=trainer` or `?type=teacher`
+  - Days of week multi-select (Mon–Sun checkboxes)
+  - Start time / End time pickers
+  - Start date / End date pickers
+  - Batch name (optional)
+  - Submit → `POST /admin/batches`
+- "Generate Sessions" button → modal with date range inputs → `POST /admin/batches/:id/generate-sessions`
+- "Assign Students" button → modal: multi-select from `GET /admin/students?type=group_coaching` or `?type=school_student` → `POST /admin/batches/:id/students`
+- "Edit" button → same form as create, pre-filled → `PUT /admin/batches/:id`
+- "Deactivate" button → confirmation → `DELETE /admin/batches/:id`
+
+**Student count badge** on each row: `_count.batch_students` → e.g. "12 students".
+
+**Sessions count badge**: `_count.sessions` → e.g. "36 sessions".
+
+---
+
+#### Sessions Page
+
+**Unified view of all sessions across all types.**
+
+Filters:
+- Session type dropdown (All | Group Coaching | School | Personal Tutor | Individual Coaching)
+- Status dropdown (All | Scheduled | Ongoing | Completed | Cancelled)
+- Professional picker (optional)
+- Student search (optional)
+- Date range picker (from/to)
+
+Table columns: ID | Type badge | Date | Time | Professional | Student/Batch | Status badge | Actions
+
+**Type badge colors:**
+| session_type | Color |
+|---|---|
+| `group_coaching` | Blue |
+| `school_student` | Indigo |
+| `personal_tutor` | Purple |
+| `individual_coaching` | Orange |
+
+**Status badge colors:**
+| status | Color |
+|---|---|
+| `scheduled` | Amber |
+| `ongoing` | Blue |
+| `completed` | Green |
+| `cancelled` | Red |
+
+**"View" button** → right drawer showing:
+- Session details (date, time, professional, status)
+- For batch sessions: batch name, society/school
+- For individual sessions: student name + mobile
+- `session_participants[]` list (for batch sessions): student name + attended badge
+
+**"Create Session" button** (for personal_tutor / individual_coaching only):
+- Form fields: session_type (dropdown, only personal_tutor/individual_coaching), student picker, professional picker (calls availability endpoint with the selected date+time), date, start_time, end_time
+- Submit → `POST /admin/sessions`
+- If `PROFESSIONAL_CONFLICT` or `STUDENT_CONFLICT` → show inline error message, do not close form
+
+**"Update Status" button** (only on `scheduled` / `ongoing` rows):
+- Dropdown: mark as ongoing / completed / cancelled (with cancel_reason input if cancelled)
+- → `PUT /admin/sessions/:id/status`
+
+**"Cancel" button** (only on `scheduled` rows — same as delete):
+- Modal asking for cancel_reason (required) → `DELETE /admin/sessions/:id`
+
+---
+
+### Session Management Build Order
+
+| Phase | Feature | API used |
+|---|---|---|
+| 10 | Batches page (Group Coaching tab) | `POST/GET/PUT/DELETE /admin/batches`, `/admin/batches/:id/generate-sessions`, `/admin/batches/:id/students` |
+| 11 | Batches page (School tab) | Same endpoints, `batch_type=school_student` |
+| 12 | Sessions page — list + filters | `GET /admin/sessions` |
+| 13 | Sessions page — create individual session | `POST /admin/sessions`, `GET /admin/professionals/available` with time params |
+| 14 | Sessions page — update/cancel | `PUT /admin/sessions/:id/status`, `DELETE /admin/sessions/:id` |
+
+---
+
+### Session Management Key Business Logic
+
+1. **Time display:** `start_time` and `end_time` come back as ISO strings with epoch date `1970-01-01`. Use `new Date(val).toTimeString().slice(0,5)` or `new Date(val).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })` to display them cleanly.
+
+2. **Conflict errors on batch create/update:** If the backend returns `PROFESSIONAL_CONFLICT`, show the error message inline — it includes which date caused the conflict. Do not close the form.
+
+3. **Partial success on bulk student assign:** The endpoint returns `{ assigned: N, skipped_conflicts: [...] }`. If `skipped_conflicts.length > 0`, show a warning toast listing the conflicted students — do not treat it as a failure.
+
+4. **Batch update → day schedule change:** After updating `days_of_week`, if new days were added, remind the admin to call "Generate Sessions" again to create sessions for the new days. The backend cancels removed days but does NOT auto-generate added ones.
+
+5. **`batch_id` vs `student_id` in sessions:** Batch sessions have `batch_id` set and `student_id = null`. Individual sessions have `student_id` set and `batch_id = null`. Use this to differentiate rendering in the table.
+
+6. **Session participants vs direct student:** For batch sessions, the actual students are in `session_participants[]`. For individual sessions, the single student is in the `students` relation. Handle both cases in the "View" drawer.
+
+7. **Professional availability with time filter:** Always pass `date + start_time + end_time` to `/professionals/available` when the admin is creating a new individual session. This ensures only free professionals are shown. For batch creation, the conflict check is done server-side — no need to pre-filter on the frontend.
+
+8. **Status flow:** `scheduled → ongoing → completed` (forward only). Either `scheduled` or `ongoing` can move to `cancelled`. `completed` and `cancelled` are terminal — no further updates allowed.
