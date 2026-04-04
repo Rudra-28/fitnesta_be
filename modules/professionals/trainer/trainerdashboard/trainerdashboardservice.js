@@ -1,5 +1,6 @@
-const repo           = require("./trainerdashboardrepo");
-const commissionRepo = require("../../../commissions/commissionrepo");
+const repo             = require("./trainerdashboardrepo");
+const commissionRepo   = require("../../../commissions/commissionrepo");
+const withdrawalService = require("../../../commissions/withdrawalservice");
 
 const VALID_STATUSES = ["upcoming", "ongoing", "completed", "cancelled"];
 
@@ -16,6 +17,16 @@ async function getTrainerBatches(userId) {
   const professionalId = await repo.getTrainerProfessionalId(userId);
   if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
   return repo.getTrainerBatches(professionalId);
+}
+
+async function getBatchSessions(userId, batchId, status) {
+  const VALID = ["upcoming", "ongoing", "completed", "cancelled"];
+  if (status && !VALID.includes(status)) {
+    throw Object.assign(new Error(`Invalid status. Allowed: ${VALID.join(", ")}`), { code: "BAD_REQUEST" });
+  }
+  const professionalId = await repo.getTrainerProfessionalId(userId);
+  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
+  return repo.getBatchSessions(batchId, professionalId, status);
 }
 
 async function getAllStudents(userId) {
@@ -114,7 +125,7 @@ async function punchOut(userId, sessionId) {
   return repo.punchOut(sessionId);
 }
 
-const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
+const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
 
 async function getWalletSummary(userId) {
   const professionalId = await repo.getTrainerProfessionalId(userId);
@@ -130,4 +141,16 @@ async function getWalletBreakdown(userId, status) {
   return commissionRepo.getWalletBreakdown(professionalId, status);
 }
 
-module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown };
+async function requestWithdrawal(userId) {
+  const professionalId = await repo.getTrainerProfessionalId(userId);
+  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
+  return withdrawalService.requestWithdrawal(professionalId);
+}
+
+async function saveUpiId(userId, upiId) {
+  const professionalId = await repo.getTrainerProfessionalId(userId);
+  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
+  return withdrawalService.saveUpiId(professionalId, upiId);
+}
+
+module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, requestWithdrawal, saveUpiId };

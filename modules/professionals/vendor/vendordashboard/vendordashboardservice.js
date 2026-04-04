@@ -1,4 +1,6 @@
-const repo = require("./vendordashboardrepo");
+const repo              = require("./vendordashboardrepo");
+const commissionRepo    = require("../../../commissions/commissionrepo");
+const withdrawalService = require("../../../commissions/withdrawalservice");
 
 // ── Resolve vendor identity from JWT userId ────────────────────────────────
 const resolveVendor = async (userId) => {
@@ -71,4 +73,30 @@ exports.deleteProduct = async (userId, productId) => {
     if (!existing) throw new Error("Product not found.");
     await repo.deleteProduct(productId, vendorId);
     return { success: true, message: "Product deleted successfully." };
+};
+
+// ── Wallet ─────────────────────────────────────────────────────────────────
+
+const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
+
+exports.getWalletSummary = async (userId) => {
+    const { professionalId } = await resolveVendor(userId);
+    return commissionRepo.getWalletSummary(professionalId);
+};
+
+exports.getWalletBreakdown = async (userId, status) => {
+    if (!VALID_WALLET_STATUSES.includes(status))
+        throw Object.assign(new Error(`Invalid status. Allowed: ${VALID_WALLET_STATUSES.join(", ")}`), { statusCode: 400 });
+    const { professionalId } = await resolveVendor(userId);
+    return commissionRepo.getWalletBreakdown(professionalId, status);
+};
+
+exports.requestWithdrawal = async (userId) => {
+    const { professionalId } = await resolveVendor(userId);
+    return withdrawalService.requestWithdrawal(professionalId);
+};
+
+exports.saveUpiId = async (userId, upiId) => {
+    const { professionalId } = await resolveVendor(userId);
+    return withdrawalService.saveUpiId(professionalId, upiId);
 };

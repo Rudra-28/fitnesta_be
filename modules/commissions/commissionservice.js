@@ -17,6 +17,25 @@
 const prisma = require("../../config/prisma");
 const repo   = require("./commissionrepo");
 
+// ── Internal helper: log fitnesta profit after all commissions are known ───
+async function logFitnestaProfit({ sourceType, sourceId, totalCollected, commissionsPaid, notes }) {
+    try {
+        const fitnestaProfit = parseFloat((totalCollected - commissionsPaid).toFixed(2));
+        await prisma.fitnesta_profit_logs.create({
+            data: {
+                source_type:      sourceType,
+                source_id:        sourceId,
+                total_collected:  totalCollected,
+                commissions_paid: commissionsPaid,
+                fitnesta_profit:  fitnestaProfit,
+                notes:            notes ?? null,
+            },
+        });
+    } catch (err) {
+        console.error("[CommissionService] logFitnestaProfit error:", err.message);
+    }
+}
+
 // ── ME Admission Commission ────────────────────────────────────────────────
 
 /**
@@ -192,6 +211,21 @@ exports.calculateTrainerCommission = async (individualParticipantId, trainerProf
             commissionRate,
             commissionAmount,
         });
+
+        // ME commission for this student (if any) — fetch from commissions table
+        const meCommission = await prisma.commissions.findFirst({
+            where: { source_type: sourceType, source_id: individualParticipantId, professional_type: "marketing_executive" },
+            select: { commission_amount: true },
+        });
+        const mePaid = meCommission ? parseFloat(meCommission.commission_amount) : 0;
+
+        await logFitnestaProfit({
+            sourceType,
+            sourceId:        individualParticipantId,
+            totalCollected:  paymentAmount,
+            commissionsPaid: parseFloat((commissionAmount + mePaid).toFixed(2)),
+            notes: `trainer ${commissionRate}% (${commissionAmount}) + ME ${mePaid}`,
+        });
     } catch (err) {
         console.error("[CommissionService] calculateTrainerCommission error:", err.message);
     }
@@ -231,6 +265,21 @@ exports.calculateTeacherCommission = async (personalTutorId, teacherProfessional
             baseAmount:       paymentAmount,
             commissionRate,
             commissionAmount,
+        });
+
+        // ME commission for this student (if any)
+        const meCommission = await prisma.commissions.findFirst({
+            where: { source_type: "personal_tutor", source_id: personalTutorId, professional_type: "marketing_executive" },
+            select: { commission_amount: true },
+        });
+        const mePaid = meCommission ? parseFloat(meCommission.commission_amount) : 0;
+
+        await logFitnestaProfit({
+            sourceType:      "personal_tutor",
+            sourceId:        personalTutorId,
+            totalCollected:  paymentAmount,
+            commissionsPaid: parseFloat((commissionAmount + mePaid).toFixed(2)),
+            notes: `teacher ${commissionRate}% (${commissionAmount}) + ME ${mePaid}`,
         });
     } catch (err) {
         console.error("[CommissionService] calculateTeacherCommission error:", err.message);

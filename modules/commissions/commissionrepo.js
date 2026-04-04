@@ -317,9 +317,10 @@ exports.getWalletSummary = async (professionalId) => {
     );
 
     return {
-        pending:  (byStatus.on_hold ?? 0) + (byStatus.pending ?? 0),
-        approved: byStatus.approved ?? 0,
-        paid:     byStatus.paid     ?? 0,
+        pending:   (byStatus.on_hold ?? 0) + (byStatus.pending ?? 0),
+        approved:  byStatus.approved  ?? 0,
+        requested: byStatus.requested ?? 0,
+        paid:      byStatus.paid      ?? 0,
     };
 };
 
@@ -331,7 +332,7 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
     const statusFilter =
         bucketStatus === "pending"
             ? { status: { in: ["on_hold", "pending"] } }
-            : { status: bucketStatus };
+            : { status: bucketStatus };  // covers approved | requested | paid
 
     return await prisma.commissions.findMany({
         where:   { professional_id: professionalId, ...statusFilter },
@@ -347,6 +348,130 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
         },
         orderBy: { created_at: "desc" },
     });
+};
+
+// ── Withdrawal flow ────────────────────────────────────────────────────────
+
+/**
+ * Move all approved commissions for a professional to "requested" (withdrawal initiated).
+ * Returns the total amount and count of rows updated.
+ */
+exports.requestWithdrawal = async (professionalId) => {
+    const approved = await prisma.commissions.findMany({
+        where:  { professional_id: professionalId, status: "approved" },
+        select: { id: true, commission_amount: true },
+    });
+
+    if (approved.length === 0) return { count: 0, total_amount: 0 };
+
+    const ids         = approved.map((c) => c.id);
+    const totalAmount = parseFloat(
+        approved.reduce((sum, c) => sum + parseFloat(c.commission_amount), 0).toFixed(2)
+    );
+
+    await prisma.commissions.updateMany({
+        where: { id: { in: ids } },
+        data:  { status: "requested" },
+    });
+
+    return { count: approved.length, total_amount: totalAmount };
+};
+
+/** Store the Razorpay payout ID on the wallet after initiating a payout. */
+exports.storePayout = async (professionalId, payoutId) => {
+    await prisma.wallets.upsert({
+        where:  { professional_id: professionalId },
+        create: { professional_id: professionalId, balance: 0, last_payout_id: payoutId, last_payout_status: "processing" },
+        update: { last_payout_id: payoutId, last_payout_status: "processing", updated_at: new Date() },
+    });
+};
+
+/** Store contact + fund account IDs on the professional record. */
+exports.storeFundAccount = async (professionalId, contactId, fundAccountId) => {
+    await prisma.professionals.update({
+        where: { id: professionalId },
+        data:  { razorpay_contact_id: contactId, razorpay_fund_account_id: fundAccountId },
+    });
+};
+
+/** Called by webhook: payout.processed → mark all requested commissions as paid. */
+exports.markPayoutPaid = async (payoutId) => {
+    const wallet = await prisma.wallets.findFirst({ where: { last_payout_id: payoutId } });
+    if (!wallet) return;
+
+    await prisma.$transaction(async (tx) => {
+        await tx.commissions.updateMany({
+            where: { professional_id: wallet.professional_id, status: "requested" },
+            data:  { status: "paid" },
+        });
+        await tx.wallets.update({
+            where: { professional_id: wallet.professional_id },
+            data:  { last_payout_status: "processed", updated_at: new Date() },
+        });
+    });
+};
+
+/** Called by webhook: payout.failed → revert requested commissions back to approved. */
+exports.revertPayoutToApproved = async (payoutId) => {
+    const wallet = await prisma.wallets.findFirst({ where: { last_payout_id: payoutId } });
+    if (!wallet) return;
+
+    await prisma.$transaction(async (tx) => {
+        await tx.commissions.updateMany({
+            where: { professional_id: wallet.professional_id, status: "requested" },
+            data:  { status: "approved" },
+        });
+        await tx.wallets.update({
+            where: { professional_id: wallet.professional_id },
+            data:  { last_payout_status: "failed", updated_at: new Date() },
+        });
+    });
+};
+
+/**
+ * List all requested withdrawal entries across all professionals (admin view).
+ * Groups by professional with total requested amount.
+ */
+exports.listRequestedWithdrawals = async () => {
+    const rows = await prisma.commissions.findMany({
+        where:   { status: "requested" },
+        include: {
+            professionals: {
+                select: {
+                    id:               true,
+                    professional_type: true,
+                    users:            { select: { full_name: true, mobile: true } },
+                },
+            },
+        },
+        orderBy: { created_at: "desc" },
+    });
+    return rows;
+};
+
+/**
+ * Mark all "requested" commissions for a professional as "paid" (admin processes payout).
+ * Returns total amount paid.
+ */
+exports.markWithdrawalsPaid = async (professionalId) => {
+    const requested = await prisma.commissions.findMany({
+        where:  { professional_id: professionalId, status: "requested" },
+        select: { id: true, commission_amount: true },
+    });
+
+    if (requested.length === 0) return { count: 0, total_amount: 0 };
+
+    const ids         = requested.map((c) => c.id);
+    const totalAmount = parseFloat(
+        requested.reduce((sum, c) => sum + parseFloat(c.commission_amount), 0).toFixed(2)
+    );
+
+    await prisma.commissions.updateMany({
+        where: { id: { in: ids } },
+        data:  { status: "paid" },
+    });
+
+    return { count: requested.length, total_amount: totalAmount };
 };
 
 exports.releaseHeldCommissions = async (meProfessionalId, sourceType) => {

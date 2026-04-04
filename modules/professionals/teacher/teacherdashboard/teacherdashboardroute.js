@@ -19,7 +19,9 @@ router.get("/sessions/:id", teacherGuard, controller.getSessionById);           
 router.post("/sessions/:id/start", teacherGuard, controller.startSession);
 router.post("/sessions/:id/end", teacherGuard, controller.endSession);
 
-router.get("/wallet", teacherGuard, controller.getWalletSummary);                            // GET /api/v1/teacher-dashboard/wallet
-router.get("/wallet/:status", teacherGuard, controller.getWalletBreakdown);                 // GET /api/v1/teacher-dashboard/wallet/pending|approved|paid
+router.get("/wallet", teacherGuard, controller.getWalletSummary);                            // GET  /api/v1/teacher-dashboard/wallet
+router.get("/wallet/:status", teacherGuard, controller.getWalletBreakdown);                 // GET  /api/v1/teacher-dashboard/wallet/pending|approved|requested|paid
+router.put("/wallet/upi", teacherGuard, controller.saveUpiId);                              // PUT  /api/v1/teacher-dashboard/wallet/upi
+router.post("/wallet/withdraw", teacherGuard, controller.requestWithdrawal);                // POST /api/v1/teacher-dashboard/wallet/withdraw
 
 module.exports = router;

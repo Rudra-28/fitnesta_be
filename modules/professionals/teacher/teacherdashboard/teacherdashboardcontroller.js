@@ -94,7 +94,7 @@ exports.getWalletSummary = async (req, res) => {
     }
 };
 
-// GET /teacher-dashboard/wallet/:status  (pending|approved|paid)
+// GET /teacher-dashboard/wallet/:status  (pending|approved|requested|paid)
 exports.getWalletBreakdown = async (req, res) => {
     try {
         const data = await service.getWalletBreakdown(req.teacher.id, req.params.status);
@@ -102,5 +102,25 @@ exports.getWalletBreakdown = async (req, res) => {
     } catch (err) {
         const code = err.statusCode || (err.code === "NOT_FOUND" ? 404 : 500);
         res.status(code).json({ success: false, error: err.message });
+    }
+};
+
+// POST /teacher-dashboard/wallet/withdraw
+exports.requestWithdrawal = async (req, res) => {
+    try {
+        const data = await service.requestWithdrawal(req.teacher.id);
+        res.json({ success: true, message: "Withdrawal initiated via Razorpay", data });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ success: false, message: err.message });
+    }
+};
+
+// PUT /teacher-dashboard/wallet/upi
+exports.saveUpiId = async (req, res) => {
+    try {
+        await service.saveUpiId(req.teacher.id, req.body.upi_id);
+        res.json({ success: true, message: "UPI ID saved successfully" });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ success: false, message: err.message });
     }
 };

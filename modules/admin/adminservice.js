@@ -555,6 +555,19 @@ exports.markCommissionPaid = async (id) => {
     return await adminRepo.markCommissionPaid(id, amount, commission.professional_id);
 };
 
+// ── Withdrawal requests ────────────────────────────────────────────────────
+
+exports.listWithdrawalRequests = async () => {
+    return await adminRepo.listWithdrawalRequests();
+};
+
+exports.processWithdrawal = async (professionalId) => {
+    const result = await adminRepo.markWithdrawalsPaid(professionalId);
+    if (result.count === 0)
+        throw new Error("NO_REQUESTED_WITHDRAWALS");
+    return result;
+};
+
 // ── Travelling allowances list ─────────────────────────────────────────────
 
 exports.listTravellingAllowances = async (filters) => {

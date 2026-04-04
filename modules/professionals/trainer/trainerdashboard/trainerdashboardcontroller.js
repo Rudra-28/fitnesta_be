@@ -117,4 +117,34 @@ async function getWalletBreakdown(req, res) {
   }
 }
 
-module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown };
+async function requestWithdrawal(req, res) {
+  try {
+    const data = await service.requestWithdrawal(req.trainer.userId);
+    return res.json({ success: true, message: "Withdrawal initiated via Razorpay", data });
+  } catch (err) {
+    const code = err.statusCode || { NOT_FOUND: 404 }[err.code] || 500;
+    return res.status(code).json({ success: false, message: err.message });
+  }
+}
+
+async function saveUpiId(req, res) {
+  try {
+    await service.saveUpiId(req.trainer.userId, req.body.upi_id);
+    return res.json({ success: true, message: "UPI ID saved successfully" });
+  } catch (err) {
+    const code = err.statusCode || { NOT_FOUND: 404 }[err.code] || 500;
+    return res.status(code).json({ success: false, message: err.message });
+  }
+}
+
+async function getBatchSessions(req, res) {
+  try {
+    const data = await service.getBatchSessions(req.trainer.userId, Number(req.params.batchId), req.query.status);
+    return res.json({ success: true, count: data.length, data });
+  } catch (err) {
+    const code = { NOT_FOUND: 404, BAD_REQUEST: 400 }[err.code] || 500;
+    return res.status(code).json({ success: false, message: err.message });
+  }
+}
+
+module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, requestWithdrawal, saveUpiId };

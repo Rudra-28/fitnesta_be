@@ -428,6 +428,66 @@ exports.markCommissionPaid = async (id, commissionAmount, professionalId) => {
     });
 };
 
+// ── Withdrawal requests ────────────────────────────────────────────────────
+
+/**
+ * List all professionals who have at least one "requested" commission, with totals.
+ */
+exports.listWithdrawalRequests = async () => {
+    const rows = await prisma.commissions.groupBy({
+        by:     ["professional_id"],
+        where:  { status: "requested" },
+        _sum:   { commission_amount: true },
+        _count: { id: true },
+    });
+
+    if (rows.length === 0) return [];
+
+    const ids          = rows.map((r) => r.professional_id);
+    const professionals = await prisma.professionals.findMany({
+        where:  { id: { in: ids } },
+        select: {
+            id:               true,
+            profession_type:  true,
+            users:            { select: { full_name: true, mobile: true } },
+        },
+    });
+    const profMap = Object.fromEntries(professionals.map((p) => [p.id, p]));
+
+    return rows.map((r) => ({
+        professional_id:   r.professional_id,
+        professional:      profMap[r.professional_id] ?? null,
+        entry_count:       r._count.id,
+        total_amount:      parseFloat(r._sum.commission_amount ?? 0),
+    }));
+};
+
+/**
+ * Mark all "requested" commissions for a professional as "paid" (full withdrawal payout).
+ */
+exports.markWithdrawalsPaid = async (professionalId) => {
+    const requested = await prisma.commissions.findMany({
+        where:  { professional_id: Number(professionalId), status: "requested" },
+        select: { id: true, commission_amount: true },
+    });
+
+    if (requested.length === 0) return { count: 0, total_amount: 0 };
+
+    const ids         = requested.map((c) => c.id);
+    const totalAmount = parseFloat(
+        requested.reduce((sum, c) => sum + parseFloat(c.commission_amount), 0).toFixed(2)
+    );
+
+    await prisma.$transaction(async (tx) => {
+        await tx.commissions.updateMany({
+            where: { id: { in: ids } },
+            data:  { status: "paid" },
+        });
+    });
+
+    return { count: requested.length, total_amount: totalAmount };
+};
+
 // ── Travelling allowances ──────────────────────────────────────────────────
 
 exports.listTravellingAllowances = async ({ trainerProfessionalId, status } = {}) => {

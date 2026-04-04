@@ -1,6 +1,7 @@
-const prisma = require("../../../../config/prisma");
-const repo = require("./medashboardrepo");
-const commissionRepo = require("../../../commissions/commissionrepo");
+const prisma            = require("../../../../config/prisma");
+const repo              = require("./medashboardrepo");
+const commissionRepo    = require("../../../commissions/commissionrepo");
+const withdrawalService = require("../../../commissions/withdrawalservice");
 
 const getMeProfessional = async (meUserId) => {
     const professional = await repo.findProfessionalByUserId(meUserId);
@@ -24,7 +25,12 @@ exports.getEarnings = async (meUserId) => {
     return await commissionRepo.getMEEarningsSummary(professional.id);
 };
 
-const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
+const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
+
+exports.getWalletSummary = async (meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    return await commissionRepo.getWalletSummary(professional.id);
+};
 
 exports.getWalletBreakdown = async (meUserId, status) => {
     if (!VALID_WALLET_STATUSES.includes(status)) {
@@ -34,6 +40,16 @@ exports.getWalletBreakdown = async (meUserId, status) => {
     }
     const professional = await getMeProfessional(meUserId);
     return await commissionRepo.getWalletBreakdown(professional.id, status);
+};
+
+exports.requestWithdrawal = async (meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    return withdrawalService.requestWithdrawal(professional.id);
+};
+
+exports.saveUpiId = async (meUserId, upiId) => {
+    const professional = await getMeProfessional(meUserId);
+    return withdrawalService.saveUpiId(professional.id, upiId);
 };
 
 // ── Society ───────────────────────────────────────────────────────────────────

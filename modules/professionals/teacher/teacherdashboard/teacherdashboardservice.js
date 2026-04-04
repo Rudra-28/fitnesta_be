@@ -1,5 +1,6 @@
-const repo           = require("./teacherdashboardrepo");
-const commissionRepo = require("../../../commissions/commissionrepo");
+const repo              = require("./teacherdashboardrepo");
+const commissionRepo    = require("../../../commissions/commissionrepo");
+const withdrawalService = require("../../../commissions/withdrawalservice");
 
 // Resolve professional id from JWT userId, throw if not found
 const resolveTeacher = async (userId) => {
@@ -166,7 +167,7 @@ exports.endSession = async (userId, sessionId) => {
     return { success: true, data: updated };
 };
 
-const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
+const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
 
 exports.getWalletSummary = async (userId) => {
     const professionalId = await resolveTeacher(userId);
@@ -178,4 +179,14 @@ exports.getWalletBreakdown = async (userId, status) => {
         throw Object.assign(new Error(`Invalid status. Allowed: ${VALID_WALLET_STATUSES.join(", ")}`), { statusCode: 400 });
     const professionalId = await resolveTeacher(userId);
     return commissionRepo.getWalletBreakdown(professionalId, status);
+};
+
+exports.requestWithdrawal = async (userId) => {
+    const professionalId = await resolveTeacher(userId);
+    return withdrawalService.requestWithdrawal(professionalId);
+};
+
+exports.saveUpiId = async (userId, upiId) => {
+    const professionalId = await resolveTeacher(userId);
+    return withdrawalService.saveUpiId(professionalId, upiId);
 };

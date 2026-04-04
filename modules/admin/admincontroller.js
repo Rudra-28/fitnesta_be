@@ -276,6 +276,27 @@ exports.markCommissionPaid = async (req, res) => {
     }
 };
 
+// ── Withdrawal requests ────────────────────────────────────────────────────
+
+exports.listWithdrawalRequests = async (req, res) => {
+    try {
+        const data = await service.listWithdrawalRequests();
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.processWithdrawal = async (req, res) => {
+    try {
+        const result = await service.processWithdrawal(Number(req.params.professionalId));
+        res.json({ success: true, message: "Withdrawal processed successfully", data: result });
+    } catch (err) {
+        const status = err.message === "NO_REQUESTED_WITHDRAWALS" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 // ── Travelling allowances ──────────────────────────────────────────────────
 
 exports.listTravellingAllowances = async (req, res) => {

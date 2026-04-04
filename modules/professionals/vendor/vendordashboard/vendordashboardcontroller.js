@@ -71,3 +71,41 @@ exports.deleteProduct = async (req, res) => {
         res.status(400).json({ success: false, error: err.message });
     }
 };
+
+// ── Wallet ─────────────────────────────────────────────────────────────────
+
+exports.getWalletSummary = async (req, res) => {
+    try {
+        const data = await service.getWalletSummary(req.vendor.id);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getWalletBreakdown = async (req, res) => {
+    try {
+        const data = await service.getWalletBreakdown(req.vendor.id, req.params.status);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.requestWithdrawal = async (req, res) => {
+    try {
+        const data = await service.requestWithdrawal(req.vendor.id);
+        res.json({ success: true, message: "Withdrawal initiated via Razorpay", data });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ success: false, message: err.message });
+    }
+};
+
+exports.saveUpiId = async (req, res) => {
+    try {
+        await service.saveUpiId(req.vendor.id, req.body.upi_id);
+        res.json({ success: true, message: "UPI ID saved successfully" });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ success: false, message: err.message });
+    }
+};

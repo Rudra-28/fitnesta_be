@@ -27,4 +27,10 @@ router.delete("/products/:id", vendorGuard, controller.deleteProduct);
 router.get("/orders",                        vendorGuard, kitOrderController.getVendorOrders);
 router.patch("/orders/:order_id/status",     vendorGuard, kitOrderController.updateOrderStatus);
 
+// ── Wallet ─────────────────────────────────────────────────────────────────
+router.get("/wallet",           vendorGuard, controller.getWalletSummary);    // GET  /api/v1/vendor-dashboard/wallet
+router.get("/wallet/:status",   vendorGuard, controller.getWalletBreakdown);  // GET  /api/v1/vendor-dashboard/wallet/pending|approved|requested|paid
+router.put("/wallet/upi",       vendorGuard, controller.saveUpiId);           // PUT  /api/v1/vendor-dashboard/wallet/upi
+router.post("/wallet/withdraw", vendorGuard, controller.requestWithdrawal);   // POST /api/v1/vendor-dashboard/wallet/withdraw
+
 module.exports = router;

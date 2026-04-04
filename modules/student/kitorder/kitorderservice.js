@@ -2,6 +2,7 @@ const crypto       = require("crypto");
 const repo         = require("./kitorderrepo");
 const paymentsRepo = require("../../payments/paymentsrepo");
 const { createOrder } = require("../../../utils/razorpay");
+const prisma       = require("../../../config/prisma");
 
 const VALID_ZONES = ["within_city", "within_state", "outside_state"];
 
@@ -36,9 +37,10 @@ exports.initiateKitOrder = async (studentUserId, body) => {
     if (!product) throw new Error("Product not found.");
     if (product.stock < quantity) throw new Error("Insufficient stock.");
 
-    const deliveryCharge = parseFloat(product[ZONE_CHARGE_MAP[deliveryZone]]);
-    const unitPrice      = parseFloat(product.selling_price);
-    const totalAmount    = (unitPrice * quantity) + deliveryCharge;
+    const deliveryCharge  = parseFloat(product[ZONE_CHARGE_MAP[deliveryZone]]);
+    const unitPrice       = parseFloat(product.selling_price);
+    const purchasePrice   = parseFloat(product.price);
+    const totalAmount     = (unitPrice * quantity) + deliveryCharge;
 
     const tempUuid = crypto.randomUUID();
 
@@ -56,9 +58,10 @@ exports.initiateKitOrder = async (studentUserId, body) => {
         vendorId:          product.vendor_id,
         quantity,
         unitPrice,
+        purchasePrice,
         deliveryCharge,
         deliveryZone,
-        kitOrderZoneUser:  deliveryZone,   // what the user explicitly selected
+        kitOrderZoneUser:  deliveryZone,
         totalAmount,
         razorpayOrderId:   rzpOrder.id,
         deliveryName,
@@ -128,6 +131,24 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, _amount) => {
     });
 
     await repo.updatePendingStatus(pending.id, "approved");
+
+    // Fitnesta takes 10% of vendor profit (selling_price - purchase_price) × qty
+    try {
+        const vendorProfitPerUnit = parseFloat(data.unitPrice) - parseFloat(data.purchasePrice || 0);
+        const fitnestaProfit      = parseFloat(((vendorProfitPerUnit * data.quantity) * 0.10).toFixed(2));
+        await prisma.fitnesta_profit_logs.create({
+            data: {
+                source_type:     "kit_order",
+                source_id:       order.id,
+                total_collected: data.totalAmount,
+                commissions_paid: 0,
+                fitnesta_profit: fitnestaProfit,
+                notes: `Kit order #${order.id}: vendor profit/unit=${vendorProfitPerUnit}, qty=${data.quantity}, 10% share`,
+            },
+        });
+    } catch (err) {
+        console.error("[KitOrder] fitnesta_profit_logs insert error:", err.message);
+    }
 
     return { success: true, kitOrderId: order.id };
 };

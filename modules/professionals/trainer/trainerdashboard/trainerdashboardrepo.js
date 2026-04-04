@@ -190,6 +190,22 @@ async function getStudentSessions(professionalId, studentId, status) {
   });
 }
 
+async function getBatchSessions(batchId, professionalId, status) {
+  const where = {
+    batch_id:        Number(batchId),
+    professional_id: Number(professionalId),
+  };
+  if (status) where.status = status;
+
+  return prisma.sessions.findMany({
+    where,
+    include: {
+      _count: { select: { session_participants: true } },
+    },
+    orderBy: [{ scheduled_date: "asc" }, { start_time: "asc" }],
+  });
+}
+
 async function getSessionForTrainer(sessionId, professionalId) {
   return prisma.sessions.findFirst({
     where: { id: Number(sessionId), professional_id: Number(professionalId) },
@@ -251,6 +267,7 @@ module.exports = {
   getBatchesByLocation,
   getAllStudentsWithProgress,
   getStudentSessions,
+  getBatchSessions,
   punchIn,
   punchOut,
 };

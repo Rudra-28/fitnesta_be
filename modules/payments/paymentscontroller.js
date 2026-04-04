@@ -1,10 +1,11 @@
 const crypto = require("crypto");
 const { verifyWebhookSignature } = require("../../utils/razorpay");
-const paymentsRepo = require("./paymentsrepo");
+const paymentsRepo   = require("./paymentsrepo");
 const icService      = require("../student/individualcoaching/indicoachservice");
 const ptService      = require("../student/personaltutor/perstutorservice");
 const ssService      = require("../student/school-student/schoolstudentservice");
 const kitOrderService = require("../student/kitorder/kitorderservice");
+const commissionRepo = require("../commissions/commissionrepo");
 
 const SERVICE_MAP = {
     individual_coaching: icService,
@@ -164,9 +165,42 @@ exports.handlePaymentWebhook = async (req, res) => {
 
         await service.finalizeRegistration(temp_uuid, paymentId, amount);
         return res.status(200).json({ success: true });
+
     } catch (error) {
         // Always return 200 so Razorpay stops retrying — log for manual review
         console.error("Unified webhook error:", error);
+        return res.status(200).json({ received: true });
+    }
+};
+
+/**
+ * Razorpay Payouts webhook — handles payout.processed and payout.failed.
+ * Configure a separate webhook URL in the Razorpay X Dashboard:
+ *   POST /api/v1/payments/payout-webhook
+ */
+exports.handlePayoutWebhook = async (req, res) => {
+    try {
+        const signature = req.headers["x-razorpay-signature"];
+        if (!verifyWebhookSignature(req.rawBody, signature)) {
+            return res.status(400).json({ success: false, message: "Invalid webhook signature" });
+        }
+
+        const event    = req.body.event;
+        const payoutId = req.body?.payload?.payout?.entity?.id;
+
+        if (!payoutId) return res.status(200).json({ received: true });
+
+        if (event === "payout.processed") {
+            await commissionRepo.markPayoutPaid(payoutId);
+            console.log(`[Payout] processed — payout_id: ${payoutId}`);
+        } else if (event === "payout.failed" || event === "payout.reversed") {
+            await commissionRepo.revertPayoutToApproved(payoutId);
+            console.log(`[Payout] ${event} — reverted to approved — payout_id: ${payoutId}`);
+        }
+
+        return res.status(200).json({ received: true });
+    } catch (error) {
+        console.error("Payout webhook error:", error);
         return res.status(200).json({ received: true });
     }
 };

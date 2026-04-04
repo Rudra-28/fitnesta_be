@@ -19,10 +19,37 @@ exports.getEarnings = async (req, res) => {
     }
 };
 
+exports.getWalletSummary = async (req, res) => {
+    try {
+        const data = await service.getWalletSummary(req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) {
+        handleErr(err, res);
+    }
+};
+
 exports.getWalletBreakdown = async (req, res) => {
     try {
         const data = await service.getWalletBreakdown(req.me.userId, req.params.status);
         res.json({ success: true, data });
+    } catch (err) {
+        handleErr(err, res);
+    }
+};
+
+exports.requestWithdrawal = async (req, res) => {
+    try {
+        const data = await service.requestWithdrawal(req.me.userId);
+        res.json({ success: true, message: "Withdrawal initiated via Razorpay", data });
+    } catch (err) {
+        handleErr(err, res);
+    }
+};
+
+exports.saveUpiId = async (req, res) => {
+    try {
+        await service.saveUpiId(req.me.userId, req.body.upi_id);
+        res.json({ success: true, message: "UPI ID saved successfully" });
     } catch (err) {
         handleErr(err, res);
     }

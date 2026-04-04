@@ -26,7 +26,10 @@ router.get("/summary", meGuard, controller.getSummary);
 
 // ── Earnings / Wallet ──────────────────────────────────────────────────────
 router.get("/earnings", meGuard, controller.getEarnings);
-router.get("/wallet/:status", meGuard, controller.getWalletBreakdown);       // GET /api/v1/me-dashboard/wallet/pending|approved|paid
+router.get("/wallet",           meGuard, controller.getWalletSummary);        // GET  /api/v1/me-dashboard/wallet
+router.get("/wallet/:status",   meGuard, controller.getWalletBreakdown);      // GET  /api/v1/me-dashboard/wallet/pending|approved|requested|paid
+router.put("/wallet/upi",       meGuard, controller.saveUpiId);               // PUT  /api/v1/me-dashboard/wallet/upi
+router.post("/wallet/withdraw", meGuard, controller.requestWithdrawal);       // POST /api/v1/me-dashboard/wallet/withdraw
 
 // ── Society ────────────────────────────────────────────────────────────────
 router.post("/society", meGuard, handleUpload, controller.registerSociety);
