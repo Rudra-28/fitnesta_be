@@ -24,14 +24,18 @@ const repo   = require("./commissionrepo");
  *
  * Eligibility:
  *  - society_id must be present in form data (student chose from dropdown, not typed manually)
- *  - The platform must have at least `me_min_live_activities` globally active activities
  *  - The society must have a linked ME (me_professional_id)
  *
  * Commission rates (from commission_rules):
- *  - group_coaching:      5%  (me_group_admission_rate)
+ *  - group_coaching:      5%  (me_group_admission_rate)   → recorded on_hold, released when 20-student threshold met
  *  - individual_coaching: 2%  (me_personal_coaching_admission_rate)
  *  - personal_tutor:      2%  (me_personal_tutor_admission_rate)
  *  - school_student:      no commission
+ *
+ * Group coaching 20-student threshold:
+ *  - After recording each admission on_hold, check if the society/school now has ≥ 20 group_coaching students
+ *    (personal_tutor students are excluded from the count).
+ *  - If threshold is met, all previously on_hold commissions for that ME + entity are released together.
  *
  * @param {string} serviceType   — 'individual_coaching' | 'group_coaching' | 'personal_tutor' | 'school_student'
  * @param {object} formData      — raw form_data from the pending registration
@@ -60,11 +64,6 @@ exports.calculateMEAdmissionCommission = async (serviceType, formData, studentUs
 
         const rules = await repo.getAllRules();
 
-        // Check ME eligibility: need at least `me_min_live_activities` active activities
-        const minActivities    = parseFloat(rules.me_min_live_activities?.value ?? 2);
-        const activeActivities = await repo.countGlobalActiveActivities();
-        if (activeActivities < minActivities) return;
-
         // Look up the ME linked to this society
         const society = await repo.getSocietyById(parseInt(societyId));
         if (!society?.me_professional_id) return;
@@ -88,6 +87,9 @@ exports.calculateMEAdmissionCommission = async (serviceType, formData, studentUs
             personal_tutor:      "personal_tutor",
         };
 
+        const isGroupCoaching = serviceType === "group_coaching";
+        const initialStatus   = isGroupCoaching ? "on_hold" : "pending";
+
         await repo.recordCommission({
             professionalId:   society.me_professional_id,
             professionalType: "marketing_executive",
@@ -96,7 +98,19 @@ exports.calculateMEAdmissionCommission = async (serviceType, formData, studentUs
             baseAmount:       amount,
             commissionRate:   rate,
             commissionAmount,
+            status:           initialStatus,
+            skipWallet:       isGroupCoaching, // wallet credited only when threshold is met
         });
+
+        // After recording a group coaching commission, check the 20-student threshold.
+        // If met, release all on_hold commissions for this ME + society.
+        if (isGroupCoaching) {
+            const minThreshold = parseFloat(rules.me_group_admission_min_students?.value ?? 20);
+            const studentCount = await repo.countGroupStudentsForEntity({ societyId: parseInt(societyId) });
+            if (studentCount >= minThreshold) {
+                await repo.releaseHeldCommissions(society.me_professional_id, "group_coaching_society");
+            }
+        }
     } catch (err) {
         // Commission failure must never break the registration flow
         console.error("[CommissionService] calculateMEAdmissionCommission error:", err.message);
@@ -163,7 +177,7 @@ exports.calculateTrainerCommission = async (individualParticipantId, trainerProf
                 commissionRate   = parseFloat(rules.trainer_group_society_rate?.value ?? 50);
                 commissionAmount = parseFloat(((paymentAmount * commissionRate) / 100).toFixed(2));
             }
-
+            
         } else {
             // group_coaching without a society_id should not reach here
             return;
@@ -231,7 +245,6 @@ exports.calculateTeacherCommission = async (personalTutorId, teacherProfessional
  *
  * Eligibility:
  *  - A ME must be linked to the society/school (me_professional_id)
- *  - The platform must have at least `me_min_live_activities` globally active activities
  *
  * Society commission (based on no_of_flats):
  *  - > 100 flats:  ₹1111  (me_society_above_100_flats)
@@ -249,11 +262,6 @@ exports.calculateMEOnboardingCommission = async (entityType, entity) => {
         if (!entity.me_professional_id) return;
 
         const rules = await repo.getAllRules();
-
-        // ME is only eligible if the platform has at least the minimum live activities
-        const minActivities    = parseFloat(rules.me_min_live_activities?.value ?? 2);
-        const activeActivities = await repo.countGlobalActiveActivities();
-        if (activeActivities < minActivities) return;
 
         let commissionAmount;
         let sourceType;

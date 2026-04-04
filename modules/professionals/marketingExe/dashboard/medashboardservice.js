@@ -1,5 +1,6 @@
 const prisma = require("../../../../config/prisma");
 const repo = require("./medashboardrepo");
+const commissionRepo = require("../../../commissions/commissionrepo");
 
 const getMeProfessional = async (meUserId) => {
     const professional = await repo.findProfessionalByUserId(meUserId);
@@ -15,6 +16,24 @@ const getMeProfessional = async (meUserId) => {
 exports.getSummary = async (meUserId) => {
     const professional = await getMeProfessional(meUserId);
     return await repo.getSummary(professional.id);
+};
+
+// ── Earnings ──────────────────────────────────────────────────────────────────
+exports.getEarnings = async (meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    return await commissionRepo.getMEEarningsSummary(professional.id);
+};
+
+const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
+
+exports.getWalletBreakdown = async (meUserId, status) => {
+    if (!VALID_WALLET_STATUSES.includes(status)) {
+        const err = new Error(`Invalid status. Allowed: ${VALID_WALLET_STATUSES.join(", ")}`);
+        err.statusCode = 400;
+        throw err;
+    }
+    const professional = await getMeProfessional(meUserId);
+    return await commissionRepo.getWalletBreakdown(professional.id, status);
 };
 
 // ── Society ───────────────────────────────────────────────────────────────────

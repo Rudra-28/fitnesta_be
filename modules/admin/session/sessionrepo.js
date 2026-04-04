@@ -137,6 +137,15 @@ async function updateSessionStatus(id, status, cancel_reason = null) {
   return prisma.sessions.update({ where: { id: Number(id) }, data });
 }
 
+async function getSessionFeedback(sessionId) {
+  return prisma.session_feedback.findMany({
+    where: { session_id: Number(sessionId) },
+    include: {
+      students: { select: { id: true, users: { select: { full_name: true } } } },
+    },
+  });
+}
+
 module.exports = {
   checkProfessionalConflict,
   checkStudentConflict,
@@ -145,4 +154,5 @@ module.exports = {
   getSessionById,
   listSessions,
   updateSessionStatus,
+  getSessionFeedback,
 };

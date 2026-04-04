@@ -7,6 +7,7 @@ const sessionController = require("./studentdashboardcontroller");
 
 // ── Products (Kits) — public ───────────────────────────────────────────────
 router.get("/products", vendorController.getAllProductsPublic);
+router.get("/products/:id", vendorController.getProductByIdPublic);
 
 // ── Kit Orders ─────────────────────────────────────────────────────────────
 router.post("/orders", studentGuard, kitOrderController.initiateKitOrder);
@@ -16,8 +17,9 @@ if (process.env.DEV_SKIP_PAYMENT === "true") {
     router.post("/orders/:temp_uuid/dev-confirm", studentGuard, kitOrderController.devFinalizeKitOrder);
 }
 
-// ── Session schedule ───────────────────────────────────────────────────────
+// ── Session schedule ───────────────────────────────────────────────────────────
 router.get("/sessions", studentGuard, sessionController.getUpcomingSessions);
 router.get("/sessions/history", studentGuard, sessionController.getSessionHistory);
+router.post("/sessions/:id/feedback", studentGuard, sessionController.submitFeedback);
 
 module.exports = router;

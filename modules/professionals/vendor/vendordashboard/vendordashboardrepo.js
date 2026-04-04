@@ -79,6 +79,12 @@ exports.getProductsByIds = async (ids) => {
 };
 
 // ── Public ─────────────────────────────────────────────────────────────────
+exports.getProductByIdPublic = async (productId) => {
+    return await prisma.vendor_products.findFirst({
+        where: { id: productId },
+    });
+};
+
 exports.getAllProductsPublic = async (sportsCategory) => {
     return await prisma.vendor_products.findMany({
         where: {

@@ -107,10 +107,15 @@ async function cancelSession(sessionId, cancel_reason) {
   return updateSessionStatus(sessionId, "cancelled", cancel_reason);
 }
 
+async function getSessionFeedback(sessionId) {
+  return repo.getSessionFeedback(sessionId);
+}
+
 module.exports = {
   createIndividualSession,
   getSession,
   listSessions,
   updateSessionStatus,
   cancelSession,
+  getSessionFeedback,
 };

@@ -136,4 +136,27 @@ async function getSessionHistory(studentId) {
   };
 }
 
-module.exports = { getStudentIdByUserId, getUpcomingSessions, getSessionHistory };
+async function submitFeedback(studentId, sessionId, rating, comment) {
+  const prisma = require("../../config/prisma");
+  // Verify session is completed and belongs to this student (direct or batch)
+  const session = await prisma.sessions.findFirst({
+    where: {
+      id: sessionId,
+      status: "completed",
+      OR: [
+        { student_id: studentId },
+        { session_participants: { some: { student_id: studentId } } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (!session) throw Object.assign(new Error("Session not found, not completed, or not yours"), { code: "NOT_FOUND" });
+
+  return prisma.session_feedback.upsert({
+    where: { uq_session_feedback: { session_id: sessionId, student_id: studentId } },
+    create: { session_id: sessionId, student_id: studentId, rating, comment: comment ?? null },
+    update: { rating, comment: comment ?? null },
+  });
+}
+
+module.exports = { getStudentIdByUserId, getUpcomingSessions, getSessionHistory, submitFeedback };

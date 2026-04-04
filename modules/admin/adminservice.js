@@ -8,7 +8,7 @@ const meRepo = require("../professionals/marketingExe/Registration-form/marketex
 const societyRepo = require("../student/society/societyrepo");
 const commissionService = require("../commissions/commissionservice");
 
-const SOCIETY_CATEGORY_DISPLAY = { A_: "A+", A: "A", B: "B" };
+const SOCIETY_CATEGORY_DISPLAY = { A_: "A+", A: "A", B: "B", custom: "custom" };
 
 const VALID_SECTIONS = ["school", "society", "individual_coaching", "personal_tutor"];
 
@@ -26,12 +26,15 @@ exports.listFeeStructures = async (section) => {
     const rows = await adminRepo.getFeeStructures(coachingType);
 
     const formatFee = (f) => ({
+        id:                f.id,
         coaching_type:     f.coaching_type,
         society_category:  f.society_category ? (SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category) : null,
         standard:          f.standard ?? null,
         term_months:       f.term_months,
         total_fee:         parseFloat(f.total_fee),
         effective_monthly: f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
+        last_edited_by:    f.last_edited_by ?? null,
+        last_edited_at:    f.last_edited_at ?? null,
     });
 
     if (section === "school") {
@@ -156,6 +159,37 @@ exports.listStudents = async (type) => {
                     specified_game: r.professionals?.trainers?.[0]?.specified_game ?? null,
                 }
                 : null,
+        }));
+    }
+
+    if (type === "school_student") {
+        const rows = await adminRepo.getAllSchoolStudents();
+        return rows.map((r) => ({
+            school_student_id: r.id,
+            student_name: r.student_name ?? r.students?.users?.full_name ?? null,
+            mobile: r.students?.users?.mobile ?? null,
+            standard: r.standard,
+            activities: r.activities,
+            kit_type: r.kit_type,
+            school_id: r.schools?.id ?? null,
+            school_name: r.schools?.school_name ?? null,
+            created_at: r.created_at,
+        }));
+    }
+
+    if (type === "group_coaching") {
+        const rows = await adminRepo.getAllGroupCoachingStudents();
+        return rows.map((r) => ({
+            individual_participant_id: r.id,
+            student_name: r.students?.users?.full_name ?? null,
+            mobile: r.students?.users?.mobile ?? null,
+            activity: r.activity,
+            flat_no: r.flat_no,
+            dob: r.dob,
+            age: r.age,
+            kits: r.kits,
+            society_id: r.society_id ?? r.societies?.id ?? null,
+            society_name: r.society_name ?? r.societies?.society_name ?? null,
         }));
     }
 
@@ -328,6 +362,129 @@ exports.getApprovedSchools = async () => {
     return await adminRepo.getApprovedSchools();
 };
 
+// ── Fee structure upsert ───────────────────────────────────────────────────
+
+const VALID_COACHING_TYPES = ["school_student", "group_coaching", "individual_coaching", "personal_tutor"];
+
+exports.upsertFeeStructure = async (feeData, adminUserId, feeId) => {
+    if (feeId) {
+        const existing = await adminRepo.getFeeStructureById(Number(feeId));
+        if (!existing) throw new Error("FEE_STRUCTURE_NOT_FOUND");
+        return await adminRepo.updateFeeStructureById(feeId, {
+            total_fee:         feeData.total_fee,
+            effective_monthly: feeData.effective_monthly,
+            adminUserId,
+        });
+    }
+    if (!VALID_COACHING_TYPES.includes(feeData.coaching_type)) throw new Error("INVALID_COACHING_TYPE");
+    const societyCategory = feeData.society_category === "A+" ? "A_" : (feeData.society_category ?? null);
+    return await adminRepo.createFeeStructure({ ...feeData, society_category: societyCategory, adminUserId });
+};
+
+// ── Admin societies ────────────────────────────────────────────────────────
+
+const SOCIETY_CAT_DISPLAY = { A_: "A+", A: "A", B: "B", custom: "custom" };
+
+exports.getAllSocietiesAdmin = async () => {
+    const rows = await adminRepo.getAllSocietiesAdmin();
+    return rows.map((r) => ({
+        ...r,
+        society_category: r.society_category ? (SOCIETY_CAT_DISPLAY[r.society_category] ?? r.society_category) : null,
+        student_count: r._count?.individual_participants ?? 0,
+        me: r.professionals
+            ? { professional_id: r.professionals.id, full_name: r.professionals.users?.full_name ?? null, referral_code: r.professionals.referral_code }
+            : null,
+        _count: undefined,
+        professionals: undefined,
+    }));
+};
+
+exports.getSocietyAdminById = async (id) => {
+    const r = await adminRepo.getSocietyAdminById(Number(id));
+    if (!r) throw new Error("SOCIETY_NOT_FOUND");
+    return {
+        ...r,
+        society_category: r.society_category ? (SOCIETY_CAT_DISPLAY[r.society_category] ?? r.society_category) : null,
+        me: r.professionals
+            ? { professional_id: r.professionals.id, full_name: r.professionals.users?.full_name ?? null, referral_code: r.professionals.referral_code }
+            : null,
+        professionals: undefined,
+    };
+};
+
+exports.adminRegisterSociety = async (data, adminUserId) => {
+    let meProfessionalId = null;
+    if (data.referralCode) {
+        const me = await adminRepo.findMEByReferralCode(data.referralCode);
+        if (!me) throw new Error("ME_NOT_FOUND");
+        meProfessionalId = me.id;
+    }
+    const societyId = await adminRepo.adminInsertSociety(data, meProfessionalId, adminUserId);
+    if (meProfessionalId) {
+        commissionService.calculateMEOnboardingCommission("society", {
+            id: societyId,
+            me_professional_id: meProfessionalId,
+            no_of_flats: data.noOfFlats ? Number(data.noOfFlats) : 0,
+        }).catch(() => {});
+    }
+    return { message: "Society registered.", society_id: societyId };
+};
+
+// ── Admin schools ──────────────────────────────────────────────────────────
+
+exports.getAllSchoolsAdmin = async () => {
+    const rows = await adminRepo.getAllSchoolsAdmin();
+    return rows.map((r) => ({
+        ...r,
+        student_count: r._count?.school_students ?? 0,
+        me: r.professionals
+            ? { professional_id: r.professionals.id, full_name: r.professionals.users?.full_name ?? null, referral_code: r.professionals.referral_code }
+            : null,
+        _count: undefined,
+        professionals: undefined,
+    }));
+};
+
+exports.getSchoolAdminById = async (id) => {
+    const r = await adminRepo.getSchoolAdminById(Number(id));
+    if (!r) throw new Error("SCHOOL_NOT_FOUND");
+    return {
+        ...r,
+        me: r.professionals
+            ? { professional_id: r.professionals.id, full_name: r.professionals.users?.full_name ?? null, referral_code: r.professionals.referral_code }
+            : null,
+        professionals: undefined,
+    };
+};
+
+exports.adminRegisterSchool = async (data, adminUserId) => {
+    let meProfessionalId = null;
+    if (data.referralCode) {
+        const me = await adminRepo.findMEByReferralCode(data.referralCode);
+        if (!me) throw new Error("ME_NOT_FOUND");
+        meProfessionalId = me.id;
+    }
+    const schoolId = await adminRepo.adminInsertSchool(data, meProfessionalId);
+    if (meProfessionalId) {
+        commissionService.calculateMEOnboardingCommission("school", {
+            id: schoolId,
+            me_professional_id: meProfessionalId,
+        }).catch(() => {});
+    }
+    return { message: "School registered.", school_id: schoolId };
+};
+
+// ── ME dropdown ────────────────────────────────────────────────────────────
+
+exports.getMEList = async () => {
+    const rows = await adminRepo.getAllMEList();
+    return rows.map((r) => ({
+        professional_id: r.id,
+        full_name: r.users?.full_name ?? null,
+        referral_code: r.referral_code,
+    }));
+};
+
 exports.assignTeacher = async (personalTutorId, teacherProfessionalId) => {
     const pt = await adminRepo.findPersonalTutorById(personalTutorId);
     if (!pt) throw new Error("PERSONAL_TUTOR_NOT_FOUND");
@@ -379,12 +536,23 @@ exports.listCommissions = async (filters) => {
     return await adminRepo.listCommissions(filters);
 };
 
+exports.approveCommission = async (id) => {
+    const commission = await adminRepo.getCommissionById(id);
+    if (!commission) throw new Error("COMMISSION_NOT_FOUND");
+    if (commission.status !== "on_hold" && commission.status !== "pending")
+        throw new Error("COMMISSION_NOT_APPROVABLE");
+
+    return await adminRepo.approveCommission(id);
+};
+
 exports.markCommissionPaid = async (id) => {
     const commission = await adminRepo.getCommissionById(id);
     if (!commission) throw new Error("COMMISSION_NOT_FOUND");
     if (commission.status === "paid") throw new Error("ALREADY_PAID");
+    if (commission.status === "on_hold") throw new Error("COMMISSION_NOT_APPROVED");
 
-    return await adminRepo.markCommissionPaid(id);
+    const amount = parseFloat(commission.commission_amount);
+    return await adminRepo.markCommissionPaid(id, amount, commission.professional_id);
 };
 
 // ── Travelling allowances list ─────────────────────────────────────────────

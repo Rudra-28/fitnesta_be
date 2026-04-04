@@ -24,6 +24,10 @@ const handleUpload = (req, res, next) => {
 // ── Dashboard Summary ──────────────────────────────────────────────────────
 router.get("/summary", meGuard, controller.getSummary);
 
+// ── Earnings / Wallet ──────────────────────────────────────────────────────
+router.get("/earnings", meGuard, controller.getEarnings);
+router.get("/wallet/:status", meGuard, controller.getWalletBreakdown);       // GET /api/v1/me-dashboard/wallet/pending|approved|paid
+
 // ── Society ────────────────────────────────────────────────────────────────
 router.post("/society", meGuard, handleUpload, controller.registerSociety);
 router.get("/societies", meGuard, controller.getMySocieties);

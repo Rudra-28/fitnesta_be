@@ -53,6 +53,12 @@ exports.updateProduct = async (userId, productId, data) => {
 };
 
 // ── Public: Get All Products ───────────────────────────────────────────────
+exports.getProductByIdPublic = async (productId) => {
+    const product = await repo.getProductByIdPublic(productId);
+    if (!product) throw new Error("Product not found.");
+    return { success: true, data: product };
+};
+
 exports.getAllProductsPublic = async (sportsCategory) => {
     const products = await repo.getAllProductsPublic(sportsCategory);
     return { success: true, total: products.length, data: products };

@@ -8,6 +8,26 @@ const handleErr = (err, res) => {
     });
 };
 
+// ── Earnings ─────────────────────────────────────────────────────────────────
+
+exports.getEarnings = async (req, res) => {
+    try {
+        const data = await service.getEarnings(req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) {
+        handleErr(err, res);
+    }
+};
+
+exports.getWalletBreakdown = async (req, res) => {
+    try {
+        const data = await service.getWalletBreakdown(req.me.userId, req.params.status);
+        res.json({ success: true, data });
+    } catch (err) {
+        handleErr(err, res);
+    }
+};
+
 // ── Dashboard Summary ────────────────────────────────────────────────────────
 
 exports.getSummary = async (req, res) => {

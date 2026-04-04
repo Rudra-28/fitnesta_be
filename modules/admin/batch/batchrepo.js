@@ -35,6 +35,8 @@ async function getBatchById(id) {
   });
 }
 
+
+
 async function listBatches({ batch_type, society_id, school_id, activity_id } = {}) {
   const where = { is_active: true };
   if (batch_type) where.batch_type = batch_type;

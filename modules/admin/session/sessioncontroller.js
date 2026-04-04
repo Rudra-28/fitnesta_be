@@ -66,10 +66,20 @@ async function cancelSession(req, res) {
   }
 }
 
+async function getSessionFeedback(req, res) {
+  try {
+    const feedback = await service.getSessionFeedback(req.params.sessionId);
+    return res.json({ success: true, data: feedback });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 module.exports = {
   createSession,
   listSessions,
   getSession,
   updateSessionStatus,
   cancelSession,
+  getSessionFeedback,
 };

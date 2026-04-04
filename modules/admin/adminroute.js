@@ -16,9 +16,18 @@ router.get("/professionals", controller.listProfessionals);                // GE
 // ── Activities (for batch creation dropdown) ──────────────────────────────
 router.get("/activities", controller.listActivities);                              // GET /api/v1/admin/activities?coaching_type=group_coaching
 
-// ── Societies & Schools (for batch creation dropdowns) ────────────────────
-router.get("/societies", controller.getApprovedSocieties);                         // GET /api/v1/admin/societies
-router.get("/schools", controller.getApprovedSchools);                             // GET /api/v1/admin/schools
+// ── Societies ─────────────────────────────────────────────────────────────
+router.get("/societies", controller.getAllSocietiesAdmin);                          // GET  /api/v1/admin/societies
+router.get("/societies/:id", controller.getSocietyAdminById);                      // GET  /api/v1/admin/societies/:id
+router.post("/societies", controller.adminRegisterSociety);                        // POST /api/v1/admin/societies
+
+// ── Schools ───────────────────────────────────────────────────────────────
+router.get("/schools", controller.getAllSchoolsAdmin);                              // GET  /api/v1/admin/schools
+router.get("/schools/:id", controller.getSchoolAdminById);                         // GET  /api/v1/admin/schools/:id
+router.post("/schools", controller.adminRegisterSchool);                           // POST /api/v1/admin/schools
+
+// ── ME dropdown ───────────────────────────────────────────────────────────
+router.get("/me-list", controller.getMEList);                                      // GET  /api/v1/admin/me-list
 
 // ── All students list (assigned + unassigned) ─────────────────────────────
 router.get("/students", controller.listStudents);                              // GET /api/v1/admin/students?type=personal_tutor|individual_coaching
@@ -30,7 +39,9 @@ router.post("/assign/teacher", controller.assignTeacher);                     //
 router.post("/assign/trainer", controller.assignTrainer);                     // POST /api/v1/admin/assign/trainer
 
 // ── Fee structures ────────────────────────────────────────────────────────
-router.get("/fee-structures", controller.listFeeStructures);               // GET /api/v1/admin/fee-structures?section=school|society|individual_coaching|personal_tutor
+router.get("/fee-structures", controller.listFeeStructures);               // GET  /api/v1/admin/fee-structures?section=school|society|individual_coaching|personal_tutor
+router.post("/fee-structures", controller.upsertFeeStructure);             // POST /api/v1/admin/fee-structures
+router.put("/fee-structures/:id", controller.upsertFeeStructure);          // PUT  /api/v1/admin/fee-structures/:id
 
 // ── Commission rules (admin can view and edit rates) ──────────────────────
 router.get("/commission-rules", controller.listCommissionRules);              // GET  /api/v1/admin/commission-rules
@@ -38,8 +49,9 @@ router.put("/commission-rules/:ruleKey", controller.updateCommissionRule);    //
 
 // ── Commissions earned by professionals ───────────────────────────────────
 // Filters: ?professional_type=trainer|teacher|marketing_executive  &status=pending|paid  &professional_id=5
-router.get("/commissions", controller.listCommissions);                       // GET  /api/v1/admin/commissions
-router.patch("/commissions/:id/mark-paid", controller.markCommissionPaid);    // PATCH /api/v1/admin/commissions/3/mark-paid
+router.get("/commissions", controller.listCommissions);                          // GET  /api/v1/admin/commissions
+router.patch("/commissions/:id/approve", controller.approveCommission);          // PATCH /api/v1/admin/commissions/3/approve
+router.patch("/commissions/:id/mark-paid", controller.markCommissionPaid);       // PATCH /api/v1/admin/commissions/3/mark-paid
 
 // ── Trainer travelling allowances ─────────────────────────────────────────
 // Filters: ?trainer_professional_id=5  &status=pending|paid

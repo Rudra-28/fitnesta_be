@@ -45,6 +45,15 @@ exports.updateProduct = async (req, res) => {
     }
 };
 
+exports.getProductByIdPublic = async (req, res) => {
+    try {
+        const result = await service.getProductByIdPublic(Number(req.params.id));
+        res.json(result);
+    } catch (err) {
+        res.status(err.message === "Product not found." ? 404 : 500).json({ success: false, error: err.message });
+    }
+};
+
 exports.getAllProductsPublic = async (req, res) => {
     try {
         const result = await service.getAllProductsPublic(req.query.category);

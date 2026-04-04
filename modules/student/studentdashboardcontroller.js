@@ -18,4 +18,15 @@ async function getSessionHistory(req, res) {
   }
 }
 
-module.exports = { getUpcomingSessions, getSessionHistory };
+async function submitFeedback(req, res) {
+  try {
+    const { rating, comment } = req.body;
+    const data = await service.submitFeedback(req.user.userId, req.params.id, Number(rating), comment);
+    return res.status(201).json({ success: true, data });
+  } catch (err) {
+    const status = err.code === "NOT_FOUND" ? 404 : err.code === "INVALID" ? 400 : 500;
+    return res.status(status).json({ success: false, message: err.message });
+  }
+}
+
+module.exports = { getUpcomingSessions, getSessionHistory, submitFeedback };

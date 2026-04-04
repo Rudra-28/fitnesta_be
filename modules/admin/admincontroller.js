@@ -13,9 +13,9 @@ exports.listFeeStructures = async (req, res) => {
 
 exports.listStudents = async (req, res) => {
     try {
-        const { type } = req.query; // personal_tutor | individual_coaching
+        const { type } = req.query; // personal_tutor | individual_coaching | school_student | group_coaching
         if (!type) {
-            return res.status(400).json({ success: false, error: "Query param 'type' is required (personal_tutor | individual_coaching)" });
+            return res.status(400).json({ success: false, error: "Query param 'type' is required (personal_tutor | individual_coaching | school_student | group_coaching)" });
         }
         const data = await service.listStudents(type);
         res.json({ success: true, count: data.length, data });
@@ -94,7 +94,7 @@ exports.getAvailableProfessionals = async (req, res) => {
 
 exports.getApprovedSocieties = async (req, res) => {
     try {
-        const data = await service.getApprovedSocieties();
+        const data = await service.getAllSocietiesAdmin();
         res.json({ success: true, count: data.length, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -103,7 +103,72 @@ exports.getApprovedSocieties = async (req, res) => {
 
 exports.getApprovedSchools = async (req, res) => {
     try {
-        const data = await service.getApprovedSchools();
+        const data = await service.getAllSchoolsAdmin();
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getAllSocietiesAdmin = exports.getApprovedSocieties;
+
+exports.getSocietyAdminById = async (req, res) => {
+    try {
+        const data = await service.getSocietyAdminById(req.params.id);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "SOCIETY_NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.adminRegisterSociety = async (req, res) => {
+    try {
+        const result = await service.adminRegisterSociety(req.body, req.admin.userId);
+        res.status(201).json({ success: true, ...result });
+    } catch (err) {
+        const status = err.message === "ME_NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getAllSchoolsAdmin = exports.getApprovedSchools;
+
+exports.getSchoolAdminById = async (req, res) => {
+    try {
+        const data = await service.getSchoolAdminById(req.params.id);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "SCHOOL_NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.adminRegisterSchool = async (req, res) => {
+    try {
+        const result = await service.adminRegisterSchool(req.body, req.admin.userId);
+        res.status(201).json({ success: true, ...result });
+    } catch (err) {
+        const status = err.message === "ME_NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.upsertFeeStructure = async (req, res) => {
+    try {
+        const data = await service.upsertFeeStructure(req.body, req.admin.userId, req.params.id ?? null);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "INVALID_COACHING_TYPE"    ? 400
+                     : err.message === "FEE_STRUCTURE_NOT_FOUND"  ? 404
+                     : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getMEList = async (req, res) => {
+    try {
+        const data = await service.getMEList();
         res.json({ success: true, count: data.length, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -186,13 +251,26 @@ exports.listCommissions = async (req, res) => {
     }
 };
 
+exports.approveCommission = async (req, res) => {
+    try {
+        const result = await service.approveCommission(req.params.id);
+        res.json({ success: true, data: result });
+    } catch (err) {
+        const status = err.message === "COMMISSION_NOT_FOUND"      ? 404
+                     : err.message === "COMMISSION_NOT_APPROVABLE" ? 409
+                     : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 exports.markCommissionPaid = async (req, res) => {
     try {
         const result = await service.markCommissionPaid(req.params.id);
         res.json({ success: true, data: result });
     } catch (err) {
-        const status = err.message === "COMMISSION_NOT_FOUND" ? 404
-                     : err.message === "ALREADY_PAID"         ? 409
+        const status = err.message === "COMMISSION_NOT_FOUND"    ? 404
+                     : err.message === "ALREADY_PAID"            ? 409
+                     : err.message === "COMMISSION_NOT_APPROVED" ? 422
                      : 500;
         res.status(status).json({ success: false, error: err.message });
     }

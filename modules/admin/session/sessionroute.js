@@ -10,5 +10,6 @@ router.get("/", controller.listSessions);                                      /
 router.get("/:sessionId", controller.getSession);                              // GET    /api/v1/admin/sessions/:sessionId
 router.put("/:sessionId/status", controller.updateSessionStatus);              // PUT    /api/v1/admin/sessions/:sessionId/status
 router.delete("/:sessionId", controller.cancelSession);                        // DELETE /api/v1/admin/sessions/:sessionId
+router.get("/:sessionId/feedback", controller.getSessionFeedback);             // GET    /api/v1/admin/sessions/:sessionId/feedback
 
 module.exports = router;

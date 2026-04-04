@@ -52,6 +52,8 @@ exports.recordCommission = async ({
     baseAmount,
     commissionRate,
     commissionAmount,
+    status = "pending",
+    skipWallet = false,
 }) => {
     await prisma.$transaction(async (tx) => {
         await tx.commissions.create({
@@ -63,16 +65,17 @@ exports.recordCommission = async ({
                 base_amount:       baseAmount,
                 commission_rate:   commissionRate,
                 commission_amount: commissionAmount,
-                status:            "pending",
+                status,
             },
         });
 
-        // Upsert wallet: create with initial balance if first commission, else increment
-        await tx.wallets.upsert({
-            where:  { professional_id: professionalId },
-            create: { professional_id: professionalId, balance: commissionAmount },
-            update: { balance: { increment: commissionAmount }, updated_at: new Date() },
-        });
+        if (!skipWallet) {
+            await tx.wallets.upsert({
+                where:  { professional_id: professionalId },
+                create: { professional_id: professionalId, balance: commissionAmount },
+                update: { balance: { increment: commissionAmount }, updated_at: new Date() },
+            });
+        }
     });
 };
 
@@ -221,4 +224,157 @@ exports.markTravellingAllowancePaid = async (id) => {
         where: { id: Number(id) },
         data:  { status: "paid", updated_at: new Date() },
     });
+};
+
+// ── ME Earnings Summary ────────────────────────────────────────────────────
+
+/**
+ * Returns earnings breakdown for a marketing executive:
+ *   total_earnings = sum of all commission_amounts
+ *   pending        = on_hold commissions (not yet admin-approved)
+ *   approved       = admin-approved but threshold not yet met / not yet paid
+ *   paid           = paid out
+ */
+exports.getMEEarningsSummary = async (meProfessionalId) => {
+    const rows = await prisma.commissions.groupBy({
+        by:     ["status"],
+        where:  { professional_id: meProfessionalId, professional_type: "marketing_executive" },
+        _sum:   { commission_amount: true },
+    });
+
+    const byStatus = Object.fromEntries(
+        rows.map((r) => [r.status, parseFloat(r._sum.commission_amount ?? 0)])
+    );
+
+    const pending  = byStatus.on_hold  ?? 0;
+    const approved = byStatus.approved ?? 0;
+    const paid     = byStatus.paid     ?? 0;
+    const total    = pending + approved + paid;
+
+    return { total_earnings: total, pending, approved, paid };
+};
+
+/**
+ * Approve a single on_hold commission (admin action).
+ * Does NOT credit wallet — wallet is credited on payment (markCommissionPaid).
+ */
+exports.approveCommission = async (id) => {
+    return await prisma.commissions.update({
+        where: { id: Number(id) },
+        data:  { status: "approved" },
+    });
+};
+
+/**
+ * Count group-coaching students in a society or school for this ME's commission threshold.
+ * Excludes personal_tutor students — only group_coaching student_type counts.
+ */
+exports.countGroupStudentsForEntity = async ({ societyId, schoolId }) => {
+    if (societyId) {
+        return await prisma.individual_participants.count({
+            where: {
+                society_id: societyId,
+                students:   { student_type: "group_coaching" },
+            },
+        });
+    }
+    if (schoolId) {
+        return await prisma.school_students.count({ where: { school_id: schoolId } });
+    }
+    return 0;
+};
+
+/**
+ * Release all on_hold commissions for a given ME + entity (society or school).
+ * Sets status → 'pending' and credits the ME's wallet for each record atomically.
+ *
+ * @param {number} meProfessionalId
+ * @param {string} sourceType  — 'group_coaching_society' | 'group_coaching_school'
+ * @param {number} entityId    — societyId or schoolId (matched via source_id on the commission's admission chain)
+ *
+ * We identify the held commissions by professional_id + source_type + status = on_hold.
+ * For society: source_id is the student's user_id and there's no direct entity link on the
+ * commissions row, so we scope by professional_id + source_type + status only.
+ * The caller is responsible for only invoking this once the threshold is confirmed.
+ */
+// ── Professional Wallet ────────────────────────────────────────────────────
+
+/**
+ * Wallet summary for any professional: totals by status bucket.
+ * pending  = on_hold + pending (not yet admin-approved or still waiting)
+ * approved = admin has approved, not yet paid out
+ * paid     = paid out
+ */
+exports.getWalletSummary = async (professionalId) => {
+    const rows = await prisma.commissions.groupBy({
+        by:    ["status"],
+        where: { professional_id: professionalId },
+        _sum:  { commission_amount: true },
+    });
+
+    const byStatus = Object.fromEntries(
+        rows.map((r) => [r.status, parseFloat(r._sum.commission_amount ?? 0)])
+    );
+
+    return {
+        pending:  (byStatus.on_hold ?? 0) + (byStatus.pending ?? 0),
+        approved: byStatus.approved ?? 0,
+        paid:     byStatus.paid     ?? 0,
+    };
+};
+
+/**
+ * Itemized commission rows for a professional filtered by wallet bucket.
+ * bucketStatus: 'pending' maps to on_hold + pending rows; 'approved' or 'paid' map directly.
+ */
+exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
+    const statusFilter =
+        bucketStatus === "pending"
+            ? { status: { in: ["on_hold", "pending"] } }
+            : { status: bucketStatus };
+
+    return await prisma.commissions.findMany({
+        where:   { professional_id: professionalId, ...statusFilter },
+        select: {
+            id:                true,
+            source_type:       true,
+            source_id:         true,
+            base_amount:       true,
+            commission_rate:   true,
+            commission_amount: true,
+            status:            true,
+            created_at:        true,
+        },
+        orderBy: { created_at: "desc" },
+    });
+};
+
+exports.releaseHeldCommissions = async (meProfessionalId, sourceType) => {
+    const held = await prisma.commissions.findMany({
+        where: {
+            professional_id: meProfessionalId,
+            source_type:     sourceType,
+            status:          "on_hold",
+        },
+        select: { id: true, commission_amount: true },
+    });
+
+    if (held.length === 0) return 0;
+
+    const totalAmount = held.reduce((sum, c) => sum + parseFloat(c.commission_amount), 0);
+    const ids         = held.map((c) => c.id);
+
+    await prisma.$transaction(async (tx) => {
+        await tx.commissions.updateMany({
+            where: { id: { in: ids } },
+            data:  { status: "pending" },
+        });
+        await tx.wallets.upsert({
+            where:  { professional_id: meProfessionalId },
+            create: { professional_id: meProfessionalId, balance: totalAmount },
+            update: { balance: { increment: totalAmount }, updated_at: new Date() },
+        });
+    });
+
+    return held.length;
 };

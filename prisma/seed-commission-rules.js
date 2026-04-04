@@ -80,6 +80,14 @@ const RULES = [
         value:             2.00,
     },
 
+    {
+        rule_key:          "me_group_admission_min_students",
+        professional_type: "marketing_executive",
+        description:       "Minimum number of group_coaching students in a society or school required before ME's on_hold group coaching commissions are released",
+        rule_type:         "flat",
+        value:             20.00,
+    },
+
     // ── Marketing Executive — onboarding commissions ─────────────────────────
     {
         rule_key:          "me_society_above_100_flats",
