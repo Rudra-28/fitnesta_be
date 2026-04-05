@@ -350,6 +350,52 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
     });
 };
 
+/**
+ * Full transaction history for a professional.
+ * Optional filters: status, source_type, page, limit.
+ */
+exports.getTransactionHistory = async (professionalId, { status, source_type, page = 1, limit = 20 } = {}) => {
+    const skip = (page - 1) * limit;
+
+    const statusFilter = status === "pending"
+        ? { status: { in: ["on_hold", "pending"] } }
+        : status ? { status } : {};
+
+    const where = {
+        professional_id: professionalId,
+        ...statusFilter,
+        ...(source_type && { source_type }),
+    };
+
+    const [total, rows] = await Promise.all([
+        prisma.commissions.count({ where }),
+        prisma.commissions.findMany({
+            where,
+            select: {
+                id:                true,
+                source_type:       true,
+                source_id:         true,
+                base_amount:       true,
+                commission_rate:   true,
+                commission_amount: true,
+                status:            true,
+                created_at:        true,
+            },
+            orderBy: { created_at: "desc" },
+            skip,
+            take:  limit,
+        }),
+    ]);
+
+    return {
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit),
+        transactions: rows,
+    };
+};
+
 // ── Withdrawal flow ────────────────────────────────────────────────────────
 
 /**

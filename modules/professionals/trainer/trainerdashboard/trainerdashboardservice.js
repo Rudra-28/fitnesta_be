@@ -136,21 +136,48 @@ async function getWalletSummary(userId) {
 async function getWalletBreakdown(userId, status) {
   if (!VALID_WALLET_STATUSES.includes(status))
     throw Object.assign(new Error(`Invalid status. Allowed: ${VALID_WALLET_STATUSES.join(", ")}`), { code: "BAD_REQUEST" });
-  const professionalId = await repo.getTrainerProfessionalId(userId);
-  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
-  return commissionRepo.getWalletBreakdown(professionalId, status);
+  return commissionRepo.getWalletBreakdown(await _resolveTrainer(userId), status);
 }
 
-async function requestWithdrawal(userId) {
-  const professionalId = await repo.getTrainerProfessionalId(userId);
-  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
-  return withdrawalService.requestWithdrawal(professionalId);
+async function getTransactionHistory(userId, filters) {
+  return commissionRepo.getTransactionHistory(await _resolveTrainer(userId), filters);
 }
 
-async function saveUpiId(userId, upiId) {
-  const professionalId = await repo.getTrainerProfessionalId(userId);
-  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
-  return withdrawalService.saveUpiId(professionalId, upiId);
+async function _resolveTrainer(userId) {
+  const id = await repo.getTrainerProfessionalId(userId);
+  if (!id) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
+  return id;
 }
 
-module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, requestWithdrawal, saveUpiId };
+async function withdrawRequest(userId) {
+  return withdrawalService.withdrawRequest(await _resolveTrainer(userId));
+}
+
+async function withdrawNow(userId) {
+  return withdrawalService.withdrawNow(await _resolveTrainer(userId));
+}
+
+async function savePayoutDetails(userId, body) {
+  return withdrawalService.savePayoutDetails(await _resolveTrainer(userId), body);
+}
+
+async function getSportsActivities(userId) {
+  const professionalId = await repo.getTrainerProfessionalId(userId);
+  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
+  return repo.getSportsActivities(professionalId);
+}
+
+async function getSessionsByActivity(userId, activityId, activityName, status) {
+  const VALID = ["upcoming", "ongoing", "completed", "cancelled"];
+  if (status && !VALID.includes(status)) {
+    throw Object.assign(new Error(`Invalid status. Allowed: ${VALID.join(", ")}`), { code: "BAD_REQUEST" });
+  }
+  if (!activityId && !activityName) {
+    throw Object.assign(new Error("Provide activity_id or activity_name as query param"), { code: "BAD_REQUEST" });
+  }
+  const professionalId = await repo.getTrainerProfessionalId(userId);
+  if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
+  return repo.getSessionsByActivity(professionalId, activityId ? Number(activityId) : null, activityName ?? null, status ?? null);
+}
+
+module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, getTransactionHistory, withdrawRequest, withdrawNow, savePayoutDetails, getSportsActivities, getSessionsByActivity };

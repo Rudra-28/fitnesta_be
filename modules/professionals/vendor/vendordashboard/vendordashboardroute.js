@@ -29,8 +29,10 @@ router.patch("/orders/:order_id/status",     vendorGuard, kitOrderController.upd
 
 // ── Wallet ─────────────────────────────────────────────────────────────────
 router.get("/wallet",           vendorGuard, controller.getWalletSummary);    // GET  /api/v1/vendor-dashboard/wallet
-router.get("/wallet/:status",   vendorGuard, controller.getWalletBreakdown);  // GET  /api/v1/vendor-dashboard/wallet/pending|approved|requested|paid
-router.put("/wallet/upi",       vendorGuard, controller.saveUpiId);           // PUT  /api/v1/vendor-dashboard/wallet/upi
-router.post("/wallet/withdraw", vendorGuard, controller.requestWithdrawal);   // POST /api/v1/vendor-dashboard/wallet/withdraw
+router.get("/wallet/transactions",   vendorGuard, controller.getTransactionHistory);  // GET /api/v1/vendor-dashboard/wallet/transactions
+router.get("/wallet/:status",   vendorGuard, controller.getWalletBreakdown);
+router.put("/wallet/payout-details",              vendorGuard, controller.savePayoutDetails);       // PUT  /api/v1/vendor-dashboard/wallet/payout-details
+router.post("/wallet/withdraw-request", vendorGuard, controller.withdrawRequest); // POST /api/v1/vendor-dashboard/wallet/withdraw-request
+router.post("/wallet/withdraw-now",     vendorGuard, controller.withdrawNow);     // POST /api/v1/vendor-dashboard/wallet/withdraw-now
 
 module.exports = router;

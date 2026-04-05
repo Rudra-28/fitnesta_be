@@ -20,8 +20,10 @@ router.post("/sessions/:id/start", teacherGuard, controller.startSession);
 router.post("/sessions/:id/end", teacherGuard, controller.endSession);
 
 router.get("/wallet", teacherGuard, controller.getWalletSummary);                            // GET  /api/v1/teacher-dashboard/wallet
-router.get("/wallet/:status", teacherGuard, controller.getWalletBreakdown);                 // GET  /api/v1/teacher-dashboard/wallet/pending|approved|requested|paid
-router.put("/wallet/upi", teacherGuard, controller.saveUpiId);                              // PUT  /api/v1/teacher-dashboard/wallet/upi
-router.post("/wallet/withdraw", teacherGuard, controller.requestWithdrawal);                // POST /api/v1/teacher-dashboard/wallet/withdraw
+router.get("/wallet/transactions", teacherGuard, controller.getTransactionHistory);  // GET /api/v1/teacher-dashboard/wallet/transactions
+router.get("/wallet/:status", teacherGuard, controller.getWalletBreakdown);
+router.put("/wallet/payout-details", teacherGuard, controller.savePayoutDetails);                              // PUT  /api/v1/teacher-dashboard/wallet/payout-details
+router.post("/wallet/withdraw-request", teacherGuard, controller.withdrawRequest);          // POST /api/v1/teacher-dashboard/wallet/withdraw-request
+router.post("/wallet/withdraw-now", teacherGuard, controller.withdrawNow);                  // POST /api/v1/teacher-dashboard/wallet/withdraw-now
 
 module.exports = router;

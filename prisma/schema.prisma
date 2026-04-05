@@ -17,6 +17,7 @@ model activities {
   fee_structures  fee_structures[]
   trainer_batches trainer_batches[]
   batches         batches[]
+  sessions        sessions[]
 }
 
 model admins {
@@ -170,9 +171,13 @@ model professionals {
   adhar_card              String?                        @db.VarChar(255)
   relative_name           String?                        @db.VarChar(100)
   relative_contact        String?                        @db.VarChar(15)
-  upi_id                  String?                        @db.VarChar(100)
-  razorpay_contact_id     String?                        @db.VarChar(100)
-  razorpay_fund_account_id String?                       @db.VarChar(100)
+  upi_id                   String?                        @db.VarChar(100)
+  bank_account_number      String?                        @db.VarChar(30)
+  bank_ifsc                String?                        @db.VarChar(15)
+  bank_account_name        String?                        @db.VarChar(100)
+  payout_method            String?                        @db.VarChar(10)  // "upi" | "bank"
+  razorpay_contact_id      String?                        @db.VarChar(100)
+  razorpay_fund_account_id String?                        @db.VarChar(100)
   own_two_wheeler         Boolean?
   communication_languages String?                        @db.Text
   place                   String?                        @db.VarChar(100)
@@ -713,6 +718,7 @@ model sessions {
   start_time       DateTime               @db.Time(0)
   end_time         DateTime               @db.Time(0)
   status           sessions_status?       @default(scheduled)
+  activity_id      Int?
   cancel_reason    String?                @db.VarChar(255)
   in_time          DateTime?              @db.Timestamp(0)
   out_time         DateTime?              @db.Timestamp(0)
@@ -720,6 +726,7 @@ model sessions {
   updated_at       DateTime?              @default(now()) @db.Timestamp(0)
 
   batches              batches?           @relation(fields: [batch_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  activities           activities?        @relation(fields: [activity_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   students             students?          @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   professionals        professionals      @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   session_participants session_participants[]

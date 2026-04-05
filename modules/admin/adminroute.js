@@ -54,8 +54,8 @@ router.patch("/commissions/:id/approve", controller.approveCommission);         
 router.patch("/commissions/:id/mark-paid", controller.markCommissionPaid);       // PATCH /api/v1/admin/commissions/3/mark-paid
 
 // ── Withdrawal requests ────────────────────────────────────────────────────
-router.get("/withdrawals", controller.listWithdrawalRequests);                               // GET   /api/v1/admin/withdrawals
-router.patch("/withdrawals/:professionalId/process", controller.processWithdrawal);          // PATCH /api/v1/admin/withdrawals/5/process
+router.get("/withdrawals", controller.listWithdrawalRequests);                               // GET   /api/v1/admin/withdrawals  — lists all professionals with requested status
+router.patch("/withdrawals/:professionalId/approve", controller.approveWithdrawal);          // PATCH /api/v1/admin/withdrawals/5/approve
 
 // ── Trainer travelling allowances ─────────────────────────────────────────
 // Filters: ?trainer_professional_id=5  &status=pending|paid

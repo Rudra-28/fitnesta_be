@@ -242,6 +242,178 @@ async function getSessionById(sessionId, professionalId) {
   });
 }
 
+// ── Sports / Activity section ────────────────────────────────────────────────
+
+// Returns all distinct activities (by id+name) that this trainer has sessions for,
+// with a total session count per activity.
+// Split a comma-separated activity string into individual trimmed names
+function splitActivityString(raw) {
+  if (!raw) return [];
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+async function getSportsActivities(professionalId) {
+  // Load all activities from the master table for name→id resolution
+  const allActivities = await prisma.activities.findMany({ select: { id: true, name: true } });
+  const activityByName = {};
+  for (const a of allActivities) activityByName[a.name.toLowerCase().trim()] = a;
+
+  // 1. Batch-based sessions (group_coaching, school_student)
+  const batches = await prisma.batches.findMany({
+    where: { professional_id: Number(professionalId), is_active: true },
+    select: {
+      activity_id: true,
+      activities: { select: { id: true, name: true } },
+      _count: { select: { sessions: true } },
+    },
+  });
+
+  // 2. Individual coaching — activity stored as comma-separated string in individual_participants
+  const indivParticipants = await prisma.individual_participants.findMany({
+    where: { trainer_professional_id: Number(professionalId) },
+    select: { activity: true, student_id: true },
+  });
+
+  const activityMap = {};
+
+  for (const b of batches) {
+    const id   = b.activity_id;
+    const name = b.activities?.name ?? "Unknown";
+    if (!activityMap[id]) activityMap[id] = { activity_id: id, activity_name: name, session_count: 0 };
+    activityMap[id].session_count += b._count.sessions;
+  }
+
+  // Split comma-separated activity strings and count per individual activity name
+  const indivCountMap = {};
+  for (const p of indivParticipants) {
+    const parts = splitActivityString(p.activity);
+    for (const part of parts) {
+      indivCountMap[part] = (indivCountMap[part] ?? 0) + 1;
+    }
+  }
+
+  for (const [rawName, cnt] of Object.entries(indivCountMap)) {
+    const matched    = activityByName[rawName.toLowerCase()];
+    const resolvedId = matched?.id ?? null;
+    const resolvedName = matched?.name ?? rawName;
+
+    if (resolvedId !== null && activityMap[resolvedId]) {
+      activityMap[resolvedId].session_count += cnt;
+    } else if (resolvedId !== null) {
+      activityMap[resolvedId] = { activity_id: resolvedId, activity_name: resolvedName, session_count: cnt };
+    } else {
+      const key = `unresolved_${rawName}`;
+      activityMap[key] = { activity_id: null, activity_name: rawName, session_count: cnt };
+    }
+  }
+
+  return Object.values(activityMap).sort((a, b) => a.activity_name.localeCompare(b.activity_name));
+}
+
+// Returns all sessions for this trainer filtered by activity.
+// activity_id filters batch-based sessions; activity_name filters individual_coaching sessions.
+// Both are OR'd together when the activity name matches a batch activity.
+// Map logical status names to Prisma-valid status filters
+function resolveStatusFilter(status) {
+  if (!status) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (status === "upcoming") return { scheduled_date: { gte: today }, status: { in: ["scheduled", "ongoing"] } };
+  return { status };
+}
+
+async function getSessionsByActivity(professionalId, activityId, activityName, status) {
+  const sessions = [];
+  const statusFilter = resolveStatusFilter(status);
+
+  // ── 1. Batch-based sessions (group_coaching + school_student) ────────────
+  if (activityId) {
+    const batchWhere = {
+      professional_id: Number(professionalId),
+      batches: { activity_id: Number(activityId) },
+      ...(statusFilter ?? {}),
+    };
+
+    const batchSessions = await prisma.sessions.findMany({
+      where: batchWhere,
+      include: {
+        batches: {
+          select: {
+            id: true, batch_name: true, batch_type: true,
+            activities: { select: { id: true, name: true } },
+            societies:  { select: { id: true, society_name: true } },
+            schools:    { select: { id: true, school_name: true } },
+            _count:     { select: { batch_students: true } },
+          },
+        },
+        students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+        _count: { select: { session_participants: true } },
+      },
+      orderBy: [{ scheduled_date: "desc" }, { start_time: "asc" }],
+    });
+    sessions.push(...batchSessions.map((s) => ({ ...s, coaching_type: s.session_type })));
+  }
+
+  // ── 2. Individual coaching sessions (batch_id IS NULL) ──────────────────
+  // New sessions have activity_id set directly on the session row.
+  // Legacy sessions (activity_id IS NULL) fall back to name-matching via individual_participants.
+  const indivBaseWhere = {
+    professional_id: Number(professionalId),
+    session_type: "individual_coaching",
+    ...(statusFilter ?? {}),
+  };
+
+  // Resolve activity name for legacy fallback
+  let resolvedActivityName = activityName;
+  if (activityId && !resolvedActivityName) {
+    const act = await prisma.activities.findUnique({ where: { id: Number(activityId) }, select: { name: true } });
+    resolvedActivityName = act?.name ?? null;
+  }
+
+  // Legacy: find student_ids via individual_participants name-match (only for null activity_id sessions)
+  const allParticipants = await prisma.individual_participants.findMany({
+    where: { trainer_professional_id: Number(professionalId) },
+    select: { student_id: true, activity: true },
+  });
+  const legacyStudentIds = resolvedActivityName
+    ? [...new Set(
+        allParticipants
+          .filter((p) => splitActivityString(p.activity).some((part) => part.toLowerCase() === resolvedActivityName.toLowerCase()))
+          .map((p) => p.student_id).filter(Boolean)
+      )]
+    : [];
+
+  const orClauses = [];
+  if (activityId) orClauses.push({ activity_id: Number(activityId) });
+  if (legacyStudentIds.length > 0) orClauses.push({ activity_id: null, student_id: { in: legacyStudentIds } });
+
+  if (orClauses.length > 0) {
+    const indivSessionWhere = { ...indivBaseWhere, OR: orClauses };
+
+    const indivSessions = await prisma.sessions.findMany({
+      where: indivSessionWhere,
+      include: {
+        students: {
+          select: {
+            id: true,
+            users: { select: { full_name: true, mobile: true, photo: true } },
+            individual_participants: {
+              where: { trainer_professional_id: Number(professionalId) },
+              select: { activity: true },
+            },
+          },
+        },
+        activities: { select: { id: true, name: true } },
+        _count: { select: { session_participants: true } },
+      },
+      orderBy: [{ scheduled_date: "desc" }, { start_time: "asc" }],
+    });
+    sessions.push(...indivSessions.map((s) => ({ ...s, coaching_type: "individual_coaching" })));
+  }
+
+  return sessions;
+}
+
 async function punchIn(sessionId) {
   return prisma.sessions.update({
     where: { id: Number(sessionId) },
@@ -270,4 +442,6 @@ module.exports = {
   getBatchSessions,
   punchIn,
   punchOut,
+  getSportsActivities,
+  getSessionsByActivity,
 };

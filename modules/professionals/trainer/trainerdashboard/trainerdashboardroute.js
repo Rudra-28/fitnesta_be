@@ -14,9 +14,13 @@ router.get("/students", trainerGuard, controller.getAllStudents);               
 router.get("/students/:studentId/sessions", trainerGuard, controller.getStudentSessions);  // GET /api/v1/trainer-dashboard/students/:studentId/sessions?status=
 router.get("/batches", trainerGuard, controller.getBatchesByLocation);                     // GET /api/v1/trainer-dashboard/batches?location=society|school
 router.get("/batches/all", trainerGuard, controller.getTrainerBatches);                    // GET /api/v1/trainer-dashboard/batches/all                        // GET   /api/v1/trainer-dashboard/batches useless for now
+router.get("/sports", trainerGuard, controller.getSportsActivities);                        // GET /api/v1/trainer-dashboard/sports
+router.get("/sports/sessions", trainerGuard, controller.getSessionsByActivity);            // GET /api/v1/trainer-dashboard/sports/sessions?activity_id=1&status=upcoming
 router.get("/wallet", trainerGuard, controller.getWalletSummary);                             // GET  /api/v1/trainer-dashboard/wallet
-router.get("/wallet/:status", trainerGuard, controller.getWalletBreakdown);                  // GET  /api/v1/trainer-dashboard/wallet/pending|approved|requested|paid
-router.put("/wallet/upi", trainerGuard, controller.saveUpiId);                               // PUT  /api/v1/trainer-dashboard/wallet/upi
-router.post("/wallet/withdraw", trainerGuard, controller.requestWithdrawal);                 // POST /api/v1/trainer-dashboard/wallet/withdraw
+router.get("/wallet/transactions", trainerGuard, controller.getTransactionHistory);  // GET /api/v1/trainer-dashboard/wallet/transactions
+router.get("/wallet/:status", trainerGuard, controller.getWalletBreakdown);
+router.put("/wallet/payout-details", trainerGuard, controller.savePayoutDetails);                               // PUT  /api/v1/trainer-dashboard/wallet/payout-details
+router.post("/wallet/withdraw-request", trainerGuard, controller.withdrawRequest);           // POST /api/v1/trainer-dashboard/wallet/withdraw-request
+router.post("/wallet/withdraw-now", trainerGuard, controller.withdrawNow);                   // POST /api/v1/trainer-dashboard/wallet/withdraw-now
 
 module.exports = router;

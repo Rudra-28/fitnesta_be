@@ -42,14 +42,24 @@ exports.getWalletBreakdown = async (meUserId, status) => {
     return await commissionRepo.getWalletBreakdown(professional.id, status);
 };
 
-exports.requestWithdrawal = async (meUserId) => {
-    const professional = await getMeProfessional(meUserId);
-    return withdrawalService.requestWithdrawal(professional.id);
+exports.getTransactionHistory = async (meUserId, filters) => {
+    const p = await getMeProfessional(meUserId);
+    return commissionRepo.getTransactionHistory(p.id, filters);
 };
 
-exports.saveUpiId = async (meUserId, upiId) => {
-    const professional = await getMeProfessional(meUserId);
-    return withdrawalService.saveUpiId(professional.id, upiId);
+exports.withdrawRequest = async (meUserId) => {
+    const p = await getMeProfessional(meUserId);
+    return withdrawalService.withdrawRequest(p.id);
+};
+
+exports.withdrawNow = async (meUserId) => {
+    const p = await getMeProfessional(meUserId);
+    return withdrawalService.withdrawNow(p.id);
+};
+
+exports.savePayoutDetails = async (meUserId, body) => {
+    const p = await getMeProfessional(meUserId);
+    return withdrawalService.savePayoutDetails(p.id, body);
 };
 
 // ── Society ───────────────────────────────────────────────────────────────────

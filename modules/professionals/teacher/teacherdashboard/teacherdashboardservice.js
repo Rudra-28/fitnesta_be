@@ -177,16 +177,21 @@ exports.getWalletSummary = async (userId) => {
 exports.getWalletBreakdown = async (userId, status) => {
     if (!VALID_WALLET_STATUSES.includes(status))
         throw Object.assign(new Error(`Invalid status. Allowed: ${VALID_WALLET_STATUSES.join(", ")}`), { statusCode: 400 });
-    const professionalId = await resolveTeacher(userId);
-    return commissionRepo.getWalletBreakdown(professionalId, status);
+    return commissionRepo.getWalletBreakdown(await resolveTeacher(userId), status);
 };
 
-exports.requestWithdrawal = async (userId) => {
-    const professionalId = await resolveTeacher(userId);
-    return withdrawalService.requestWithdrawal(professionalId);
+exports.getTransactionHistory = async (userId, filters) => {
+    return commissionRepo.getTransactionHistory(await resolveTeacher(userId), filters);
 };
 
-exports.saveUpiId = async (userId, upiId) => {
-    const professionalId = await resolveTeacher(userId);
-    return withdrawalService.saveUpiId(professionalId, upiId);
+exports.withdrawRequest = async (userId) => {
+    return withdrawalService.withdrawRequest(await resolveTeacher(userId));
+};
+
+exports.withdrawNow = async (userId) => {
+    return withdrawalService.withdrawNow(await resolveTeacher(userId));
+};
+
+exports.savePayoutDetails = async (userId, body) => {
+    return withdrawalService.savePayoutDetails(await resolveTeacher(userId), body);
 };

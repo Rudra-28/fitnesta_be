@@ -14,6 +14,7 @@ async function createIndividualSession({
   scheduled_date,
   start_time,
   end_time,
+  activity_id,
 }) {
   // Only personal_tutor and individual_coaching are allowed as individual sessions
   if (!["personal_tutor", "individual_coaching"].includes(session_type)) {
@@ -69,6 +70,7 @@ async function createIndividualSession({
   return repo.createSession({
     session_type,
     batch_id: null,
+    activity_id: activity_id ? Number(activity_id) : null,
     student_id: Number(student_id),
     professional_id: Number(professional_id),
     scheduled_date: date,

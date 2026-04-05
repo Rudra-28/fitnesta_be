@@ -37,22 +37,39 @@ exports.getWalletBreakdown = async (req, res) => {
     }
 };
 
-exports.requestWithdrawal = async (req, res) => {
+exports.getTransactionHistory = async (req, res) => {
     try {
-        const data = await service.requestWithdrawal(req.me.userId);
-        res.json({ success: true, message: "Withdrawal initiated via Razorpay", data });
+        const { status, source_type, page, limit } = req.query;
+        const data = await service.getTransactionHistory(req.me.userId, {
+            status, source_type,
+            page:  page  ? Number(page)  : 1,
+            limit: limit ? Number(limit) : 20,
+        });
+        res.json({ success: true, ...data });
     } catch (err) {
         handleErr(err, res);
     }
 };
 
-exports.saveUpiId = async (req, res) => {
+exports.withdrawRequest = async (req, res) => {
     try {
-        await service.saveUpiId(req.me.userId, req.body.upi_id);
-        res.json({ success: true, message: "UPI ID saved successfully" });
-    } catch (err) {
-        handleErr(err, res);
-    }
+        const data = await service.withdrawRequest(req.me.userId);
+        res.json({ success: true, message: "Withdrawal request submitted", data });
+    } catch (err) { handleErr(err, res); }
+};
+
+exports.withdrawNow = async (req, res) => {
+    try {
+        const data = await service.withdrawNow(req.me.userId);
+        res.json({ success: true, message: "Transfer initiated via Razorpay", data });
+    } catch (err) { handleErr(err, res); }
+};
+
+exports.savePayoutDetails = async (req, res) => {
+    try {
+        await service.savePayoutDetails(req.me.userId, req.body);
+        res.json({ success: true, message: "Payout details saved successfully" });
+    } catch (err) { handleErr(err, res); }
 };
 
 // ── Dashboard Summary ────────────────────────────────────────────────────────

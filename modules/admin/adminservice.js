@@ -561,11 +561,9 @@ exports.listWithdrawalRequests = async () => {
     return await adminRepo.listWithdrawalRequests();
 };
 
-exports.processWithdrawal = async (professionalId) => {
-    const result = await adminRepo.markWithdrawalsPaid(professionalId);
-    if (result.count === 0)
-        throw new Error("NO_REQUESTED_WITHDRAWALS");
-    return result;
+exports.approveWithdrawal = async (professionalId) => {
+    const withdrawalService = require("../commissions/withdrawalservice");
+    return withdrawalService.approveWithdrawal(Number(professionalId));
 };
 
 // ── Travelling allowances list ─────────────────────────────────────────────

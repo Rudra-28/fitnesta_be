@@ -92,20 +92,43 @@ exports.getWalletBreakdown = async (req, res) => {
     }
 };
 
-exports.requestWithdrawal = async (req, res) => {
+exports.getTransactionHistory = async (req, res) => {
     try {
-        const data = await service.requestWithdrawal(req.vendor.id);
-        res.json({ success: true, message: "Withdrawal initiated via Razorpay", data });
+        const { status, source_type, page, limit } = req.query;
+        const data = await service.getTransactionHistory(req.vendor.id, {
+            status, source_type,
+            page:  page  ? Number(page)  : 1,
+            limit: limit ? Number(limit) : 20,
+        });
+        res.json({ success: true, ...data });
     } catch (err) {
         res.status(err.statusCode || 500).json({ success: false, message: err.message });
     }
 };
 
-exports.saveUpiId = async (req, res) => {
+exports.withdrawRequest = async (req, res) => {
     try {
-        await service.saveUpiId(req.vendor.id, req.body.upi_id);
-        res.json({ success: true, message: "UPI ID saved successfully" });
+        const data = await service.withdrawRequest(req.vendor.id);
+        res.json({ success: true, message: "Withdrawal request submitted", data });
     } catch (err) {
-        res.status(err.statusCode || 500).json({ success: false, message: err.message });
+        res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+};
+
+exports.withdrawNow = async (req, res) => {
+    try {
+        const data = await service.withdrawNow(req.vendor.id);
+        res.json({ success: true, message: "Transfer initiated via Razorpay", data });
+    } catch (err) {
+        res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+};
+
+exports.savePayoutDetails = async (req, res) => {
+    try {
+        await service.savePayoutDetails(req.vendor.id, req.body);
+        res.json({ success: true, message: "Payout details saved successfully" });
+    } catch (err) {
+        res.status(err.statusCode || 400).json({ success: false, message: err.message });
     }
 };

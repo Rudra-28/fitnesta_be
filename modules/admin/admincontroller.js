@@ -287,12 +287,12 @@ exports.listWithdrawalRequests = async (req, res) => {
     }
 };
 
-exports.processWithdrawal = async (req, res) => {
+exports.approveWithdrawal = async (req, res) => {
     try {
-        const result = await service.processWithdrawal(Number(req.params.professionalId));
-        res.json({ success: true, message: "Withdrawal processed successfully", data: result });
+        const result = await service.approveWithdrawal(req.params.professionalId);
+        res.json({ success: true, message: "Withdrawal approved. Professional can now withdraw.", data: result });
     } catch (err) {
-        const status = err.message === "NO_REQUESTED_WITHDRAWALS" ? 404 : 500;
+        const status = err.statusCode || 500;
         res.status(status).json({ success: false, error: err.message });
     }
 };

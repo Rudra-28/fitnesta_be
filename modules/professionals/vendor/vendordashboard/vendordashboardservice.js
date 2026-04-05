@@ -91,12 +91,22 @@ exports.getWalletBreakdown = async (userId, status) => {
     return commissionRepo.getWalletBreakdown(professionalId, status);
 };
 
-exports.requestWithdrawal = async (userId) => {
+exports.getTransactionHistory = async (userId, filters) => {
     const { professionalId } = await resolveVendor(userId);
-    return withdrawalService.requestWithdrawal(professionalId);
+    return commissionRepo.getTransactionHistory(professionalId, filters);
 };
 
-exports.saveUpiId = async (userId, upiId) => {
+exports.withdrawRequest = async (userId) => {
     const { professionalId } = await resolveVendor(userId);
-    return withdrawalService.saveUpiId(professionalId, upiId);
+    return withdrawalService.withdrawRequest(professionalId);
+};
+
+exports.withdrawNow = async (userId) => {
+    const { professionalId } = await resolveVendor(userId);
+    return withdrawalService.withdrawNow(professionalId);
+};
+
+exports.savePayoutDetails = async (userId, body) => {
+    const { professionalId } = await resolveVendor(userId);
+    return withdrawalService.savePayoutDetails(professionalId, body);
 };
