@@ -12,7 +12,7 @@ const SERVICE_MAP = {
     group_coaching:      icService, // group coaching reuses the same finalizeRegistration
     personal_tutor:      ptService,
     school_student:      ssService,
-    kit_order:           { finalizeRegistration: (_, paymentId, __, orderId) => kitOrderService.finalizeKitOrder(orderId, paymentId) },
+    kit_order:           kitOrderService,
 };
 
 /**

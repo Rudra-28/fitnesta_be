@@ -12,7 +12,7 @@ module.exports = (req, res, next) => {
         if (decoded.role !== "professional" || decoded.subrole !== "vendor") {
             return res.status(403).json({ success: false, message: "Access denied. Vendors only." });
         }
-        req.vendor = decoded;
+        req.vendor = { ...decoded, id: decoded.userId };
         next();
     } catch (err) {
         return res.status(401).json({ success: false, message: "Invalid or expired token." });

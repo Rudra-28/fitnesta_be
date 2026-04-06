@@ -99,6 +99,30 @@ exports.getOrderByIdForVendor = async (orderId, vendorId) => {
     });
 };
 
+// ── Student side ───────────────────────────────────────────────────────────
+exports.getOrdersByStudent = async (studentUserId) => {
+    return await prisma.kit_orders.findMany({
+        where: { student_user_id: studentUserId },
+        orderBy: { created_at: "desc" },
+        include: {
+            vendor_products: {
+                select: { product_name: true, sports_category: true, age_groups: true, product_image: true },
+            },
+        },
+    });
+};
+
+exports.getOrderByIdForStudent = async (orderId, studentUserId) => {
+    return await prisma.kit_orders.findFirst({
+        where: { id: orderId, student_user_id: studentUserId },
+        include: {
+            vendor_products: {
+                select: { product_name: true, sports_category: true, age_groups: true, product_image: true, description: true },
+            },
+        },
+    });
+};
+
 // ── Vendor side ────────────────────────────────────────────────────────────
 exports.getOrdersByVendor = async (vendorId) => {
     return await prisma.kit_orders.findMany({

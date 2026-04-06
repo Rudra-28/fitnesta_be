@@ -2,6 +2,18 @@ const express = require("express");
 const router = express.Router();
 const guard = require("./adminmiddleware");
 const controller = require("./admincontroller");
+const upload = require("../../utils/fileupload");
+
+const docUpload = upload.fields([{ name: "activityAgreementPdf", maxCount: 1 }]);
+const handleUpload = (req, res, next) => {
+    docUpload(req, res, (err) => {
+        if (err && err.code === "LIMIT_UNEXPECTED_FILE") {
+            return res.status(400).json({ success: false, error: `Unexpected file field "${err.field}". Expected: activityAgreementPdf` });
+        }
+        if (err) return res.status(400).json({ success: false, error: err.message });
+        next();
+    });
+};
 
 router.use(guard); // every route below requires a valid admin JWT
 
@@ -19,12 +31,12 @@ router.get("/activities", controller.listActivities);                           
 // ── Societies ─────────────────────────────────────────────────────────────
 router.get("/societies", controller.getAllSocietiesAdmin);                          // GET  /api/v1/admin/societies
 router.get("/societies/:id", controller.getSocietyAdminById);                      // GET  /api/v1/admin/societies/:id
-router.post("/societies", controller.adminRegisterSociety);                        // POST /api/v1/admin/societies
+router.post("/societies", handleUpload, controller.adminRegisterSociety);           // POST /api/v1/admin/societies
 
 // ── Schools ───────────────────────────────────────────────────────────────
 router.get("/schools", controller.getAllSchoolsAdmin);                              // GET  /api/v1/admin/schools
 router.get("/schools/:id", controller.getSchoolAdminById);                         // GET  /api/v1/admin/schools/:id
-router.post("/schools", controller.adminRegisterSchool);                           // POST /api/v1/admin/schools
+router.post("/schools", handleUpload, controller.adminRegisterSchool);              // POST /api/v1/admin/schools
 
 // ── ME dropdown ───────────────────────────────────────────────────────────
 router.get("/me-list", controller.getMEList);                                      // GET  /api/v1/admin/me-list
@@ -39,9 +51,14 @@ router.post("/assign/teacher", controller.assignTeacher);                     //
 router.post("/assign/trainer", controller.assignTrainer);                     // POST /api/v1/admin/assign/trainer
 
 // ── Fee structures ────────────────────────────────────────────────────────
+router.get("/fee-structures/custom-categories", controller.listCustomFeeCategories); // GET  /api/v1/admin/fee-structures/custom-categories?type=society|school
 router.get("/fee-structures", controller.listFeeStructures);               // GET  /api/v1/admin/fee-structures?section=school|society|individual_coaching|personal_tutor
 router.post("/fee-structures", controller.upsertFeeStructure);             // POST /api/v1/admin/fee-structures
 router.put("/fee-structures/:id", controller.upsertFeeStructure);          // PUT  /api/v1/admin/fee-structures/:id
+
+// ── Payments ───────────────────────────────────────────────────────────────
+// Filters: ?service_type=personal_tutor|individual_coaching|...  &status=captured|refunded|failed  &user_id=5  &from=&to=
+router.get("/payments", controller.listPayments);                           // GET  /api/v1/admin/payments
 
 // ── Commission rules (admin can view and edit rates) ──────────────────────
 router.get("/commission-rules", controller.listCommissionRules);              // GET  /api/v1/admin/commission-rules
@@ -61,5 +78,38 @@ router.patch("/withdrawals/:professionalId/approve", controller.approveWithdrawa
 // Filters: ?trainer_professional_id=5  &status=pending|paid
 router.get("/travelling-allowances", controller.listTravellingAllowances);              // GET  /api/v1/admin/travelling-allowances
 router.patch("/travelling-allowances/:id/mark-paid", controller.markTravellingAllowancePaid); // PATCH /api/v1/admin/travelling-allowances/7/mark-paid
+
+// ── Trainer/teacher assignments ───────────────────────────────────────────
+// Filters: ?professional_id=5  &is_active=true|false
+router.get("/assignments", controller.listTrainerAssignments);                              // GET   /api/v1/admin/assignments
+router.patch("/assignments/:id/sessions-cap", controller.updateAssignmentSessionsCap);     // PATCH /api/v1/admin/assignments/3/sessions-cap  { sessions_allocated: 20 }
+router.patch("/assignments/:id/deactivate", controller.deactivateAssignment);              // PATCH /api/v1/admin/assignments/3/deactivate
+
+// ── Student assignment overview (assigned + unassigned, read-only) ─────────
+// GET /api/v1/admin/student-assignments?service=personal_tutor|individual_coaching
+router.get("/student-assignments", controller.listStudentAssignments);
+
+// ── Sessions ──────────────────────────────────────────────────────────────
+// GET  /api/v1/admin/sessions?type=personal_tutor|individual_coaching|group_coaching|school&from=&to=&professional_id=&status=
+// POST /api/v1/admin/sessions  { session_type, date, start_time, end_time, student_ref_type, student_ref_id, professional_id }
+router.get("/sessions", controller.listSessions);
+router.post("/sessions", controller.createSession);
+
+// GET /api/v1/admin/sessions/student-info?type=personal_tutor|individual_coaching&id=5
+// Returns student details + subject/activity for session creation form
+router.get("/sessions/student-info", controller.getSessionStudentInfo);
+
+// ── Professionals for session creation (with busy/available flag) ─────────
+// GET /api/v1/admin/professionals/for-session?type=teacher|trainer&date=&start_time=&end_time=&subject=&activity=
+router.get("/professionals/for-session", controller.getProfessionalsForSession);
+
+// ── Batches per society or school ─────────────────────────────────────────
+router.get("/societies/:id/batches", controller.getSocietyBatches);   // GET /api/v1/admin/societies/1/batches
+router.get("/schools/:id/batches", controller.getSchoolBatches);       // GET /api/v1/admin/schools/1/batches
+
+// ── Settlement ────────────────────────────────────────────────────────────
+router.get("/settlement/preview", controller.getSettlementPreview);                        // GET  /api/v1/admin/settlement/preview?professional_id=5 (optional)
+router.post("/settlement/confirm", controller.confirmSettlement);                          // POST /api/v1/admin/settlement/confirm  { assignment_ids: [1,2,3] } (optional — omit to settle all)
+router.get("/settlement/unsettled-count", controller.getUnsettledCount);                   // GET  /api/v1/admin/settlement/unsettled-count  (dashboard badge)
 
 module.exports = router;

@@ -326,15 +326,19 @@ exports.getWalletSummary = async (professionalId) => {
 
 /**
  * Itemized commission rows for a professional filtered by wallet bucket.
+ * For trainer/teacher source_types backed by trainer_assignments, joins assignment
+ * to surface entity name, activity, assigned_from so the professional can see
+ * exactly which posting the payment relates to.
+ *
  * bucketStatus: 'pending' maps to on_hold + pending rows; 'approved' or 'paid' map directly.
  */
 exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
     const statusFilter =
         bucketStatus === "pending"
             ? { status: { in: ["on_hold", "pending"] } }
-            : { status: bucketStatus };  // covers approved | requested | paid
+            : { status: bucketStatus };
 
-    return await prisma.commissions.findMany({
+    const rows = await prisma.commissions.findMany({
         where:   { professional_id: professionalId, ...statusFilter },
         select: {
             id:                true,
@@ -347,6 +351,58 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
             created_at:        true,
         },
         orderBy: { created_at: "desc" },
+    });
+
+    // Enrich rows that reference a trainer_assignment (source_id = assignment id)
+    const assignmentSourceTypes = new Set([
+        "group_coaching_society", "group_coaching_school",
+        "individual_coaching", "personal_tutor",
+    ]);
+
+    const assignmentIds = rows
+        .filter((r) => assignmentSourceTypes.has(r.source_type))
+        .map((r) => r.source_id);
+
+    let assignmentMap = {};
+    if (assignmentIds.length > 0) {
+        const assignments = await prisma.trainer_assignments.findMany({
+            where:   { id: { in: assignmentIds } },
+            select: {
+                id:             true,
+                assignment_type: true,
+                assigned_from:  true,
+                sessions_allocated: true,
+                societies:      { select: { society_name: true } },
+                schools:        { select: { school_name: true } },
+                activities:     { select: { name: true } },
+            },
+        });
+        assignmentMap = Object.fromEntries(assignments.map((a) => [a.id, a]));
+    }
+
+    return rows.map((r) => {
+        const assignment = assignmentSourceTypes.has(r.source_type)
+            ? assignmentMap[r.source_id] ?? null
+            : null;
+        return {
+            id:                parseFloat(r.id),
+            source_type:       r.source_type,
+            source_id:         r.source_id,
+            base_amount:       parseFloat(r.base_amount),
+            commission_rate:   parseFloat(r.commission_rate),
+            commission_amount: parseFloat(r.commission_amount),
+            status:            r.status,
+            created_at:        r.created_at,
+            // Assignment context (null for ME commissions)
+            assignment: assignment ? {
+                entity_name:        assignment.societies?.society_name
+                                 ?? assignment.schools?.school_name
+                                 ?? null,
+                activity_name:      assignment.activities?.name ?? null,
+                assigned_from:      assignment.assigned_from,
+                sessions_allocated: assignment.sessions_allocated,
+            } : null,
+        };
     });
 };
 

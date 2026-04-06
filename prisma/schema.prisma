@@ -14,10 +14,11 @@ model activities {
   notes           String?           @db.VarChar(255)
   is_active       Boolean?          @default(true)
   created_at      DateTime?         @default(now()) @db.Timestamp(0)
-  fee_structures  fee_structures[]
-  trainer_batches trainer_batches[]
-  batches         batches[]
-  sessions        sessions[]
+  fee_structures      fee_structures[]
+  trainer_batches     trainer_batches[]
+  batches             batches[]
+  sessions            sessions[]
+  trainer_assignments trainer_assignments[]
 }
 
 model admins {
@@ -48,19 +49,20 @@ model commissions {
 }
 
 model fee_structures {
-  id                Int                              @id @default(autoincrement())
-  activity_id       Int
-  coaching_type     fee_structures_coaching_type
-  society_category  fee_structures_society_category?
-  standard          String?                          @db.VarChar(20)
-  term_months       Int                              @db.TinyInt
-  total_fee         Decimal                          @db.Decimal(10, 2)
-  effective_monthly Decimal?                         @db.Decimal(10, 2)
-  last_edited_by    Int?
-  last_edited_at    DateTime?                        @db.Timestamp(0)
-  activities        activities                       @relation(fields: [activity_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fee_structures_ibfk_1")
+  id                   Int                              @id @default(autoincrement())
+  activity_id          Int
+  coaching_type        fee_structures_coaching_type
+  society_category     fee_structures_society_category?
+  custom_category_name String?                          @db.VarChar(100)
+  standard             String?                          @db.VarChar(20)
+  term_months          Int                              @db.TinyInt
+  total_fee            Decimal                          @db.Decimal(10, 2)
+  effective_monthly    Decimal?                         @db.Decimal(10, 2)
+  last_edited_by       Int?
+  last_edited_at       DateTime?                        @db.Timestamp(0)
+  activities           activities                       @relation(fields: [activity_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fee_structures_ibfk_1")
 
-  @@unique([activity_id, coaching_type, society_category, standard, term_months], map: "uq_fee")
+  @@unique([activity_id, coaching_type, society_category, custom_category_name, standard, term_months], map: "uq_fee")
 }
 
 model individual_participants {
@@ -198,6 +200,7 @@ model professionals {
   pending_registrations   pending_registrations[]
   batches                 batches[]
   sessions                sessions[]
+  trainer_assignments     trainer_assignments[]
 
   @@index([user_id], map: "user_id")
 }
@@ -241,6 +244,7 @@ model schools {
   professionals                 professionals?           @relation(fields: [me_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "schools_ibfk_1")
   trainer_batches               trainer_batches[]
   batches                       batches[]
+  trainer_assignments           trainer_assignments[]
 
   @@index([me_professional_id], map: "me_professional_id")
 }
@@ -290,6 +294,7 @@ model societies {
   individual_participants       individual_participants[]
   trainer_batches               trainer_batches[]
   batches                       batches[]
+  trainer_assignments           trainer_assignments[]
 
   @@index([me_professional_id], map: "societies_fk_me")
   @@index([registered_by_user_id], map: "societies_fk_user")
@@ -324,6 +329,29 @@ model teachers {
   professionals      professionals? @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "teachers_ibfk_1")
 
   @@index([professional_id], map: "professional_id")
+}
+
+model trainer_assignments {
+  id                      Int            @id @default(autoincrement())
+  professional_id         Int
+  professional_type       String         @db.VarChar(20)  // "trainer" | "teacher"
+  assignment_type         String         @db.VarChar(30)  // "group_coaching_society" | "group_coaching_school" | "individual_coaching" | "personal_tutor"
+  society_id              Int?
+  school_id               Int?
+  activity_id             Int?
+  sessions_allocated      Int?           @db.TinyInt
+  assigned_from           DateTime       @db.Date
+  is_active               Boolean        @default(true)
+  last_settled_at         DateTime?      @db.Timestamp(0)
+  created_at              DateTime       @default(now()) @db.Timestamp(0)
+  professionals           professionals  @relation(fields: [professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  societies               societies?     @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  schools                 schools?       @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  activities              activities?    @relation(fields: [activity_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([professional_id])
+  @@index([society_id])
+  @@index([school_id])
 }
 
 model trainer_batches {

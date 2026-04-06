@@ -11,6 +11,8 @@ router.get("/products/:id", vendorController.getProductByIdPublic);
 
 // ── Kit Orders ─────────────────────────────────────────────────────────────
 router.post("/orders", studentGuard, kitOrderController.initiateKitOrder);
+router.get("/orders", studentGuard, kitOrderController.getMyOrders);
+router.get("/orders/:order_id", studentGuard, kitOrderController.getMyOrderById);
 if (process.env.DEV_SKIP_PAYMENT === "true") {
   router.post("/orders/:temp_uuid/dev-confirm", studentGuard, kitOrderController.devFinalizeKitOrder);
 }

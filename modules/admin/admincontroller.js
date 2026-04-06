@@ -11,6 +11,16 @@ exports.listFeeStructures = async (req, res) => {
     }
 };
 
+exports.listCustomFeeCategories = async (req, res) => {
+    try {
+        const { type } = req.query; // "society" or "school"
+        const data = await service.listCustomFeeCategories(type);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
 exports.listStudents = async (req, res) => {
     try {
         const { type } = req.query; // personal_tutor | individual_coaching | school_student | group_coaching
@@ -124,7 +134,11 @@ exports.getSocietyAdminById = async (req, res) => {
 
 exports.adminRegisterSociety = async (req, res) => {
     try {
-        const result = await service.adminRegisterSociety(req.body, req.admin.userId);
+        const data = { ...req.body };
+        if (req.files?.activityAgreementPdf?.[0]) {
+            data.activityAgreementPdf = req.files.activityAgreementPdf[0].path;
+        }
+        const result = await service.adminRegisterSociety(data, req.admin.userId);
         res.status(201).json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "ME_NOT_FOUND" ? 404 : 500;
@@ -146,7 +160,11 @@ exports.getSchoolAdminById = async (req, res) => {
 
 exports.adminRegisterSchool = async (req, res) => {
     try {
-        const result = await service.adminRegisterSchool(req.body, req.admin.userId);
+        const data = { ...req.body };
+        if (req.files?.activityAgreementPdf?.[0]) {
+            data.activityAgreementPdf = req.files.activityAgreementPdf[0].path;
+        }
+        const result = await service.adminRegisterSchool(data, req.admin.userId);
         res.status(201).json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "ME_NOT_FOUND" ? 404 : 500;
@@ -159,8 +177,9 @@ exports.upsertFeeStructure = async (req, res) => {
         const data = await service.upsertFeeStructure(req.body, req.admin.userId, req.params.id ?? null);
         res.json({ success: true, data });
     } catch (err) {
-        const status = err.message === "INVALID_COACHING_TYPE"    ? 400
-                     : err.message === "FEE_STRUCTURE_NOT_FOUND"  ? 404
+        const status = err.message === "INVALID_COACHING_TYPE"         ? 400
+                     : err.message === "CUSTOM_CATEGORY_NAME_REQUIRED"  ? 400
+                     : err.message === "FEE_STRUCTURE_NOT_FOUND"         ? 404
                      : 500;
         res.status(status).json({ success: false, error: err.message });
     }
@@ -210,6 +229,75 @@ exports.assignTrainer = async (req, res) => {
                      : err.message === "TRAINER_NOT_FOUND"                ? 404
                      : 500;
         res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Settlement ─────────────────────────────────────────────────────────────
+
+exports.getSettlementPreview = async (req, res) => {
+    try {
+        const professionalId = req.query.professional_id ? Number(req.query.professional_id) : null;
+        const data = await service.getSettlementPreview(professionalId);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.confirmSettlement = async (req, res) => {
+    try {
+        // assignment_ids: optional array — if omitted, settles all active assignments
+        const assignmentIds = Array.isArray(req.body.assignment_ids)
+            ? req.body.assignment_ids.map(Number)
+            : null;
+        const data = await service.confirmSettlement(assignmentIds);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getUnsettledCount = async (req, res) => {
+    try {
+        const data = await service.getUnsettledCount();
+        res.json({ success: true, ...data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.listTrainerAssignments = async (req, res) => {
+    try {
+        const { professional_id, is_active } = req.query;
+        const isActive = is_active === undefined ? undefined : is_active === "true";
+        const data = await service.listTrainerAssignments({
+            professionalId: professional_id ? Number(professional_id) : undefined,
+            isActive,
+        });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.updateAssignmentSessionsCap = async (req, res) => {
+    try {
+        const { sessions_allocated } = req.body;
+        if (!sessions_allocated) return res.status(400).json({ success: false, error: "sessions_allocated is required" });
+        const data = await service.updateAssignmentSessionsCap(req.params.id, Number(sessions_allocated));
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "INVALID_SESSIONS_ALLOCATED" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.deactivateAssignment = async (req, res) => {
+    try {
+        const data = await service.deactivateAssignment(req.params.id);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 };
 
@@ -324,6 +412,95 @@ exports.markTravellingAllowancePaid = async (req, res) => {
 // ── Reject ─────────────────────────────────────────────────────────────────
 
 // ── Activities dropdown ────────────────────────────────────────────────────
+
+// ── Payments ──────────────────────────────────────────────────────────────
+
+exports.listPayments = async (req, res) => {
+    try {
+        const { service_type, status, user_id, from, to } = req.query;
+        const data = await service.listPayments({ serviceType: service_type, status, userId: user_id, from, to });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── Student assignment overview ────────────────────────────────────────────
+
+exports.listStudentAssignments = async (req, res) => {
+    try {
+        const data = await service.listStudentAssignments(req.query.service);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── Sessions ──────────────────────────────────────────────────────────────
+
+exports.listSessions = async (req, res) => {
+    try {
+        const { type, from, to, professional_id, status } = req.query;
+        const data = await service.listSessions({ type, from, to, professionalId: professional_id, status });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.createSession = async (req, res) => {
+    try {
+        const data = await service.createSession(req.body);
+        res.status(201).json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "MISSING_REQUIRED_FIELDS" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getSessionStudentInfo = async (req, res) => {
+    try {
+        const { type, id } = req.query;
+        if (!type || !id) return res.status(400).json({ success: false, error: "type and id are required" });
+        const data = await service.getSessionStudentInfo(type, id);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "NOT_FOUND" ? 404 : err.message === "INVALID_TYPE" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getProfessionalsForSession = async (req, res) => {
+    try {
+        const { type, date, start_time, end_time, subject, activity } = req.query;
+        if (!type) return res.status(400).json({ success: false, error: "type is required (teacher | trainer)" });
+        const data = await service.getProfessionalsForSession(type, { date, startTime: start_time, endTime: end_time, subject, activity });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.message === "INVALID_TYPE" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Batches per society/school ────────────────────────────────────────────
+
+exports.getSocietyBatches = async (req, res) => {
+    try {
+        const data = await service.getSocietyBatches(req.params.id);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getSchoolBatches = async (req, res) => {
+    try {
+        const data = await service.getSchoolBatches(req.params.id);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
 
 exports.listActivities = async (req, res) => {
     try {

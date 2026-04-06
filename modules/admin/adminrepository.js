@@ -198,6 +198,7 @@ exports.getFeeStructures = async (coachingType) => {
                     id: true,
                     coaching_type: true,
                     society_category: true,
+                    custom_category_name: true,
                     standard: true,
                     term_months: true,
                     total_fee: true,
@@ -523,16 +524,31 @@ exports.markTravellingAllowancePaid = async (id) => {
 
 // ── Fee structure upsert ───────────────────────────────────────────────────
 
+exports.getCustomFeeCategories = async (coachingType) => {
+    const rows = await prisma.fee_structures.findMany({
+        where: {
+            coaching_type:    coachingType,
+            society_category: "custom",
+            custom_category_name: { not: null },
+        },
+        select: { custom_category_name: true },
+        distinct: ["custom_category_name"],
+        orderBy: { custom_category_name: "asc" },
+    });
+    return rows.map((r) => r.custom_category_name);
+};
+
 exports.getFeeStructureById = async (id) => {
     return await prisma.fee_structures.findUnique({ where: { id } });
 };
 
-exports.updateFeeStructureById = async (id, { total_fee, effective_monthly, adminUserId }) => {
+exports.updateFeeStructureById = async (id, { total_fee, effective_monthly, custom_category_name, adminUserId }) => {
     return await prisma.fee_structures.update({
         where: { id: Number(id) },
         data: {
             total_fee,
-            ...(effective_monthly !== undefined && { effective_monthly: effective_monthly ?? null }),
+            ...(effective_monthly    !== undefined && { effective_monthly:    effective_monthly ?? null }),
+            ...(custom_category_name !== undefined && { custom_category_name: custom_category_name ?? null }),
             last_edited_by: adminUserId,
             last_edited_at: new Date(),
         },
@@ -540,33 +556,36 @@ exports.updateFeeStructureById = async (id, { total_fee, effective_monthly, admi
 };
 
 exports.createFeeStructure = async (data) => {
-    const { activity_id, coaching_type, society_category, standard, term_months, total_fee, effective_monthly, adminUserId } = data;
+    const { activity_id, coaching_type, society_category, custom_category_name, standard, term_months, total_fee, effective_monthly, adminUserId } = data;
     return await prisma.fee_structures.upsert({
         where: {
-            activity_id_coaching_type_society_category_standard_term_months: {
-                activity_id: Number(activity_id),
+            activity_id_coaching_type_society_category_custom_category_name_standard_term_months: {
+                activity_id:          Number(activity_id),
                 coaching_type,
-                society_category: society_category ?? null,
-                standard: standard ?? null,
-                term_months: Number(term_months),
+                society_category:     society_category     ?? null,
+                custom_category_name: custom_category_name ?? null,
+                standard:             standard             ?? null,
+                term_months:          Number(term_months),
             },
         },
         create: {
-            activity_id: Number(activity_id),
+            activity_id:          Number(activity_id),
             coaching_type,
-            society_category: society_category ?? null,
-            standard: standard ?? null,
-            term_months: Number(term_months),
+            society_category:     society_category     ?? null,
+            custom_category_name: custom_category_name ?? null,
+            standard:             standard             ?? null,
+            term_months:          Number(term_months),
             total_fee,
-            effective_monthly: effective_monthly ?? null,
-            last_edited_by: adminUserId,
-            last_edited_at: new Date(),
+            effective_monthly:    effective_monthly ?? null,
+            last_edited_by:       adminUserId,
+            last_edited_at:       new Date(),
         },
         update: {
             total_fee,
-            effective_monthly: effective_monthly ?? null,
-            last_edited_by: adminUserId,
-            last_edited_at: new Date(),
+            effective_monthly:    effective_monthly    ?? null,
+            custom_category_name: custom_category_name ?? null,
+            last_edited_by:       adminUserId,
+            last_edited_at:       new Date(),
         },
     });
 };
@@ -782,6 +801,54 @@ exports.adminInsertSchool = async (data, meProfessionalId) => {
     return school.id;
 };
 
+// ── Trainer assignments ────────────────────────────────────────────────────
+
+exports.listTrainerAssignments = async ({ professionalId, isActive } = {}) => {
+    return await prisma.trainer_assignments.findMany({
+        where: {
+            ...(professionalId !== undefined && { professional_id: Number(professionalId) }),
+            ...(isActive       !== undefined && { is_active: isActive }),
+        },
+        include: {
+            professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
+            societies:     { select: { id: true, society_name: true } },
+            schools:       { select: { id: true, school_name: true } },
+            activities:    { select: { id: true, name: true } },
+        },
+        orderBy: { created_at: "desc" },
+    });
+};
+
+exports.updateAssignmentSessionsCap = async (assignmentId, sessionsAllocated) => {
+    return await prisma.trainer_assignments.update({
+        where: { id: Number(assignmentId) },
+        data:  { sessions_allocated: Number(sessionsAllocated) },
+    });
+};
+
+exports.deactivateAssignment = async (assignmentId) => {
+    return await prisma.trainer_assignments.update({
+        where: { id: Number(assignmentId) },
+        data:  { is_active: false },
+    });
+};
+
+// ── Unsettled assignments alert count ─────────────────────────────────────
+
+exports.countUnsettledAssignments = async (daysThreshold = 30) => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysThreshold);
+    return await prisma.trainer_assignments.count({
+        where: {
+            is_active: true,
+            OR: [
+                { last_settled_at: null,  assigned_from: { lte: cutoff } },
+                { last_settled_at: { lte: cutoff } },
+            ],
+        },
+    });
+};
+
 // ── ME lookup helpers ──────────────────────────────────────────────────────
 
 exports.findMEByReferralCode = async (referralCode) => {
@@ -849,6 +916,217 @@ exports.getAllGroupCoachingStudents = async () => {
             },
         },
         orderBy: { id: "desc" },
+    });
+};
+
+// ── Payments list ─────────────────────────────────────────────────────────
+
+exports.listPayments = async ({ serviceType, status, userId, from, to } = {}) => {
+    return await prisma.payments.findMany({
+        where: {
+            ...(serviceType && { service_type: serviceType }),
+            ...(status      && { status }),
+            ...(userId      && { student_user_id: Number(userId) }),
+            ...((from || to) ? {
+                captured_at: {
+                    ...(from && { gte: new Date(from) }),
+                    ...(to   && { lte: new Date(to) }),
+                },
+            } : {}),
+        },
+        select: {
+            id: true,
+            razorpay_order_id: true,
+            razorpay_payment_id: true,
+            service_type: true,
+            amount: true,
+            currency: true,
+            term_months: true,
+            status: true,
+            captured_at: true,
+            student_user_id: true,
+            users: { select: { id: true, full_name: true, mobile: true } },
+        },
+        orderBy: { captured_at: "desc" },
+    });
+};
+
+// ── Sessions list ──────────────────────────────────────────────────────────
+
+exports.listSessions = async ({ type, from, to, professionalId, status } = {}) => {
+    const typeMap = {
+        personal_tutor:      "personal_tutor",
+        individual_coaching: "individual_coaching",
+        group_coaching:      "group_coaching",
+        school:              "school",
+    };
+    return await prisma.sessions.findMany({
+        where: {
+            ...(type         && { session_type: typeMap[type] }),
+            ...(status       && { status }),
+            ...(professionalId && { professional_id: Number(professionalId) }),
+            ...(from || to   ? {
+                scheduled_date: {
+                    ...(from && { gte: new Date(from) }),
+                    ...(to   && { lte: new Date(to) }),
+                },
+            } : {}),
+        },
+        select: {
+            id: true,
+            session_type: true,
+            scheduled_date: true,
+            start_time: true,
+            end_time: true,
+            status: true,
+            batch_id: true,
+            student_id: true,
+            professional_id: true,
+            activity_id: true,
+            batches: { select: { id: true, batch_name: true } },
+            students: { select: { id: true, users: { select: { full_name: true } } } },
+            professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
+            activities: { select: { id: true, name: true } },
+        },
+        orderBy: { scheduled_date: "desc" },
+    });
+};
+
+exports.createSession = async (data) => {
+    return await prisma.sessions.create({ data });
+};
+
+// Returns the personal_tutor or individual_participant record with full student details
+exports.getPersonalTutorForSession = async (id) => {
+    return await prisma.personal_tutors.findUnique({
+        where: { id: Number(id) },
+        select: {
+            id: true,
+            standard: true,
+            batch: true,
+            teacher_for: true,
+            dob: true,
+            teacher_professional_id: true,
+            students: {
+                select: {
+                    id: true,
+                    users: { select: { full_name: true, mobile: true, address: true } },
+                },
+            },
+        },
+    });
+};
+
+exports.getIndividualParticipantForSession = async (id) => {
+    return await prisma.individual_participants.findUnique({
+        where: { id: Number(id) },
+        select: {
+            id: true,
+            activity: true,
+            flat_no: true,
+            society_name: true,
+            dob: true,
+            age: true,
+            trainer_professional_id: true,
+            societies: { select: { id: true, society_name: true, address: true } },
+            students: {
+                select: {
+                    id: true,
+                    users: { select: { full_name: true, mobile: true, address: true } },
+                },
+            },
+        },
+    });
+};
+
+// Professionals for session creation with busy/available at the given slot
+exports.getProfessionalsForSession = async (professionType, { date, startTime, endTime, subject, activity } = {}) => {
+    const parseTime = (t) => {
+        if (!t) return undefined;
+        const [h, m, s = "0"] = String(t).split(":");
+        return new Date(1970, 0, 1, Number(h), Number(m), Number(s));
+    };
+    const st = parseTime(startTime);
+    const et = parseTime(endTime);
+
+    let busyIds = new Set();
+    if (date && st && et) {
+        const conflicts = await prisma.sessions.findMany({
+            where: {
+                scheduled_date: new Date(date),
+                status: { notIn: ["cancelled"] },
+                AND: [{ start_time: { lt: et } }, { end_time: { gt: st } }],
+                professionals: { profession_type: professionType },
+            },
+            select: { professional_id: true },
+            distinct: ["professional_id"],
+        });
+        busyIds = new Set(conflicts.map((r) => r.professional_id));
+    }
+
+    const whereDetails = professionType === "teacher"
+        ? { teachers: subject ? { some: { subject: { contains: subject } } } : { some: {} } }
+        : { trainers: activity ? { some: { specified_game: { contains: activity } } } : { some: {} } };
+
+    const rows = await prisma.professionals.findMany({
+        where: {
+            profession_type: professionType,
+            users: { approval_status: "approved" },
+            ...whereDetails,
+        },
+        select: {
+            id: true,
+            place: true,
+            users: { select: { full_name: true, mobile: true, address: true } },
+            teachers: { select: { subject: true, experience_details: true } },
+            trainers: { select: { category: true, specified_game: true, experience_details: true } },
+        },
+    });
+
+    return rows.map((r) => ({ ...r, is_available: !busyIds.has(r.id) }));
+};
+
+// ── Batches per society or school ──────────────────────────────────────────
+
+exports.getBatchesBySociety = async (societyId) => {
+    return await prisma.batches.findMany({
+        where: { society_id: Number(societyId) },
+        select: {
+            id: true,
+            batch_type: true,
+            batch_name: true,
+            days_of_week: true,
+            start_time: true,
+            end_time: true,
+            start_date: true,
+            end_date: true,
+            is_active: true,
+            activities: { select: { id: true, name: true } },
+            professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
+            _count: { select: { batch_students: true } },
+        },
+        orderBy: { created_at: "desc" },
+    });
+};
+
+exports.getBatchesBySchool = async (schoolId) => {
+    return await prisma.batches.findMany({
+        where: { school_id: Number(schoolId) },
+        select: {
+            id: true,
+            batch_type: true,
+            batch_name: true,
+            days_of_week: true,
+            start_time: true,
+            end_time: true,
+            start_date: true,
+            end_date: true,
+            is_active: true,
+            activities: { select: { id: true, name: true } },
+            professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
+            _count: { select: { batch_students: true } },
+        },
+        orderBy: { created_at: "desc" },
     });
 };
 

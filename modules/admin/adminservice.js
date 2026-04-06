@@ -26,34 +26,49 @@ exports.listFeeStructures = async (section) => {
     const rows = await adminRepo.getFeeStructures(coachingType);
 
     const formatFee = (f) => ({
-        id:                f.id,
-        coaching_type:     f.coaching_type,
-        society_category:  f.society_category ? (SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category) : null,
-        standard:          f.standard ?? null,
-        term_months:       f.term_months,
-        total_fee:         parseFloat(f.total_fee),
-        effective_monthly: f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
-        last_edited_by:    f.last_edited_by ?? null,
-        last_edited_at:    f.last_edited_at ?? null,
+        id:                   f.id,
+        coaching_type:        f.coaching_type,
+        society_category:     f.society_category ? (SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category) : null,
+        custom_category_name: f.custom_category_name ?? null,
+        standard:             f.standard ?? null,
+        term_months:          f.term_months,
+        total_fee:            parseFloat(f.total_fee),
+        effective_monthly:    f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
+        last_edited_by:       f.last_edited_by ?? null,
+        last_edited_at:       f.last_edited_at ?? null,
     });
 
-    if (section === "school") {
-        // School: flat list per activity, no society_category or standard
-        return rows.map((a) => ({
-            activity_id:   a.id,
-            activity_name: a.name,
-            fees:          a.fee_structures.map(formatFee),
-        }));
-    }
-
     if (section === "society") {
-        // Society (group_coaching): group by activity → then by society_category (A+/A/B)
+        // Society (group_coaching): group by activity → then by society_category (A+/A/B/custom name)
         return rows.map((a) => {
             const byCategory = {};
             for (const f of a.fee_structures) {
-                const cat = SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category ?? "ALL";
+                const cat = f.society_category === "custom"
+                    ? (f.custom_category_name ?? "custom")
+                    : (SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category ?? "ALL");
                 if (!byCategory[cat]) byCategory[cat] = [];
                 byCategory[cat].push({
+                    id:                f.id,
+                    term_months:       f.term_months,
+                    total_fee:         parseFloat(f.total_fee),
+                    effective_monthly: f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
+                });
+            }
+            return { activity_id: a.id, activity_name: a.name, by_category: byCategory };
+        });
+    }
+
+    if (section === "school") {
+        // School: group by activity → then by custom_category_name (or "default" for no category)
+        return rows.map((a) => {
+            const byCategory = {};
+            for (const f of a.fee_structures) {
+                const cat = f.society_category === "custom"
+                    ? (f.custom_category_name ?? "custom")
+                    : "default";
+                if (!byCategory[cat]) byCategory[cat] = [];
+                byCategory[cat].push({
+                    id:                f.id,
                     term_months:       f.term_months,
                     total_fee:         parseFloat(f.total_fee),
                     effective_monthly: f.effective_monthly !== null ? parseFloat(f.effective_monthly) : null,
@@ -362,6 +377,13 @@ exports.getApprovedSchools = async () => {
     return await adminRepo.getApprovedSchools();
 };
 
+// ── Fee structure custom categories dropdown ──────────────────────────────
+
+exports.listCustomFeeCategories = async (type) => {
+    const coachingType = type === "school" ? "school_student" : "group_coaching";
+    return await adminRepo.getCustomFeeCategories(coachingType);
+};
+
 // ── Fee structure upsert ───────────────────────────────────────────────────
 
 const VALID_COACHING_TYPES = ["school_student", "group_coaching", "individual_coaching", "personal_tutor"];
@@ -371,13 +393,18 @@ exports.upsertFeeStructure = async (feeData, adminUserId, feeId) => {
         const existing = await adminRepo.getFeeStructureById(Number(feeId));
         if (!existing) throw new Error("FEE_STRUCTURE_NOT_FOUND");
         return await adminRepo.updateFeeStructureById(feeId, {
-            total_fee:         feeData.total_fee,
-            effective_monthly: feeData.effective_monthly,
+            total_fee:            feeData.total_fee,
+            effective_monthly:    feeData.effective_monthly,
+            custom_category_name: feeData.custom_category_name,
             adminUserId,
         });
     }
     if (!VALID_COACHING_TYPES.includes(feeData.coaching_type)) throw new Error("INVALID_COACHING_TYPE");
     const societyCategory = feeData.society_category === "A+" ? "A_" : (feeData.society_category ?? null);
+    // When society_category is 'custom', custom_category_name is required
+    if (societyCategory === "custom" && !feeData.custom_category_name) {
+        throw new Error("CUSTOM_CATEGORY_NAME_REQUIRED");
+    }
     return await adminRepo.createFeeStructure({ ...feeData, society_category: societyCategory, adminUserId });
 };
 
@@ -494,8 +521,8 @@ exports.assignTeacher = async (personalTutorId, teacherProfessionalId) => {
 
     await adminRepo.assignTeacherToStudent(personalTutorId, teacherProfessionalId);
 
-    // Calculate teacher commission (fire-and-forget — never throws)
-    await commissionService.calculateTeacherCommission(personalTutorId, teacherProfessionalId);
+    // Record assignment for settlement (fire-and-forget)
+    await commissionService.recordTeacherAssignment(personalTutorId, teacherProfessionalId);
 
     return { message: "Teacher assigned successfully." };
 };
@@ -509,10 +536,39 @@ exports.assignTrainer = async (individualParticipantId, trainerProfessionalId) =
 
     await adminRepo.assignTrainerToStudent(individualParticipantId, trainerProfessionalId);
 
-    // Calculate trainer commission (fire-and-forget — never throws)
-    await commissionService.calculateTrainerCommission(individualParticipantId, trainerProfessionalId);
+    // Record assignment for settlement (fire-and-forget)
+    await commissionService.recordTrainerAssignment(individualParticipantId, trainerProfessionalId);
 
     return { message: "Trainer assigned successfully." };
+};
+
+// ── Settlement ─────────────────────────────────────────────────────────────
+
+exports.getSettlementPreview = async (professionalId) => {
+    return await commissionService.previewSettlement(professionalId ?? null);
+};
+
+exports.confirmSettlement = async (assignmentIds) => {
+    return await commissionService.confirmSettlement(assignmentIds ?? null);
+};
+
+exports.listTrainerAssignments = async ({ professionalId, isActive } = {}) => {
+    return await adminRepo.listTrainerAssignments({ professionalId, isActive });
+};
+
+exports.updateAssignmentSessionsCap = async (assignmentId, sessionsAllocated) => {
+    if (!sessionsAllocated || sessionsAllocated < 1)
+        throw new Error("INVALID_SESSIONS_ALLOCATED");
+    return await adminRepo.updateAssignmentSessionsCap(assignmentId, sessionsAllocated);
+};
+
+exports.deactivateAssignment = async (assignmentId) => {
+    return await adminRepo.deactivateAssignment(assignmentId);
+};
+
+exports.getUnsettledCount = async () => {
+    const count = await adminRepo.countUnsettledAssignments(30);
+    return { unsettled_count: count };
 };
 
 // ── Commission rules ───────────────────────────────────────────────────────
@@ -644,4 +700,191 @@ async function approveSocietyEnrollment(tx, data) {
 exports.listActivities = async (coachingType) => {
     if (!coachingType) return activitiesRepo.getAllActiveActivities();
     return activitiesRepo.getActivitiesByCoachingType(coachingType);
+};
+
+// ── Payments ──────────────────────────────────────────────────────────────
+
+exports.listPayments = async (filters) => {
+    const rows = await adminRepo.listPayments(filters);
+    return rows.map((r) => ({
+        id: r.id,
+        razorpay_order_id: r.razorpay_order_id,
+        razorpay_payment_id: r.razorpay_payment_id,
+        service_type: r.service_type,
+        amount: parseFloat(r.amount),
+        currency: r.currency,
+        term_months: r.term_months,
+        status: r.status,
+        captured_at: r.captured_at,
+        user: r.users ? { id: r.users.id, full_name: r.users.full_name, mobile: r.users.mobile } : null,
+    }));
+};
+
+// ── Student assignment overview (read-only) ───────────────────────────────
+
+exports.listStudentAssignments = async (service) => {
+    if (service === "personal_tutor") {
+        const rows = await adminRepo.getAllPersonalTutors();
+        return rows.map((r) => ({
+            personal_tutor_id: r.id,
+            student_id: r.students?.id ?? null,
+            student_name: r.students?.users?.full_name ?? null,
+            student_mobile: r.students?.users?.mobile ?? null,
+            standard: r.standard,
+            batch: r.batch,
+            teacher_for: r.teacher_for,
+            assigned: r.teacher_professional_id !== null,
+            assigned_teacher: r.teacher_professional_id
+                ? {
+                    professional_id: r.professionals?.id,
+                    name: r.professionals?.users?.full_name ?? null,
+                    subject: r.professionals?.teachers?.[0]?.subject ?? null,
+                }
+                : null,
+        }));
+    }
+
+    if (service === "individual_coaching") {
+        const rows = await adminRepo.getAllIndividualParticipants();
+        return rows.map((r) => ({
+            individual_participant_id: r.id,
+            student_id: r.students?.id ?? null,
+            student_name: r.students?.users?.full_name ?? null,
+            student_mobile: r.students?.users?.mobile ?? null,
+            activity: r.activity,
+            society: r.society_name ?? null,
+            assigned: r.trainer_professional_id !== null,
+            assigned_trainer: r.trainer_professional_id
+                ? {
+                    professional_id: r.professionals?.id,
+                    name: r.professionals?.users?.full_name ?? null,
+                    specified_game: r.professionals?.trainers?.[0]?.specified_game ?? null,
+                }
+                : null,
+        }));
+    }
+
+    // Return both when no filter
+    const [pt, ic] = await Promise.all([
+        exports.listStudentAssignments("personal_tutor"),
+        exports.listStudentAssignments("individual_coaching"),
+    ]);
+    return { personal_tutor: pt, individual_coaching: ic };
+};
+
+// ── Sessions ──────────────────────────────────────────────────────────────
+
+exports.listSessions = async (filters) => {
+    return await adminRepo.listSessions(filters);
+};
+
+exports.createSession = async (body) => {
+    const { session_type, date, start_time, end_time, professional_id, student_id, batch_id, activity_id } = body;
+    if (!session_type || !date || !start_time || !end_time || !professional_id) {
+        throw new Error("MISSING_REQUIRED_FIELDS");
+    }
+    const parseTime = (t) => {
+        const [h, m, s = "0"] = String(t).split(":");
+        return new Date(1970, 0, 1, Number(h), Number(m), Number(s));
+    };
+    return await adminRepo.createSession({
+        session_type,
+        scheduled_date: new Date(date),
+        start_time: parseTime(start_time),
+        end_time: parseTime(end_time),
+        professional_id: Number(professional_id),
+        ...(student_id  && { student_id:  Number(student_id) }),
+        ...(batch_id    && { batch_id:    Number(batch_id) }),
+        ...(activity_id && { activity_id: Number(activity_id) }),
+    });
+};
+
+exports.getSessionStudentInfo = async (type, id) => {
+    if (type === "personal_tutor") {
+        const r = await adminRepo.getPersonalTutorForSession(id);
+        if (!r) throw new Error("NOT_FOUND");
+        return {
+            type: "personal_tutor",
+            personal_tutor_id: r.id,
+            student_id: r.students?.id ?? null,
+            student_name: r.students?.users?.full_name ?? null,
+            student_mobile: r.students?.users?.mobile ?? null,
+            student_address: r.students?.users?.address ?? null,
+            standard: r.standard,
+            subject: r.teacher_for,   // what subject/teacher_for they opted
+            already_assigned_professional_id: r.teacher_professional_id ?? null,
+        };
+    }
+    if (type === "individual_coaching") {
+        const r = await adminRepo.getIndividualParticipantForSession(id);
+        if (!r) throw new Error("NOT_FOUND");
+        return {
+            type: "individual_coaching",
+            individual_participant_id: r.id,
+            student_id: r.students?.id ?? null,
+            student_name: r.students?.users?.full_name ?? null,
+            student_mobile: r.students?.users?.mobile ?? null,
+            student_address: r.students?.users?.address ?? null,
+            activity: r.activity,
+            society_name: r.society_name ?? r.societies?.society_name ?? null,
+            society_address: r.societies?.address ?? null,
+            already_assigned_professional_id: r.trainer_professional_id ?? null,
+        };
+    }
+    throw new Error("INVALID_TYPE");
+};
+
+exports.getProfessionalsForSession = async (type, filters) => {
+    if (type !== "teacher" && type !== "trainer") throw new Error("INVALID_TYPE");
+    return await adminRepo.getProfessionalsForSession(type, filters);
+};
+
+// ── Batches per society/school ────────────────────────────────────────────
+
+exports.getSocietyBatches = async (id) => {
+    const rows = await adminRepo.getBatchesBySociety(id);
+    return rows.map((r) => ({
+        id: r.id,
+        batch_type: r.batch_type,
+        batch_name: r.batch_name,
+        days_of_week: r.days_of_week,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        start_date: r.start_date,
+        end_date: r.end_date,
+        is_active: r.is_active,
+        activity: r.activities ? { id: r.activities.id, name: r.activities.name } : null,
+        professional: r.professionals
+            ? {
+                id: r.professionals.id,
+                type: r.professionals.profession_type,
+                name: r.professionals.users?.full_name ?? null,
+            }
+            : null,
+        student_count: r._count?.batch_students ?? 0,
+    }));
+};
+
+exports.getSchoolBatches = async (id) => {
+    const rows = await adminRepo.getBatchesBySchool(id);
+    return rows.map((r) => ({
+        id: r.id,
+        batch_type: r.batch_type,
+        batch_name: r.batch_name,
+        days_of_week: r.days_of_week,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        start_date: r.start_date,
+        end_date: r.end_date,
+        is_active: r.is_active,
+        activity: r.activities ? { id: r.activities.id, name: r.activities.name } : null,
+        professional: r.professionals
+            ? {
+                id: r.professionals.id,
+                type: r.professionals.profession_type,
+                name: r.professionals.users?.full_name ?? null,
+            }
+            : null,
+        student_count: r._count?.batch_students ?? 0,
+    }));
 };

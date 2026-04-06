@@ -80,6 +80,17 @@ async function getActivitiesWithBatchStats(professionalId) {
       schools:    { select: { id: true, school_name: true } },
       _count:     { select: { batch_students: true, sessions: true } },
       sessions:   { select: { status: true } },
+      batch_students: {
+        select: {
+          students: {
+            select: {
+              id: true,
+              student_type: true,
+              users: { select: { full_name: true, mobile: true, email: true, photo: true, address: true } },
+            },
+          },
+        },
+      },
     },
   });
 
@@ -89,15 +100,26 @@ async function getActivitiesWithBatchStats(professionalId) {
     const actId   = b.activity_id;
     const actName = b.activities?.name ?? "Unknown";
     if (!activityMap[actId]) {
-      activityMap[actId] = { activity_id: actId, activity_name: actName, total_batches: 0, total_sessions: 0, completed_sessions: 0, pending_sessions: 0, batches: [] };
+      activityMap[actId] = { 
+        activity_id: actId, 
+        activity_name: actName, 
+        total_batches: 0, 
+        total_sessions: 0, 
+        completed_sessions: 0, 
+        pending_sessions: 0, 
+        batches: [],
+        students: []
+      };
     }
     const completed = b.sessions.filter((s) => s.status === "completed").length;
     const pending   = b.sessions.filter((s) => s.status === "scheduled").length;
     const ongoing   = b.sessions.filter((s) => s.status === "ongoing").length;
+    
     activityMap[actId].total_batches++;
     activityMap[actId].total_sessions   += b._count.sessions;
     activityMap[actId].completed_sessions += completed;
     activityMap[actId].pending_sessions   += pending + ongoing;
+    
     activityMap[actId].batches.push({
       batch_id:       b.id,
       batch_name:     b.batch_name,
@@ -108,6 +130,30 @@ async function getActivitiesWithBatchStats(professionalId) {
       completed_sessions: completed,
       pending_sessions:   pending + ongoing,
     });
+
+    // Add students from this batch to the activity level students array
+    if (b.batch_students) {
+      for (const bs of b.batch_students) {
+        if (bs.students) {
+          const studentInfo = {
+            student_id: bs.students.id,
+            student_type: bs.students.student_type,
+            full_name: bs.students.users?.full_name ?? null,
+            mobile: bs.students.users?.mobile ?? null,
+            email: bs.students.users?.email ?? null,
+            photo: bs.students.users?.photo ?? null,
+            address: bs.students.users?.address ?? null,
+            batch_id: b.id,
+            batch_name: b.batch_name
+          };
+          
+          // Avoid duplicate students if they are in multiple batches of the same activity
+          if (!activityMap[actId].students.some(s => s.student_id === studentInfo.student_id)) {
+             activityMap[actId].students.push(studentInfo);
+          }
+        }
+      }
+    }
   }
   return Object.values(activityMap);
 }
