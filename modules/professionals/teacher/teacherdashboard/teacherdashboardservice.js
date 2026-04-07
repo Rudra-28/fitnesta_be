@@ -1,6 +1,5 @@
 const repo              = require("./teacherdashboardrepo");
 const commissionRepo    = require("../../../commissions/commissionrepo");
-const withdrawalService = require("../../../commissions/withdrawalservice");
 
 // Resolve professional id from JWT userId, throw if not found
 const resolveTeacher = async (userId) => {
@@ -184,14 +183,3 @@ exports.getTransactionHistory = async (userId, filters) => {
     return commissionRepo.getTransactionHistory(await resolveTeacher(userId), filters);
 };
 
-exports.withdrawRequest = async (userId) => {
-    return withdrawalService.withdrawRequest(await resolveTeacher(userId));
-};
-
-exports.withdrawNow = async (userId) => {
-    return withdrawalService.withdrawNow(await resolveTeacher(userId));
-};
-
-exports.savePayoutDetails = async (userId, body) => {
-    return withdrawalService.savePayoutDetails(await resolveTeacher(userId), body);
-};

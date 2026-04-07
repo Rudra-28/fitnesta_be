@@ -29,9 +29,7 @@ router.get("/earnings", meGuard, controller.getEarnings);
 router.get("/wallet",           meGuard, controller.getWalletSummary);        // GET  /api/v1/me-dashboard/wallet
 router.get("/wallet/transactions",   meGuard, controller.getTransactionHistory);  // GET /api/v1/me-dashboard/wallet/transactions
 router.get("/wallet/:status",   meGuard, controller.getWalletBreakdown);
-router.put("/wallet/payout-details",               meGuard, controller.savePayoutDetails);       // PUT  /api/v1/me-dashboard/wallet/payout-details
-router.post("/wallet/withdraw-request", meGuard, controller.withdrawRequest); // POST /api/v1/me-dashboard/wallet/withdraw-request
-router.post("/wallet/withdraw-now",     meGuard, controller.withdrawNow);     // POST /api/v1/me-dashboard/wallet/withdraw-now
+// Withdrawal is handled by admin manually — no professional-initiated withdrawal routes.
 
 // ── Society ────────────────────────────────────────────────────────────────
 router.post("/society", meGuard, handleUpload, controller.registerSociety);

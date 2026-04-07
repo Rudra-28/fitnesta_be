@@ -49,33 +49,26 @@ exports.recordCommission = async ({
     professionalType,
     sourceType,
     sourceId,
+    entityId = null,
     baseAmount,
     commissionRate,
     commissionAmount,
     status = "pending",
-    skipWallet = false,
 }) => {
-    await prisma.$transaction(async (tx) => {
-        await tx.commissions.create({
-            data: {
-                professional_id:   professionalId,
-                professional_type: professionalType,
-                source_type:       sourceType,
-                source_id:         sourceId,
-                base_amount:       baseAmount,
-                commission_rate:   commissionRate,
-                commission_amount: commissionAmount,
-                status,
-            },
-        });
-
-        if (!skipWallet) {
-            await tx.wallets.upsert({
-                where:  { professional_id: professionalId },
-                create: { professional_id: professionalId, balance: commissionAmount },
-                update: { balance: { increment: commissionAmount }, updated_at: new Date() },
-            });
-        }
+    // Wallet is only credited when admin marks the commission as paid.
+    // Do NOT credit wallet here regardless of status.
+    await prisma.commissions.create({
+        data: {
+            professional_id:   professionalId,
+            professional_type: professionalType,
+            source_type:       sourceType,
+            source_id:         sourceId,
+            entity_id:         entityId,
+            base_amount:       baseAmount,
+            commission_rate:   commissionRate,
+            commission_amount: commissionAmount,
+            status,
+        },
     });
 };
 
@@ -576,31 +569,32 @@ exports.markWithdrawalsPaid = async (professionalId) => {
     return { count: requested.length, total_amount: totalAmount };
 };
 
-exports.releaseHeldCommissions = async (meProfessionalId, sourceType) => {
+/**
+ * Release ALL on_hold commissions for an ME + entity (society or school).
+ * This includes both:
+ *   - per-admission commissions (source_type = group_coaching_society / group_coaching_school)
+ *   - onboarding commission     (source_type = group_coaching_society / school_registration)
+ * Both share the same entity_id, so a single query covers everything.
+ *
+ * Moves on_hold → pending. Wallet is credited only when admin marks paid.
+ */
+exports.releaseHeldCommissions = async (meProfessionalId, entityId) => {
     const held = await prisma.commissions.findMany({
         where: {
             professional_id: meProfessionalId,
-            source_type:     sourceType,
+            entity_id:       entityId,
             status:          "on_hold",
         },
-        select: { id: true, commission_amount: true },
+        select: { id: true },
     });
 
     if (held.length === 0) return 0;
 
-    const totalAmount = held.reduce((sum, c) => sum + parseFloat(c.commission_amount), 0);
-    const ids         = held.map((c) => c.id);
+    const ids = held.map((c) => c.id);
 
-    await prisma.$transaction(async (tx) => {
-        await tx.commissions.updateMany({
-            where: { id: { in: ids } },
-            data:  { status: "pending" },
-        });
-        await tx.wallets.upsert({
-            where:  { professional_id: meProfessionalId },
-            create: { professional_id: meProfessionalId, balance: totalAmount },
-            update: { balance: { increment: totalAmount }, updated_at: new Date() },
-        });
+    await prisma.commissions.updateMany({
+        where: { id: { in: ids } },
+        data:  { status: "pending" },
     });
 
     return held.length;

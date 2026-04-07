@@ -4,7 +4,8 @@
       "Bash(sed -i 's|router.get\\(\"/wallet/:status\", trainerGuard|router.get\\(\"/wallet/transactions\", trainerGuard, controller.getTransactionHistory\\);  // GET /api/v1/trainer-dashboard/wallet/transactions\\\\nrouter.get\\(\"/wallet/:status\", trainerGuard|' modules/professionals/trainer/trainerdashboard/trainerdashboardroute.js)",
       "Bash(sed -i 's|router.get\\(\"/wallet/:status\", teacherGuard|router.get\\(\"/wallet/transactions\", teacherGuard, controller.getTransactionHistory\\);  // GET /api/v1/teacher-dashboard/wallet/transactions\\\\nrouter.get\\(\"/wallet/:status\", teacherGuard|' modules/professionals/teacher/teacherdashboard/teacherdashboardroute.js)",
       "Bash(sed -i 's|router.get\\(\"/wallet/:status\",   vendorGuard|router.get\\(\"/wallet/transactions\",   vendorGuard, controller.getTransactionHistory\\);  // GET /api/v1/vendor-dashboard/wallet/transactions\\\\nrouter.get\\(\"/wallet/:status\",   vendorGuard|' modules/professionals/vendor/vendordashboard/vendordashboardroute.js)",
-      "Bash(sed -i 's|router.get\\(\"/wallet/:status\",   meGuard|router.get\\(\"/wallet/transactions\",   meGuard, controller.getTransactionHistory\\);  // GET /api/v1/me-dashboard/wallet/transactions\\\\nrouter.get\\(\"/wallet/:status\",   meGuard|' modules/professionals/marketingExe/dashboard/medashboardroute.js)"
+      "Bash(sed -i 's|router.get\\(\"/wallet/:status\",   meGuard|router.get\\(\"/wallet/transactions\",   meGuard, controller.getTransactionHistory\\);  // GET /api/v1/me-dashboard/wallet/transactions\\\\nrouter.get\\(\"/wallet/:status\",   meGuard|' modules/professionals/marketingExe/dashboard/medashboardroute.js)",
+      "Bash(npx prisma:*)"
     ]
   }
 }

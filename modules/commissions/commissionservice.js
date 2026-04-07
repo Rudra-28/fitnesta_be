@@ -84,8 +84,46 @@ async function resolveEffectiveMonthly(studentUserId, serviceType, activityName,
 
 exports.calculateMEAdmissionCommission = async (serviceType, formData, studentUserId, amount) => {
     try {
-        if (serviceType === "school_student") return;
+        const rules = await repo.getAllRules();
+        const minThreshold = parseFloat(rules.me_group_admission_min_students?.value ?? 20);
 
+        // ── School student: 5% on_hold, released once 20 students enrolled in the school ──
+        if (serviceType === "school_student") {
+            const schoolId = formData.school_id ? parseInt(formData.school_id) : null;
+            if (!schoolId) return;
+
+            const school = await prisma.schools.findUnique({
+                where:  { id: schoolId },
+                select: { id: true, me_professional_id: true },
+            });
+            if (!school?.me_professional_id) return;
+
+            const rule = rules.me_group_admission_rate;
+            if (!rule) return;
+
+            const rate             = parseFloat(rule.value);
+            const commissionAmount = parseFloat(((amount * rate) / 100).toFixed(2));
+
+            await repo.recordCommission({
+                professionalId:   school.me_professional_id,
+                professionalType: "marketing_executive",
+                sourceType:       "group_coaching_school",
+                sourceId:         studentUserId,
+                entityId:         schoolId,
+                baseAmount:       amount,
+                commissionRate:   rate,
+                commissionAmount,
+                status:           "on_hold",
+            });
+
+            const studentCount = await repo.countGroupStudentsForEntity({ schoolId });
+            if (studentCount >= minThreshold) {
+                await repo.releaseHeldCommissions(school.me_professional_id, schoolId);
+            }
+            return;
+        }
+
+        // ── Society-based services ─────────────────────────────────────────────────────────
         let societyId = null;
         if (serviceType === "individual_coaching" || serviceType === "group_coaching") {
             societyId = formData.individualcoaching?.society_id ?? null;
@@ -94,7 +132,6 @@ exports.calculateMEAdmissionCommission = async (serviceType, formData, studentUs
         }
         if (!societyId) return;
 
-        const rules   = await repo.getAllRules();
         const society = await repo.getSocietyById(parseInt(societyId));
         if (!society?.me_professional_id) return;
 
@@ -117,24 +154,24 @@ exports.calculateMEAdmissionCommission = async (serviceType, formData, studentUs
 
         const isGroup       = serviceType === "group_coaching";
         const initialStatus = isGroup ? "on_hold" : "pending";
+        const parsedSocietyId = parseInt(societyId);
 
         await repo.recordCommission({
             professionalId:   society.me_professional_id,
             professionalType: "marketing_executive",
             sourceType:       sourceTypeMap[serviceType],
             sourceId:         studentUserId,
+            entityId:         isGroup ? parsedSocietyId : null,
             baseAmount:       amount,
             commissionRate:   rate,
             commissionAmount,
             status:           initialStatus,
-            skipWallet:       isGroup,
         });
 
         if (isGroup) {
-            const minThreshold = parseFloat(rules.me_group_admission_min_students?.value ?? 20);
-            const studentCount = await repo.countGroupStudentsForEntity({ societyId: parseInt(societyId) });
+            const studentCount = await repo.countGroupStudentsForEntity({ societyId: parsedSocietyId });
             if (studentCount >= minThreshold) {
-                await repo.releaseHeldCommissions(society.me_professional_id, "group_coaching_society");
+                await repo.releaseHeldCommissions(society.me_professional_id, parsedSocietyId);
             }
         }
     } catch (err) {
@@ -356,13 +393,11 @@ exports.confirmSettlement = async (assignmentIds = null) => {
                 professionalId:   a.professional_id,
                 professionalType: a.professional_type === "teacher" ? "teacher" : "trainer",
                 sourceType:       a.assignment_type,
-                sourceId:         a.id, // assignment id as source
+                sourceId:         a.id,
                 baseAmount:       item.effective_fee_base,
                 commissionRate:   item.commission_rate,
                 commissionAmount: item.commission_amount,
                 status:           "pending",
-                skipWallet:       false,
-                // Extra metadata stored in notes via a description field we'll add
             });
 
             // Stamp settlement date
@@ -553,14 +588,18 @@ exports.calculateMEOnboardingCommission = async (entityType, entity) => {
             return;
         }
 
+        // Onboarding commission is on_hold until 20 students enroll in this entity.
+        // entity_id links it to the society/school so it releases together with admission commissions.
         await repo.recordCommission({
             professionalId:   entity.me_professional_id,
             professionalType: "marketing_executive",
             sourceType,
             sourceId:         entity.id,
+            entityId:         entity.id,
             baseAmount:       0,
             commissionRate:   0,
             commissionAmount,
+            status:           "on_hold",
         });
     } catch (err) {
         console.error("[CommissionService] calculateMEOnboardingCommission error:", err.message);

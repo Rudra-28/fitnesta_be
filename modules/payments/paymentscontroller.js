@@ -3,16 +3,18 @@ const { verifyWebhookSignature } = require("../../utils/razorpay");
 const paymentsRepo   = require("./paymentsrepo");
 const icService      = require("../student/individualcoaching/indicoachservice");
 const ptService      = require("../student/personaltutor/perstutorservice");
+const ptAddonService = require("../student/subjectaddon/subjectaddonservice");
 const ssService      = require("../student/school-student/schoolstudentservice");
 const kitOrderService = require("../student/kitorder/kitorderservice");
 const commissionRepo = require("../commissions/commissionrepo");
 
 const SERVICE_MAP = {
-    individual_coaching: icService,
-    group_coaching:      icService, // group coaching reuses the same finalizeRegistration
-    personal_tutor:      ptService,
-    school_student:      ssService,
-    kit_order:           kitOrderService,
+    individual_coaching:   icService,
+    group_coaching:        icService,
+    personal_tutor:        ptService,
+    personal_tutor_addon:  ptAddonService,
+    school_student:        ssService,
+    kit_order:             kitOrderService,
 };
 
 /**

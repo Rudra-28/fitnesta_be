@@ -31,8 +31,6 @@ router.patch("/orders/:order_id/status",     vendorGuard, kitOrderController.upd
 router.get("/wallet",           vendorGuard, controller.getWalletSummary);    // GET  /api/v1/vendor-dashboard/wallet
 router.get("/wallet/transactions",   vendorGuard, controller.getTransactionHistory);  // GET /api/v1/vendor-dashboard/wallet/transactions
 router.get("/wallet/:status",   vendorGuard, controller.getWalletBreakdown);
-router.put("/wallet/payout-details",              vendorGuard, controller.savePayoutDetails);       // PUT  /api/v1/vendor-dashboard/wallet/payout-details
-router.post("/wallet/withdraw-request", vendorGuard, controller.withdrawRequest); // POST /api/v1/vendor-dashboard/wallet/withdraw-request
-router.post("/wallet/withdraw-now",     vendorGuard, controller.withdrawNow);     // POST /api/v1/vendor-dashboard/wallet/withdraw-now
+// Withdrawal is handled by admin manually — no professional-initiated withdrawal routes.
 
 module.exports = router;

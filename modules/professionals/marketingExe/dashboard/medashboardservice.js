@@ -1,7 +1,6 @@
 const prisma            = require("../../../../config/prisma");
 const repo              = require("./medashboardrepo");
 const commissionRepo    = require("../../../commissions/commissionrepo");
-const withdrawalService = require("../../../commissions/withdrawalservice");
 
 const getMeProfessional = async (meUserId) => {
     const professional = await repo.findProfessionalByUserId(meUserId);
@@ -47,20 +46,7 @@ exports.getTransactionHistory = async (meUserId, filters) => {
     return commissionRepo.getTransactionHistory(p.id, filters);
 };
 
-exports.withdrawRequest = async (meUserId) => {
-    const p = await getMeProfessional(meUserId);
-    return withdrawalService.withdrawRequest(p.id);
-};
-
-exports.withdrawNow = async (meUserId) => {
-    const p = await getMeProfessional(meUserId);
-    return withdrawalService.withdrawNow(p.id);
-};
-
-exports.savePayoutDetails = async (meUserId, body) => {
-    const p = await getMeProfessional(meUserId);
-    return withdrawalService.savePayoutDetails(p.id, body);
-};
+// Withdrawal is handled by admin manually — no professional-initiated withdrawal functions.
 
 // ── Society ───────────────────────────────────────────────────────────────────
 exports.registerSociety = async (data, meUserId) => {

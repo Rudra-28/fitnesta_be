@@ -1,4 +1,5 @@
 const repo = require("./studentdashboardrepo");
+const subjectAddon = require("./subjectaddon/subjectaddonservice");
 
 async function _getStudent(userId) {
   const student = await repo.getStudentIdByUserId(userId);
@@ -9,6 +10,11 @@ async function _getStudent(userId) {
 function _validStatus(status) {
   const valid = ["upcoming", "ongoing", "completed", "cancelled"];
   return valid.includes(status) ? status : null;
+}
+
+async function getToggleState(userId) {
+  const s = await _getStudent(userId);
+  return repo.getToggleState(s.id);
 }
 
 async function getSubjectsDashboardStats(userId) {
@@ -65,6 +71,20 @@ async function getActivitiesWithSessions(userId) {
   return repo.getActivitiesWithSessions(s.id);
 }
 
+async function getAvailableSubjects(userId) {
+  const s = await _getStudent(userId);
+  return subjectAddon.getAvailableSubjects(s.id);
+}
+
+async function initiateSubjectAddon(userId, activityId, termMonths) {
+  const s = await _getStudent(userId);
+  return subjectAddon.initiateAddon(s.id, userId, Number(activityId), Number(termMonths));
+}
+
+async function getSubjectAddonStatus(tempUuid) {
+  return subjectAddon.getAddonStatus(tempUuid);
+}
+
 async function submitFeedback(userId, sessionId, rating, comment) {
   const s = await _getStudent(userId);
   if (!rating || rating < 1 || rating > 5) throw Object.assign(new Error("rating must be 1–5"), { code: "INVALID" });
@@ -72,9 +92,11 @@ async function submitFeedback(userId, sessionId, rating, comment) {
 }
 
 module.exports = {
+  getToggleState,
   getSubjectsDashboardStats, getActivitiesDashboardStats,
   getSubjectsReminder, getSubjectsSessions, getSubjectsSessionById,
   getActivitiesReminder, getActivitiesSessions, getActivitiesSessionById,
   getSubjectsWithSessions, getActivitiesWithSessions,
+  getAvailableSubjects, initiateSubjectAddon, getSubjectAddonStatus,
   submitFeedback,
 };

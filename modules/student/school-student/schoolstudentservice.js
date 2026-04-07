@@ -4,6 +4,7 @@ const repo = require("./schoolstudentrepo");
 const activitiesRepo = require("../../activities/activitiesrepository");
 const razorpay = require("../../../utils/razorpay");
 const paymentsRepo = require("../../payments/paymentsrepo");
+const commissionService = require("../../commissions/commissionservice");
 
 /**
  * PHASE 1 — Park form data and create a Razorpay order.
@@ -102,7 +103,7 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
         const userId    = await repo.insertUser(tx, data);
         const studentId = await repo.insertStudent(tx, userId, pending.service_type);
         await repo.insertSchoolStudent(tx, studentId, data);
-        return { userId };
+        return { userId, studentId };
     });
 
     await repo.updatePendingStatus(pending.id, "approved");
@@ -117,8 +118,79 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
         studentUserId:     result.userId,
     });
 
+    commissionService.calculateMEAdmissionCommission(
+        "school_student",
+        data,
+        result.userId,
+        amount,
+    ).catch((err) => console.error("[SchoolStudent] ME commission error:", err.message));
+
+    // Auto-assign student to a school_student batch if applicable
+    try {
+        await autoAssignToSchoolBatch(result.studentId, data);
+    } catch (err) {
+        console.error("[SchoolStudent] Auto-batch assignment failed:", err.message);
+    }
+
     return { userId: result.userId, success: true };
 };
+
+/**
+ * Auto-assign a newly registered school_student to an available batch
+ * for their school + each activity. Picks the first active batch with < capacity students.
+ * school_students.activities is a JSON array of activity_ids.
+ */
+async function autoAssignToSchoolBatch(studentId, formData) {
+    const schoolId   = formData.school_id ? parseInt(formData.school_id) : null;
+    const activityIds = Array.isArray(formData.activity_ids)
+        ? formData.activity_ids.map(Number)
+        : [];
+
+    if (!schoolId || activityIds.length === 0) return;
+
+    for (const activityId of activityIds) {
+        const batches = await prisma.batches.findMany({
+            where: {
+                batch_type:  "school_student",
+                school_id:   schoolId,
+                activity_id: activityId,
+                is_active:   true,
+            },
+            include: {
+                _count: { select: { batch_students: true } },
+            },
+            orderBy: { created_at: "asc" },
+        });
+
+        const availableBatch = batches.find(b => b._count.batch_students < b.capacity);
+        if (!availableBatch) continue;
+
+        await prisma.batch_students.create({
+            data: { batch_id: availableBatch.id, student_id: studentId },
+        });
+
+        // Add student as participant to all future scheduled sessions of this batch
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const futureSessions = await prisma.sessions.findMany({
+            where: {
+                batch_id:       availableBatch.id,
+                scheduled_date: { gte: today },
+                status:         { in: ["scheduled", "ongoing"] },
+            },
+            select: { id: true },
+        });
+
+        if (futureSessions.length > 0) {
+            await prisma.session_participants.createMany({
+                data:           futureSessions.map(s => ({ session_id: s.id, student_id: studentId })),
+                skipDuplicates: true,
+            });
+        }
+
+        console.log(`[SchoolStudent] Student ${studentId} auto-assigned to batch ${availableBatch.id} (school ${schoolId}, activity ${activityId})`);
+    }
+}
 
 /**
  * PHASE 3 — Flutter polls this to get its JWT once the webhook has fired.

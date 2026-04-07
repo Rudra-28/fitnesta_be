@@ -36,9 +36,10 @@ exports.insertindividualcoaching = async (tx, studentId, data) => {
             age: data?.age ? parseInt(data.age) : null,
             society_id:  data?.society_id ? parseInt(data.society_id) : null,
             society_name: data?.society_name || null,
-            activity:    data?.activities || null,
+            activity:    data?.activities ? String(data.activities).slice(0, 100) : null,
             kits:        data?.kit_type || null,
             preferred_batch: data?.preferred_batch || null,
+            preferred_time: data?.preferred_time || data?.preferredTime || null,
         },
     });
 };

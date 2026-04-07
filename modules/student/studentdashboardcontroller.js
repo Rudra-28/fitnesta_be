@@ -12,6 +12,10 @@ function wrap(fn) {
 }
 
 module.exports = {
+  getToggleState: wrap(async (req, res) => {
+    const data = await service.getToggleState(req.user.userId);
+    res.json({ success: true, data });
+  }),
   getSubjectsDashboardStats: wrap(async (req, res) => {
     const data = await service.getSubjectsDashboardStats(req.user.userId);
     res.json({ success: true, data });
@@ -56,4 +60,19 @@ module.exports = {
     const data = await service.submitFeedback(req.user.userId, req.params.id, Number(req.body.rating), req.body.comment);
     res.status(201).json({ success: true, data });
   }),
+
+  getAvailableSubjects: wrap(async (req, res) => {
+    const data = await service.getAvailableSubjects(req.user.userId);
+    res.json({ success: true, count: data.length, data });
+  }),
+
+  initiateSubjectAddon: wrap(async (req, res) => {
+    const { activity_id, term_months } = req.body;
+    if (!activity_id || !term_months) {
+      return res.status(400).json({ success: false, message: "activity_id and term_months are required" });
+    }
+    const data = await service.initiateSubjectAddon(req.user.userId, activity_id, term_months);
+    res.json({ success: true, ...data });
+  }),
+
 };

@@ -116,6 +116,7 @@ exports.submitRegistration = async (req, res) => {
                 standard: normalizedData.standard,
                 batch: normalizedData.batch,
                 teacherFor: normalizedData.teacherFor,
+                preferred_time: normalizedData.preferred_time || normalizedData.preferredTime || null,
             },
             consentDetails: age < 18 ? {
                 society_name: normalizedData.society_name,

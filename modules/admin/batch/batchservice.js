@@ -128,6 +128,10 @@ async function createBatch({
     );
   }
 
+  // Set initial cycle window starting from start_date
+  const cycleEndDt = new Date(startDt);
+  cycleEndDt.setDate(cycleEndDt.getDate() + 30);
+
   return repo.createBatch({
     batch_type,
     society_id: society_id ? Number(society_id) : null,
@@ -141,6 +145,8 @@ async function createBatch({
     end_time: endTimeDate,
     start_date: startDt,
     end_date: endDt,
+    cycle_start_date: startDt,
+    cycle_end_date:   cycleEndDt,
   });
 }
 
@@ -241,23 +247,42 @@ async function deleteBatch(batchId) {
   return { success: true };
 }
 
-async function generateSessions(batchId, startDate, endDate) {
+/**
+ * Generate sessions for the next 30-day cycle of a batch.
+ * The cycle window is determined as follows:
+ *   - If the batch has no cycle_start_date yet (first generation), cycle starts today.
+ *   - If a cycle is already active (cycle_end_date >= today), sessions are added to it.
+ *   - After a settlement the batch's cycle_start_date is already advanced; this handles new cycle too.
+ * Sessions are created for every matching day-of-week within [cycleStart, cycleEnd].
+ * Existing sessions on those dates are skipped (deduped).
+ * The batch's cycle_start_date and cycle_end_date are updated after generation.
+ */
+async function generateSessions(batchId) {
   const batch = await repo.getBatchById(Number(batchId));
   if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
   if (!batch.is_active) throw Object.assign(new Error("Batch is inactive"), { code: "BATCH_INACTIVE" });
 
-  const startDt = new Date(startDate);
-  const endDt = new Date(endDate);
-  if (endDt < startDt) {
-    throw Object.assign(new Error("end_date must be after start_date"), { code: "DATE_RANGE_INVALID" });
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Determine cycle window
+  let cycleStart;
+  if (batch.cycle_start_date) {
+    cycleStart = new Date(batch.cycle_start_date);
+    cycleStart.setHours(0, 0, 0, 0);
+  } else {
+    cycleStart = new Date(today);
   }
 
+  const cycleEnd = new Date(cycleStart);
+  cycleEnd.setDate(cycleEnd.getDate() + 30);
+
   const daysOfWeek = Array.isArray(batch.days_of_week) ? batch.days_of_week : JSON.parse(batch.days_of_week);
-  const existingDates = await repo.getExistingSessionDatesForBatch(batch.id, startDt, endDt);
-  const sessionDates = computeSessionDates(daysOfWeek, startDt, endDt, existingDates);
+  const existingDates = await repo.getExistingSessionDatesForBatch(batch.id, cycleStart, cycleEnd);
+  const sessionDates = computeSessionDates(daysOfWeek, cycleStart, cycleEnd, existingDates);
 
   if (sessionDates.length === 0) {
-    return { generated: 0, message: "No new session dates to generate in this range." };
+    return { generated: 0, message: "No new session dates to generate in this cycle." };
   }
 
   // Get current batch students
@@ -282,7 +307,17 @@ async function generateSessions(batchId, startDate, endDate) {
     generatedCount++;
   }
 
-  return { generated: generatedCount };
+  // Update the cycle window on the batch
+  await prisma.batches.update({
+    where: { id: batch.id },
+    data: {
+      cycle_start_date: cycleStart,
+      cycle_end_date:   cycleEnd,
+      updated_at:       new Date(),
+    },
+  });
+
+  return { generated: generatedCount, cycle_start: cycleStart, cycle_end: cycleEnd };
 }
 
 async function bulkAssignStudents(batchId, studentIds) {
@@ -358,6 +393,296 @@ async function removeBatchStudent(batchId, studentId) {
   return { success: true };
 }
 
+// ── Unassigned students ──────────────────────────────────────────────────────
+
+/**
+ * Returns group_coaching students for a given society+activity who have no batch assignment.
+ * Admin uses this to manually fill a new batch.
+ */
+async function getUnassignedGroupStudents(societyId, activityId) {
+  // individual_participants with matching society_id, no batch_id, and student_type = group_coaching
+  const rows = await prisma.individual_participants.findMany({
+    where: {
+      society_id: Number(societyId),
+      batch_id:   null,
+      students:   { student_type: "group_coaching" },
+    },
+    include: {
+      students: {
+        select: {
+          id:   true,
+          users: { select: { full_name: true, mobile: true } },
+        },
+      },
+    },
+  });
+
+  // Filter by activity name if activityId given (individual_participants stores activity as string name)
+  if (activityId) {
+    const activity = await prisma.activities.findUnique({
+      where: { id: Number(activityId) },
+      select: { name: true },
+    });
+    if (activity) {
+      return rows.filter(r => r.activity === activity.name);
+    }
+  }
+  return rows;
+}
+
+// ── Batch Detail (admin card view) ───────────────────────────────────────────
+
+async function getBatchDetail(batchId) {
+  const batch = await repo.getBatchById(Number(batchId));
+  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Past sessions (completed or cancelled) with participant attendance
+  const pastSessions = await prisma.sessions.findMany({
+    where: {
+      batch_id:       batch.id,
+      scheduled_date: { lt: today },
+    },
+    include: {
+      session_participants: {
+        select: {
+          attended:   true,
+          student_id: true,
+          students:   { select: { users: { select: { full_name: true } } } },
+        },
+      },
+    },
+    orderBy: { scheduled_date: "desc" },
+    take: 50,
+  });
+
+  // Upcoming sessions
+  const upcomingSessions = await prisma.sessions.findMany({
+    where: {
+      batch_id:       batch.id,
+      scheduled_date: { gte: today },
+      status:         { in: ["scheduled", "ongoing"] },
+    },
+    orderBy: { scheduled_date: "asc" },
+  });
+
+  // Current cycle settlement preview (read-only)
+  const preview = batch.cycle_start_date
+    ? await computeSettlementPreview(batch)
+    : null;
+
+  return {
+    batch,
+    students:          batch.batch_students,
+    past_sessions:     pastSessions,
+    upcoming_sessions: upcomingSessions,
+    settlement_preview: preview,
+  };
+}
+
+// ── Settlement ───────────────────────────────────────────────────────────────
+
+/**
+ * Returns the commission calculation for the current cycle of a batch.
+ * Does NOT write anything to the DB.
+ */
+async function getSettlementPreview(batchId) {
+  const batch = await repo.getBatchById(Number(batchId));
+  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+  if (!batch.cycle_start_date) {
+    throw Object.assign(new Error("No active cycle found. Generate sessions first."), { code: "NO_CYCLE" });
+  }
+  return computeSettlementPreview(batch);
+}
+
+async function computeSettlementPreview(batch) {
+  const cycleStart = new Date(batch.cycle_start_date);
+  const cycleEnd   = new Date(batch.cycle_end_date);
+
+  // Sessions in this cycle
+  const sessions = await prisma.sessions.findMany({
+    where: {
+      batch_id:       batch.id,
+      scheduled_date: { gte: cycleStart, lte: cycleEnd },
+      status:         { not: "cancelled" },
+    },
+    select: { id: true, status: true },
+  });
+
+  const sessionsAllocated = sessions.length;
+  const completedIds      = sessions.filter(s => s.status === "completed").map(s => s.id);
+  const sessionsAttended  = completedIds.length; // trainer attended = session completed via punch-out
+
+  // Sum effective_monthly_fees of all current batch students via their individual_participant records
+  const batchStudentIds = batch.batch_students.map(bs => bs.student_id);
+
+  let baseAmount = 0;
+  if (batchStudentIds.length > 0) {
+    // Get activity + society for each student to look up fee
+    const participants = await prisma.individual_participants.findMany({
+      where: { student_id: { in: batchStudentIds }, batch_id: batch.id },
+      select: { student_id: true },
+    });
+
+    if (participants.length > 0) {
+      // Look up fee structure for this batch's activity and society category
+      const society = batch.societies;
+      const feeRecord = await prisma.fee_structures.findFirst({
+        where: {
+          activity_id:    batch.activity_id,
+          coaching_type:  "group_coaching",
+          society_category: society?.society_category ?? undefined,
+        },
+        select: { effective_monthly: true },
+      });
+
+      const effectiveMonthly = feeRecord?.effective_monthly ? parseFloat(feeRecord.effective_monthly) : 0;
+      baseAmount = effectiveMonthly * participants.length;
+    }
+  }
+
+  // Get trainer commission rate from commission_rules
+  const commissionRule = await prisma.commission_rules.findFirst({
+    where: { rule_key: "trainer_group_society_rate" },
+    select: { value: true },
+  });
+  const commissionRate = commissionRule ? parseFloat(commissionRule.value) : 0;
+
+  // Prorate: base * rate * (attended / allocated)
+  const proration       = sessionsAllocated > 0 ? sessionsAttended / sessionsAllocated : 0;
+  const commissionAmount = parseFloat((baseAmount * (commissionRate / 100) * proration).toFixed(2));
+
+  const today        = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cycleComplete = today > cycleEnd;
+
+  return {
+    cycle_start:        cycleStart,
+    cycle_end:          cycleEnd,
+    cycle_complete:     cycleComplete,
+    sessions_allocated: sessionsAllocated,
+    sessions_attended:  sessionsAttended,
+    base_amount:        parseFloat(baseAmount.toFixed(2)),
+    commission_rate:    commissionRate,
+    commission_amount:  commissionAmount,
+    settlement_locked:  !cycleComplete,
+  };
+}
+
+/**
+ * Settle the current cycle for a batch.
+ * Locked until cycle_end_date has passed.
+ * Creates a batch_cycle_settlements record, credits the trainer's wallet,
+ * then auto-starts the next 30-day cycle.
+ */
+async function settleBatchCycle(batchId) {
+  const batch = await repo.getBatchById(Number(batchId));
+  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+  if (!batch.cycle_start_date) {
+    throw Object.assign(new Error("No active cycle to settle. Generate sessions first."), { code: "NO_CYCLE" });
+  }
+
+  const today    = new Date();
+  today.setHours(0, 0, 0, 0);
+  const cycleEnd = new Date(batch.cycle_end_date);
+
+  if (today <= cycleEnd) {
+    throw Object.assign(new Error("Cycle is not yet complete. Settlement is locked until " + cycleEnd.toISOString().slice(0, 10)), { code: "CYCLE_INCOMPLETE" });
+  }
+
+  // Check not already settled for this cycle
+  const existing = await prisma.batch_cycle_settlements.findFirst({
+    where: { batch_id: batch.id, cycle_start: new Date(batch.cycle_start_date) },
+  });
+  if (existing) {
+    throw Object.assign(new Error("This cycle has already been settled"), { code: "ALREADY_SETTLED" });
+  }
+
+  const preview = await computeSettlementPreview(batch);
+
+  // Write settlement record + credit wallet in a transaction
+  await prisma.$transaction(async (tx) => {
+    await tx.batch_cycle_settlements.create({
+      data: {
+        batch_id:          batch.id,
+        cycle_start:       new Date(batch.cycle_start_date),
+        cycle_end:         new Date(batch.cycle_end_date),
+        sessions_allocated: preview.sessions_allocated,
+        sessions_attended:  preview.sessions_attended,
+        base_amount:        preview.base_amount,
+        commission_rate:    preview.commission_rate,
+        commission_amount:  preview.commission_amount,
+        status:             "settled",
+        settled_at:         new Date(),
+      },
+    });
+
+    if (preview.commission_amount > 0) {
+      // Credit trainer wallet
+      await tx.wallets.upsert({
+        where:  { professional_id: batch.professional_id },
+        create: { professional_id: batch.professional_id, balance: preview.commission_amount },
+        update: { balance: { increment: preview.commission_amount }, updated_at: new Date() },
+      });
+    }
+
+    // Advance cycle: new cycle starts the day after current cycle_end
+    const newCycleStart = new Date(batch.cycle_end_date);
+    newCycleStart.setDate(newCycleStart.getDate() + 1);
+    const newCycleEnd = new Date(newCycleStart);
+    newCycleEnd.setDate(newCycleEnd.getDate() + 30);
+
+    await tx.batches.update({
+      where: { id: batch.id },
+      data: {
+        cycle_start_date: newCycleStart,
+        cycle_end_date:   newCycleEnd,
+        last_settled_at:  new Date(),
+        updated_at:       new Date(),
+      },
+    });
+  });
+
+  // Auto-generate sessions for the next cycle (outside transaction — non-fatal if it fails)
+  try {
+    await generateSessions(batch.id);
+  } catch (err) {
+    console.error(`[Settlement] Auto-generate sessions for next cycle failed on batch ${batch.id}:`, err.message);
+  }
+
+  return { success: true, commission_amount: preview.commission_amount };
+}
+
+/**
+ * Mark a settled cycle as paid. Moves the status to 'paid' in batch_cycle_settlements.
+ */
+async function markSettlementPaid(settlementId) {
+  const settlement = await prisma.batch_cycle_settlements.findUnique({
+    where: { id: Number(settlementId) },
+  });
+  if (!settlement) throw Object.assign(new Error("Settlement not found"), { code: "NOT_FOUND" });
+  if (settlement.status !== "settled") {
+    throw Object.assign(new Error("Only 'settled' records can be marked as paid"), { code: "INVALID_STATUS" });
+  }
+
+  return prisma.batch_cycle_settlements.update({
+    where: { id: settlement.id },
+    data:  { status: "paid", paid_at: new Date() },
+  });
+}
+
+/**
+ * List all settlement records for a batch.
+ */
+async function listSettlements(batchId) {
+  return prisma.batch_cycle_settlements.findMany({
+    where:   { batch_id: Number(batchId) },
+    orderBy: { cycle_start: "desc" },
+  });
+}
+
 // ── Utility ──────────────────────────────────────────────────────────────────
 
 function parseTimeString(timeStr) {
@@ -377,4 +702,10 @@ module.exports = {
   generateSessions,
   bulkAssignStudents,
   removeBatchStudent,
+  getUnassignedGroupStudents,
+  getBatchDetail,
+  getSettlementPreview,
+  settleBatchCycle,
+  markSettlementPaid,
+  listSettlements,
 };

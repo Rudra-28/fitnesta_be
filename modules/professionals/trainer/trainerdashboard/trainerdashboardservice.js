@@ -1,6 +1,5 @@
 const repo             = require("./trainerdashboardrepo");
 const commissionRepo   = require("../../../commissions/commissionrepo");
-const withdrawalService = require("../../../commissions/withdrawalservice");
 
 const VALID_STATUSES = ["upcoming", "ongoing", "completed", "cancelled"];
 
@@ -96,7 +95,18 @@ async function getBatchStudents(userId, batchId) {
   if (!professionalId) throw Object.assign(new Error("Trainer profile not found"), { code: "NOT_FOUND" });
   const data = await repo.getBatchStudents(batchId, professionalId);
   if (!data) throw Object.assign(new Error("Batch not found"), { code: "NOT_FOUND" });
-  return data;
+  return {
+    ...data,
+    batch_students: (data.batch_students ?? []).map((bs) => ({
+      student_id:   bs.students?.id ?? null,
+      full_name:    bs.students?.users?.full_name ?? null,
+      mobile:       bs.students?.users?.mobile ?? null,
+      email:        bs.students?.users?.email ?? null,
+      photo:        bs.students?.users?.photo ?? null,
+      student_type: bs.students?.student_type ?? null,
+      joined_at:    bs.joined_at,
+    })),
+  };
 }
 
 async function getSessionById(userId, sessionId) {
@@ -149,17 +159,6 @@ async function _resolveTrainer(userId) {
   return id;
 }
 
-async function withdrawRequest(userId) {
-  return withdrawalService.withdrawRequest(await _resolveTrainer(userId));
-}
-
-async function withdrawNow(userId) {
-  return withdrawalService.withdrawNow(await _resolveTrainer(userId));
-}
-
-async function savePayoutDetails(userId, body) {
-  return withdrawalService.savePayoutDetails(await _resolveTrainer(userId), body);
-}
 
 async function getSportsActivities(userId) {
   const professionalId = await repo.getTrainerProfessionalId(userId);
@@ -180,4 +179,4 @@ async function getSessionsByActivity(userId, activityId, activityName, status) {
   return repo.getSessionsByActivity(professionalId, activityId ? Number(activityId) : null, activityName ?? null, status ?? null);
 }
 
-module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, getTransactionHistory, withdrawRequest, withdrawNow, savePayoutDetails, getSportsActivities, getSessionsByActivity };
+module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, getTransactionHistory, getSportsActivities, getSessionsByActivity };

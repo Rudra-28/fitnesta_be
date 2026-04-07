@@ -1,5 +1,7 @@
 const prisma = require("../../../config/prisma");
 const repo = require("./sessionrepo");
+const adminRepo = require("../adminrepository");
+const commissionService = require("../../commissions/commissionservice");
 
 function parseTimeString(timeStr) {
   if (timeStr instanceof Date) return timeStr;
@@ -26,6 +28,12 @@ async function createIndividualSession({
 
   if (!student_id || !professional_id || !scheduled_date || !start_time || !end_time) {
     throw Object.assign(new Error("student_id, professional_id, scheduled_date, start_time, end_time are required"), {
+      code: "MISSING_FIELDS",
+    });
+  }
+
+  if (session_type === "individual_coaching" && !activity_id) {
+    throw Object.assign(new Error("activity_id is required for individual_coaching sessions"), {
       code: "MISSING_FIELDS",
     });
   }
@@ -67,7 +75,7 @@ async function createIndividualSession({
     });
   }
 
-  return repo.createSession({
+  const session = await repo.createSession({
     session_type,
     batch_id: null,
     activity_id: activity_id ? Number(activity_id) : null,
@@ -78,6 +86,23 @@ async function createIndividualSession({
     end_time: endTimeDt,
     status: "scheduled",
   });
+
+  // Auto-assign the professional to the student record if not already assigned
+  if (session_type === "personal_tutor") {
+    const pt = await adminRepo.findPersonalTutorByStudentId(student_id);
+    if (pt && !pt.teacher_professional_id) {
+      await adminRepo.assignTeacherToStudent(pt.id, Number(professional_id));
+      await commissionService.recordTeacherAssignment(pt.id, Number(professional_id));
+    }
+  } else if (session_type === "individual_coaching") {
+    const ip = await adminRepo.findIndividualParticipantByStudentId(student_id);
+    if (ip && !ip.trainer_professional_id) {
+      await adminRepo.assignTrainerToStudent(ip.id, Number(professional_id));
+      await commissionService.recordTrainerAssignment(ip.id, Number(professional_id));
+    }
+  }
+
+  return session;
 }
 
 async function getSession(sessionId) {

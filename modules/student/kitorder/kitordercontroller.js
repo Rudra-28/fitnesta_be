@@ -121,6 +121,7 @@ exports.getVendorOrders = async (req, res) => {
 
             return {
                 order_id:        order.id,
+                order_status:    order.order_status,
                 payment_status:  order.payment_status,
                 quantity:        order.quantity,
                 unit_price:      order.unit_price,

@@ -46,6 +46,8 @@ router.get("/students", controller.listStudents);                              /
 
 // ── Student assignment ─────────────────────────────────────────────────────
 router.get("/students/unassigned", controller.getUnassignedStudents);         // GET  /api/v1/admin/students/unassigned?service=personal_tutor
+router.get("/students/group-coaching", controller.getGroupCoachingStudentsForBatch); // GET  /api/v1/admin/students/group-coaching?batch_id=&society_id=&activity_id=
+router.get("/students/school-batch", controller.getSchoolStudentsForBatch);          // GET  /api/v1/admin/students/school-batch?batch_id=&school_id=&activity_id=
 router.get("/professionals/available", controller.getAvailableProfessionals); // GET  /api/v1/admin/professionals/available?type=teacher
 router.post("/assign/teacher", controller.assignTeacher);                     // POST /api/v1/admin/assign/teacher
 router.post("/assign/trainer", controller.assignTrainer);                     // POST /api/v1/admin/assign/trainer
@@ -102,6 +104,18 @@ router.get("/sessions/student-info", controller.getSessionStudentInfo);
 // ── Professionals for session creation (with busy/available flag) ─────────
 // GET /api/v1/admin/professionals/for-session?type=teacher|trainer&date=&start_time=&end_time=&subject=&activity=
 router.get("/professionals/for-session", controller.getProfessionalsForSession);
+
+// ── Personal tutor session creation — student subjects + teachers ─────────
+// GET /api/v1/admin/students/:studentId/subjects
+// GET /api/v1/admin/students/:studentId/subjects/:activityId/teachers?date=&start_time=&end_time=
+router.get("/students/:studentId/subjects", controller.getStudentSubjects);
+router.get("/students/:studentId/subjects/:activityId/teachers", controller.getTeachersForSubject);
+
+// ── Individual coaching session creation — student activities + trainers ──
+// GET /api/v1/admin/students/:studentId/activities
+// GET /api/v1/admin/students/:studentId/activities/:activityId/trainers?date=&start_time=&end_time=
+router.get("/students/:studentId/activities", controller.getStudentActivities);
+router.get("/students/:studentId/activities/:activityId/trainers", controller.getTrainersForActivity);
 
 // ── Batches per society or school ─────────────────────────────────────────
 router.get("/societies/:id/batches", controller.getSocietyBatches);   // GET /api/v1/admin/societies/1/batches

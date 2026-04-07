@@ -1,6 +1,5 @@
 const repo              = require("./vendordashboardrepo");
 const commissionRepo    = require("../../../commissions/commissionrepo");
-const withdrawalService = require("../../../commissions/withdrawalservice");
 
 // ── Resolve vendor identity from JWT userId ────────────────────────────────
 const resolveVendor = async (userId) => {
@@ -96,17 +95,3 @@ exports.getTransactionHistory = async (userId, filters) => {
     return commissionRepo.getTransactionHistory(professionalId, filters);
 };
 
-exports.withdrawRequest = async (userId) => {
-    const { professionalId } = await resolveVendor(userId);
-    return withdrawalService.withdrawRequest(professionalId);
-};
-
-exports.withdrawNow = async (userId) => {
-    const { professionalId } = await resolveVendor(userId);
-    return withdrawalService.withdrawNow(professionalId);
-};
-
-exports.savePayoutDetails = async (userId, body) => {
-    const { professionalId } = await resolveVendor(userId);
-    return withdrawalService.savePayoutDetails(professionalId, body);
-};

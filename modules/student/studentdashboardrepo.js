@@ -8,20 +8,39 @@ async function getStudentIdByUserId(userId) {
   return student || null;
 }
 
+// ── Toggle check ──────────────────────────────────────────────────────────
+
+async function getToggleState(studentId) {
+  const [subjects, activities] = await Promise.all([
+    prisma.sessions.count({ where: { student_id: studentId, session_type: "personal_tutor" } }),
+    prisma.sessions.count({
+      where: {
+        activity_id: { not: null },
+        OR: [
+          { student_id: studentId, session_type: { in: ["individual_coaching", "group_coaching", "school_student"] } },
+          { session_participants: { some: { student_id: studentId } }, session_type: { in: ["group_coaching", "school_student"] } },
+        ],
+      },
+    }),
+  ]);
+  return { has_subjects: subjects > 0, has_activities: activities > 0 };
+}
+
 // ── Dashboard stats — subjects (personal_tutor only) ──────────────────────
 
 async function getSubjectsDashboardStats(studentId) {
   const now = new Date();
   now.setHours(0, 0, 0, 0);
 
-  const [distinctSubjects, upcoming, done, ongoing] = await Promise.all([
-    prisma.sessions.findMany({ where: { student_id: studentId, session_type: "personal_tutor", activity_id: { not: null } }, select: { activity_id: true }, distinct: ["activity_id"] }),
+  const [tutors, upcoming, done, ongoing] = await Promise.all([
+    prisma.personal_tutors.findMany({ where: { student_id: studentId }, select: { teacher_for: true } }),
     prisma.sessions.count({ where: { student_id: studentId, session_type: "personal_tutor", status: "scheduled", scheduled_date: { gte: now } } }),
     prisma.sessions.count({ where: { student_id: studentId, session_type: "personal_tutor", status: "completed" } }),
     prisma.sessions.count({ where: { student_id: studentId, session_type: "personal_tutor", status: "ongoing" } }),
   ]);
 
-  return { total_subjects: distinctSubjects.length, upcoming_sessions: upcoming, sessions_done: done, sessions_ongoing: ongoing };
+  const subjects = [...new Set(tutors.flatMap((t) => (t.teacher_for ? t.teacher_for.split(",").map((s) => s.trim()).filter(Boolean) : [])))];
+  return { total_subjects: subjects.length, upcoming_sessions: upcoming, sessions_done: done, sessions_ongoing: ongoing };
 }
 
 // ── Dashboard stats — activities (individual_coaching / group_coaching) ───
@@ -225,23 +244,94 @@ async function getActivitiesSessionById(studentId, sessionId) {
 // ── Subjects with sessions (personal_tutor only, grouped by activity_id) ──
 
 async function getSubjectsWithSessions(studentId) {
-  const sessions = await prisma.sessions.findMany({
-    where: { student_id: studentId, session_type: "personal_tutor", activity_id: { not: null } },
-    include: {
-      activities: { select: { id: true, name: true } },
-      professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
-    },
-    orderBy: [{ scheduled_date: "asc" }, { start_time: "asc" }],
+  // 1. Get the student's personal_tutor enrollment(s)
+  const tutors = await prisma.personal_tutors.findMany({
+    where: { student_id: studentId },
+    select: { teacher_for: true, standard: true },
   });
 
-  const subjectMap = {};
-  for (const s of sessions) {
-    const id = s.activity_id;
-    if (!subjectMap[id]) subjectMap[id] = { activity_id: id, subject_name: s.activities?.name, sessions: [] };
-    subjectMap[id].sessions.push(s);
+  if (!tutors.length) return [];
+
+  // 2. Resolve enrolled activities, tracking whether student is "All Subjects"
+  let enrolledActivityIds = [];
+  let hasAllSubjects = false;
+
+  for (const tutor of tutors) {
+    const subjects = (tutor.teacher_for || "").split(",").map((s) => s.trim()).filter(Boolean);
+
+    for (const subject of subjects) {
+      // Flutter may send "All Subjects 3RD-4TH" — detect by prefix
+      const isAllSubjects = /^All Subjects/i.test(subject);
+      if (isAllSubjects) {
+        hasAllSubjects = true;
+        const standard = tutor.standard || null;
+        const feeActivities = await prisma.fee_structures.findMany({
+          where: {
+            coaching_type: "personal_tutor",
+            ...(standard ? { standard } : {}),
+          },
+          select: { activity_id: true },
+          distinct: ["activity_id"],
+        });
+        enrolledActivityIds.push(...feeActivities.map((f) => f.activity_id));
+      } else {
+        const matched = await prisma.activities.findMany({
+          where: { name: subject },
+          select: { id: true },
+        });
+        enrolledActivityIds.push(...matched.map((a) => a.id));
+      }
+    }
   }
 
-  return Object.values(subjectMap).map(_withCounts);
+  // Deduplicate
+  enrolledActivityIds = [...new Set(enrolledActivityIds)];
+  if (!enrolledActivityIds.length) return [];
+
+  // 3. Fetch activities and sessions
+  // For "All Subjects" students, sessions are stored with activity_id = null,
+  // so we fetch all personal_tutor sessions without an activity_id filter.
+  const [activities, sessions] = await Promise.all([
+    prisma.activities.findMany({
+      where: { id: { in: enrolledActivityIds } },
+      select: { id: true, name: true },
+    }),
+    prisma.sessions.findMany({
+      where: {
+        student_id: studentId,
+        session_type: "personal_tutor",
+        ...(hasAllSubjects ? {} : { activity_id: { in: enrolledActivityIds } }),
+      },
+      include: {
+        professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
+      },
+      orderBy: [{ scheduled_date: "asc" }, { start_time: "asc" }],
+    }),
+  ]);
+
+  // 4. Group sessions by activity_id.
+  // For "All Subjects", sessions have activity_id = null — bucket them under the
+  // "All Subjects" activity ID (first one found in enrolledActivityIds from fee_structures).
+  const allSubjectsActivityId = hasAllSubjects
+    ? activities.find((a) => /^All Subjects/i.test(a.name))?.id ?? enrolledActivityIds[0]
+    : null;
+
+  const sessionsByActivity = {};
+  for (const s of sessions) {
+    const bucket = s.activity_id ?? allSubjectsActivityId;
+    if (bucket == null) continue;
+    if (!sessionsByActivity[bucket]) sessionsByActivity[bucket] = [];
+    sessionsByActivity[bucket].push(s);
+  }
+
+  // 5. Build result — one entry per enrolled activity, even if no sessions yet
+  const result = activities.map((act) => ({
+    activity_id: act.id,
+    subject_name: act.name,
+    sessions: sessionsByActivity[act.id] || [],
+  }));
+
+  return result.map(_withCounts);
 }
 
 // ── Activities with sessions (individual_coaching / group_coaching) ────────
@@ -304,6 +394,7 @@ function _withCounts(entry) {
 
 module.exports = {
   getStudentIdByUserId,
+  getToggleState,
   getSubjectsDashboardStats,
   getActivitiesDashboardStats,
   getSubjectsReminder,

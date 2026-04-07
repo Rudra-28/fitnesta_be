@@ -19,8 +19,6 @@ router.get("/sports/sessions", trainerGuard, controller.getSessionsByActivity); 
 router.get("/wallet", trainerGuard, controller.getWalletSummary);                             // GET  /api/v1/trainer-dashboard/wallet
 router.get("/wallet/transactions", trainerGuard, controller.getTransactionHistory);  // GET /api/v1/trainer-dashboard/wallet/transactions
 router.get("/wallet/:status", trainerGuard, controller.getWalletBreakdown);
-router.put("/wallet/payout-details", trainerGuard, controller.savePayoutDetails);                               // PUT  /api/v1/trainer-dashboard/wallet/payout-details
-router.post("/wallet/withdraw-request", trainerGuard, controller.withdrawRequest);           // POST /api/v1/trainer-dashboard/wallet/withdraw-request
-router.post("/wallet/withdraw-now", trainerGuard, controller.withdrawNow);                   // POST /api/v1/trainer-dashboard/wallet/withdraw-now
+// Withdrawal is handled by admin manually — no professional-initiated withdrawal routes.
 
 module.exports = router;

@@ -119,29 +119,3 @@ exports.getTransactionHistory = async (req, res) => {
     }
 };
 
-exports.withdrawRequest = async (req, res) => {
-    try {
-        const data = await service.withdrawRequest(req.teacher.id);
-        res.json({ success: true, message: "Withdrawal request submitted", data });
-    } catch (err) {
-        res.status(err.statusCode || 400).json({ success: false, message: err.message });
-    }
-};
-
-exports.withdrawNow = async (req, res) => {
-    try {
-        const data = await service.withdrawNow(req.teacher.id);
-        res.json({ success: true, message: "Transfer initiated via Razorpay", data });
-    } catch (err) {
-        res.status(err.statusCode || 400).json({ success: false, message: err.message });
-    }
-};
-
-exports.savePayoutDetails = async (req, res) => {
-    try {
-        await service.savePayoutDetails(req.teacher.id, req.body);
-        res.json({ success: true, message: "Payout details saved successfully" });
-    } catch (err) {
-        res.status(err.statusCode || 400).json({ success: false, message: err.message });
-    }
-};

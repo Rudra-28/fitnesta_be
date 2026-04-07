@@ -51,26 +51,6 @@ exports.getTransactionHistory = async (req, res) => {
     }
 };
 
-exports.withdrawRequest = async (req, res) => {
-    try {
-        const data = await service.withdrawRequest(req.me.userId);
-        res.json({ success: true, message: "Withdrawal request submitted", data });
-    } catch (err) { handleErr(err, res); }
-};
-
-exports.withdrawNow = async (req, res) => {
-    try {
-        const data = await service.withdrawNow(req.me.userId);
-        res.json({ success: true, message: "Transfer initiated via Razorpay", data });
-    } catch (err) { handleErr(err, res); }
-};
-
-exports.savePayoutDetails = async (req, res) => {
-    try {
-        await service.savePayoutDetails(req.me.userId, req.body);
-        res.json({ success: true, message: "Payout details saved successfully" });
-    } catch (err) { handleErr(err, res); }
-};
 
 // ── Dashboard Summary ────────────────────────────────────────────────────────
 

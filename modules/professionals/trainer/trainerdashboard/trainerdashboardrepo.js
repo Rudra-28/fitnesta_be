@@ -262,6 +262,7 @@ async function getSessionById(sessionId, professionalId) {
   return prisma.sessions.findFirst({
     where: { id: Number(sessionId), professional_id: Number(professionalId) },
     include: {
+      activities: { select: { id: true, name: true } },
       batches: {
         select: {
           id: true, batch_name: true, batch_type: true,
@@ -272,12 +273,25 @@ async function getSessionById(sessionId, professionalId) {
         },
       },
       students: {
-        select: { id: true, users: { select: { full_name: true, mobile: true, email: true, photo: true } } },
+        select: {
+          id: true,
+          student_type: true,
+          users: { select: { full_name: true, mobile: true, email: true, photo: true, address: true } },
+          parent_consents: { select: { parent_name: true, emergency_contact_no: true }, orderBy: { id: "desc" }, take: 1 },
+          personal_tutors: { select: { teacher_for: true }, take: 1 },
+        },
       },
       session_participants: {
         select: {
           attended: true,
-          students: { select: { id: true, users: { select: { full_name: true, photo: true } } } },
+          students: {
+            select: {
+              id: true,
+              student_type: true,
+              users: { select: { full_name: true, mobile: true, email: true, photo: true, address: true } },
+              parent_consents: { select: { parent_name: true, emergency_contact_no: true }, orderBy: { id: "desc" }, take: 1 },
+            },
+          },
         },
       },
       session_feedback: {
@@ -468,9 +482,22 @@ async function punchIn(sessionId) {
 }
 
 async function punchOut(sessionId) {
-  return prisma.sessions.update({
-    where: { id: Number(sessionId) },
-    data: { status: "completed", out_time: new Date(), updated_at: new Date() },
+  const sid = Number(sessionId);
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.sessions.update({
+      where: { id: sid },
+      data: { status: "completed", out_time: new Date(), updated_at: new Date() },
+    });
+
+    // For batch sessions (group_coaching / school_student), mark all participants as attended
+    if (session.batch_id) {
+      await tx.session_participants.updateMany({
+        where: { session_id: sid },
+        data:  { attended: true },
+      });
+    }
+
+    return session;
   });
 }
 

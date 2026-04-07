@@ -88,6 +88,34 @@ exports.getUnassignedStudents = async (req, res) => {
     }
 };
 
+exports.getSchoolStudentsForBatch = async (req, res) => {
+    try {
+        const { batch_id, school_id, activity_id } = req.query;
+        if (!batch_id || !school_id) {
+            return res.status(400).json({ success: false, error: "batch_id and school_id are required" });
+        }
+        const data = await service.getSchoolStudentsForBatch(batch_id, school_id, activity_id);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getGroupCoachingStudentsForBatch = async (req, res) => {
+    try {
+        const { batch_id, society_id, activity_id } = req.query;
+        if (!batch_id || !society_id) {
+            return res.status(400).json({ success: false, error: "batch_id and society_id are required" });
+        }
+        const data = await service.getGroupCoachingStudentsForBatch(batch_id, society_id, activity_id);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 exports.getAvailableProfessionals = async (req, res) => {
     try {
         const { type, date, start_time, end_time } = req.query; // teacher | trainer
@@ -478,6 +506,52 @@ exports.getProfessionalsForSession = async (req, res) => {
         res.json({ success: true, count: data.length, data });
     } catch (err) {
         const status = err.message === "INVALID_TYPE" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getStudentActivities = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const data = await service.getStudentActivities(studentId);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getTrainersForActivity = async (req, res) => {
+    try {
+        const { activityId } = req.params;
+        const { date, start_time, end_time } = req.query;
+        const data = await service.getTrainersForActivity(activityId, { date, startTime: start_time, endTime: end_time });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.message === "NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getStudentSubjects = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const data = await service.getStudentSubjects(studentId);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getTeachersForSubject = async (req, res) => {
+    try {
+        const { activityId } = req.params;
+        const { date, start_time, end_time } = req.query;
+        const data = await service.getTeachersForSubject(activityId, { date, startTime: start_time, endTime: end_time });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.message === "NOT_FOUND" ? 404 : 500;
         res.status(status).json({ success: false, error: err.message });
     }
 };

@@ -32,11 +32,20 @@ exports.submitRegistration = async (req, res) => {
         formData.school_id = school.id;
         console.log(`[SS] School resolved — name: ${formData.schoolName}, id: ${school.id}`);
 
+        // ── Activity debug logs ──────────────────────────────────────────────
+        const rawActivityIds = formData.activity_ids;
+        const activityIdList = Array.isArray(rawActivityIds)
+            ? rawActivityIds.map(Number)
+            : rawActivityIds
+                ? String(rawActivityIds).split(",").map((a) => Number(a.trim())).filter(Boolean)
+                : [];
+        console.log("[SS] activity_ids received (raw):", rawActivityIds);
+        console.log("[SS] activity_ids count:", activityIdList.length, "| list:", activityIdList);
+        // ────────────────────────────────────────────────────────────────────
+
         // Attach payment info so the service can look up the fee
         formData.payment = {
-            activity_ids: Array.isArray(formData.activity_ids)
-                ? formData.activity_ids.map(Number)
-                : [],
+            activity_ids: activityIdList,
         };
 
         const result = await service.initiateRegistration(formData, serviceType);

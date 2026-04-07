@@ -4,7 +4,8 @@ const VALID_COACHING_TYPES = ["individual_coaching", "group_coaching", "personal
 const VALID_SOCIETY_CATEGORIES = ["A+", "A", "B"];
 const VALID_STANDARDS = ["1ST-2ND", "3RD-4TH", "5TH-6TH", "7TH-8TH", "8TH-10TH", "ANY"];
 
-const ALIAS_MAP = {};
+// "trainer" is a virtual alias — returns activities for both individual_coaching and school_student
+const ALIAS_MAP = { trainer: "trainer" };
 
 // Prisma maps the "A+" enum value to "A_" internally — convert back for API responses
 const SOCIETY_CATEGORY_DISPLAY = {
@@ -18,6 +19,23 @@ exports.getActivities = async (coachingType, societyCategory = null, standard = 
     if (!coachingType) {
         const activities = await repo.getAllActiveActivities();
         return { activities };
+    }
+
+    // "trainer" → fetch activities for individual_coaching + school_student, deduplicated
+    if (coachingType === "trainer") {
+        const [ic, ss] = await Promise.all([
+            repo.getActivitiesByCoachingType("individual_coaching", null, null, null),
+            repo.getActivitiesByCoachingType("school_student", null, null, null),
+        ]);
+        const seen = new Set();
+        const activities = [];
+        for (const a of [...ic, ...ss]) {
+            if (!seen.has(a.id)) {
+                seen.add(a.id);
+                activities.push({ id: a.id, name: a.name, notes: a.notes ?? null });
+            }
+        }
+        return { coaching_type: "trainer", activities };
     }
 
     const resolved = ALIAS_MAP[coachingType] ?? coachingType;

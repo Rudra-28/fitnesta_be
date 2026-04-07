@@ -300,6 +300,49 @@ exports.approveRegistration = async (pendingId, adminUserId, note) => {
 
 // ── Student assignment ─────────────────────────────────────────────────────
 
+/**
+ * Returns group_coaching students for a batch's assign dropdown.
+ * Filtered by society + activity, excludes students already in the batch.
+ */
+/**
+ * Returns school_student students for a batch's assign dropdown.
+ * Filtered by school + activity, excludes students already in the batch.
+ */
+exports.getSchoolStudentsForBatch = async (batchId, schoolId, activityId) => {
+    if (!batchId || !schoolId) {
+        const err = new Error("batchId and school_id are required");
+        err.status = 400;
+        throw err;
+    }
+    const rows = await adminRepo.getSchoolStudentsForBatch(batchId, schoolId, activityId);
+    return rows.map(r => ({
+        student_id:   r.students?.id ?? null,
+        full_name:    r.students?.users?.full_name ?? r.student_name ?? null,
+        mobile:       r.students?.users?.mobile ?? null,
+        standard:     r.standard,
+        school_id:    r.school_id,
+        activities:   r.activities,
+    }));
+};
+
+exports.getGroupCoachingStudentsForBatch = async (batchId, societyId, activityId) => {
+    if (!batchId || !societyId) {
+        const err = new Error("batchId and society_id are required");
+        err.status = 400;
+        throw err;
+    }
+    const rows = await adminRepo.getGroupCoachingStudentsForBatch(batchId, societyId, activityId);
+    return rows.map(r => ({
+        student_id:   r.students?.id ?? null,
+        full_name:    r.students?.users?.full_name ?? null,
+        mobile:       r.students?.users?.mobile ?? null,
+        activity:     r.activity,
+        society_id:   r.society_id,
+        society_name: r.society_name,
+        batch_id:     r.batch_id,  // null = unassigned, non-null = already in another batch
+    }));
+};
+
 exports.getUnassignedStudents = async (service) => {
     if (service === "personal_tutor") {
         const rows = await adminRepo.getUnassignedPersonalTutors();
@@ -604,23 +647,14 @@ exports.approveCommission = async (id) => {
 exports.markCommissionPaid = async (id) => {
     const commission = await adminRepo.getCommissionById(id);
     if (!commission) throw new Error("COMMISSION_NOT_FOUND");
-    if (commission.status === "paid") throw new Error("ALREADY_PAID");
-    if (commission.status === "on_hold") throw new Error("COMMISSION_NOT_APPROVED");
+    if (commission.status === "paid")    throw new Error("ALREADY_PAID");
+    if (commission.status === "on_hold") throw new Error("COMMISSION_STILL_ON_HOLD");
 
     const amount = parseFloat(commission.commission_amount);
     return await adminRepo.markCommissionPaid(id, amount, commission.professional_id);
 };
 
-// ── Withdrawal requests ────────────────────────────────────────────────────
-
-exports.listWithdrawalRequests = async () => {
-    return await adminRepo.listWithdrawalRequests();
-};
-
-exports.approveWithdrawal = async (professionalId) => {
-    const withdrawalService = require("../commissions/withdrawalservice");
-    return withdrawalService.approveWithdrawal(Number(professionalId));
-};
+// ── Withdrawal requests (removed — admin pays manually via markCommissionPaid) ─
 
 // ── Travelling allowances list ─────────────────────────────────────────────
 
@@ -803,6 +837,7 @@ exports.getSessionStudentInfo = async (type, id) => {
     if (type === "personal_tutor") {
         const r = await adminRepo.getPersonalTutorForSession(id);
         if (!r) throw new Error("NOT_FOUND");
+        const consent = r.students?.parent_consents?.[0] ?? null;
         return {
             type: "personal_tutor",
             personal_tutor_id: r.id,
@@ -811,13 +846,17 @@ exports.getSessionStudentInfo = async (type, id) => {
             student_mobile: r.students?.users?.mobile ?? null,
             student_address: r.students?.users?.address ?? null,
             standard: r.standard,
-            subject: r.teacher_for,   // what subject/teacher_for they opted
+            subject: r.teacher_for,
+            preferred_time: r.preferred_time ?? null,
+            parent_name: consent?.parent_name ?? null,
+            parent_mobile: consent?.emergency_contact_no ?? null,
             already_assigned_professional_id: r.teacher_professional_id ?? null,
         };
     }
     if (type === "individual_coaching") {
         const r = await adminRepo.getIndividualParticipantForSession(id);
         if (!r) throw new Error("NOT_FOUND");
+        const consent = r.students?.parent_consents?.[0] ?? null;
         return {
             type: "individual_coaching",
             individual_participant_id: r.id,
@@ -828,6 +867,10 @@ exports.getSessionStudentInfo = async (type, id) => {
             activity: r.activity,
             society_name: r.society_name ?? r.societies?.society_name ?? null,
             society_address: r.societies?.address ?? null,
+            preferred_batch: r.preferred_batch ?? null,
+            preferred_time: r.preferred_time ?? null,
+            parent_name: consent?.parent_name ?? null,
+            parent_mobile: consent?.emergency_contact_no ?? null,
             already_assigned_professional_id: r.trainer_professional_id ?? null,
         };
     }
@@ -837,6 +880,104 @@ exports.getSessionStudentInfo = async (type, id) => {
 exports.getProfessionalsForSession = async (type, filters) => {
     if (type !== "teacher" && type !== "trainer") throw new Error("INVALID_TYPE");
     return await adminRepo.getProfessionalsForSession(type, filters);
+};
+
+// ── Personal tutor session creation helpers ───────────────────────────────
+
+// Returns the subjects a personal_tutor student is enrolled in, as a clean list
+exports.getStudentSubjects = async (studentId) => {
+    const tutor = await prisma.personal_tutors.findFirst({
+        where: { student_id: Number(studentId) },
+        select: { teacher_for: true, standard: true },
+    });
+    if (!tutor) throw new Error("NOT_FOUND");
+
+    const standard = tutor.standard;
+    const rawSubjects = (tutor.teacher_for || "").split(",").map((s) => s.trim()).filter(Boolean);
+
+    const subjectNames = rawSubjects.map((s) => (/^All Subjects/i.test(s) ? "All Subjects" : s));
+
+    // Resolve activity records for each subject name
+    const activities = await prisma.activities.findMany({
+        where: { name: { in: subjectNames } },
+        select: { id: true, name: true },
+    });
+
+    // If "All Subjects" — expand to all activities with a personal_tutor fee for this standard
+    const hasAllSubjects = subjectNames.includes("All Subjects");
+    if (hasAllSubjects) {
+        const feeRows = await prisma.fee_structures.findMany({
+            where: {
+                coaching_type: "personal_tutor",
+                standard: { in: [standard, "ANY"].filter(Boolean) },
+            },
+            include: { activities: { select: { id: true, name: true } } },
+            distinct: ["activity_id"],
+        });
+        return {
+            student_id: Number(studentId),
+            standard,
+            subjects: feeRows.map((f) => ({ activity_id: f.activity_id, activity_name: f.activities.name })),
+        };
+    }
+
+    return {
+        student_id: Number(studentId),
+        standard,
+        subjects: activities.map((a) => ({ activity_id: a.id, activity_name: a.name })),
+    };
+};
+
+// Returns teachers who teach a given subject, with availability for an optional time slot
+// Returns the activities an individual_coaching student is enrolled in
+exports.getStudentActivities = async (studentId) => {
+    const participant = await prisma.individual_participants.findFirst({
+        where: { student_id: Number(studentId) },
+        select: { activity: true },
+    });
+    if (!participant) throw new Error("NOT_FOUND");
+
+    // activity is a comma-separated display string e.g. "Dance (Western), Boxing"
+    const activityNames = (participant.activity || "")
+        .split(",").map((s) => s.trim()).filter(Boolean);
+
+    if (!activityNames.length) return { student_id: Number(studentId), activities: [] };
+
+    const activities = await prisma.activities.findMany({
+        where: { name: { in: activityNames } },
+        select: { id: true, name: true },
+    });
+
+    return { student_id: Number(studentId), activities };
+};
+
+// Returns trainers for a given activity, with availability for an optional slot
+exports.getTrainersForActivity = async (activityId, filters = {}) => {
+    const activity = await prisma.activities.findUnique({
+        where: { id: Number(activityId) },
+        select: { id: true, name: true },
+    });
+    if (!activity) throw new Error("NOT_FOUND");
+
+    const result = await adminRepo.getProfessionalsForSession("trainer", {
+        ...filters,
+        activity: activity.name,
+    });
+    return result;
+};
+
+exports.getTeachersForSubject = async (activityId, filters = {}) => {
+    const activity = await prisma.activities.findUnique({
+        where: { id: Number(activityId) },
+        select: { id: true, name: true },
+    });
+    if (!activity) throw new Error("NOT_FOUND");
+
+    const result = await adminRepo.getProfessionalsForSession("teacher", {
+        ...filters,
+        subject: activity.name,
+    });
+    return result;
 };
 
 // ── Batches per society/school ────────────────────────────────────────────

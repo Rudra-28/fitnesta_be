@@ -36,6 +36,7 @@ exports.insertpersonalTutor = async (tx, studentId, data) => {
             standard: data?.standard || null,
             batch: data?.batch || null,
             teacher_for: data?.teacherFor || null,
+            preferred_time: data?.preferred_time || data?.preferredTime || null,
         },
     });
 };

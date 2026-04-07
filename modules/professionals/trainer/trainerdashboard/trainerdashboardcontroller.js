@@ -131,32 +131,6 @@ async function getTransactionHistory(req, res) {
   }
 }
 
-async function withdrawRequest(req, res) {
-  try {
-    const data = await service.withdrawRequest(req.trainer.userId);
-    return res.json({ success: true, message: "Withdrawal request submitted", data });
-  } catch (err) {
-    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
-  }
-}
-
-async function withdrawNow(req, res) {
-  try {
-    const data = await service.withdrawNow(req.trainer.userId);
-    return res.json({ success: true, message: "Transfer initiated via Razorpay", data });
-  } catch (err) {
-    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
-  }
-}
-
-async function savePayoutDetails(req, res) {
-  try {
-    await service.savePayoutDetails(req.trainer.userId, req.body);
-    return res.json({ success: true, message: "Payout details saved successfully" });
-  } catch (err) {
-    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
-  }
-}
 
 async function getBatchSessions(req, res) {
   try {
@@ -188,4 +162,4 @@ async function getSessionsByActivity(req, res) {
   }
 }
 
-module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, getTransactionHistory, withdrawRequest, withdrawNow, savePayoutDetails, getSportsActivities, getSessionsByActivity };
+module.exports = { getSessions, getSessionById, getTrainerBatches, getBatchesByLocation, getActivities, getBatchStudents, getBatchSessions, getAllStudents, getStudentSessions, punchIn, punchOut, getWalletSummary, getWalletBreakdown, getTransactionHistory, getSportsActivities, getSessionsByActivity };

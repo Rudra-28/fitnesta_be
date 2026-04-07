@@ -11,6 +11,11 @@ const ERROR_MAP = {
   STUDENT_NOT_FOUND: 404,
   INVALID_BATCH_TYPE: 400,
   ACTIVITY_NOT_FOUND: 404,
+  NO_CYCLE: 400,
+  CYCLE_INCOMPLETE: 423,
+  ALREADY_SETTLED: 409,
+  NOT_FOUND: 404,
+  INVALID_STATUS: 409,
 };
 
 function handleError(res, err) {
@@ -67,11 +72,7 @@ async function deleteBatch(req, res) {
 
 async function generateSessions(req, res) {
   try {
-    const { start_date, end_date } = req.body;
-    if (!start_date || !end_date) {
-      return res.status(400).json({ success: false, message: "start_date and end_date are required" });
-    }
-    const result = await service.generateSessions(req.params.batchId, start_date, end_date);
+    const result = await service.generateSessions(req.params.batchId);
     return res.json({ success: true, ...result });
   } catch (err) {
     return handleError(res, err);
@@ -100,6 +101,62 @@ async function removeBatchStudent(req, res) {
   }
 }
 
+async function getUnassignedGroupStudents(req, res) {
+  try {
+    const { society_id, activity_id } = req.query;
+    if (!society_id) return res.status(400).json({ success: false, message: "society_id is required" });
+    const data = await service.getUnassignedGroupStudents(society_id, activity_id);
+    return res.json({ success: true, data });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function getBatchDetail(req, res) {
+  try {
+    const data = await service.getBatchDetail(req.params.batchId);
+    return res.json({ success: true, data });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function getSettlementPreview(req, res) {
+  try {
+    const data = await service.getSettlementPreview(req.params.batchId);
+    return res.json({ success: true, data });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function settleBatchCycle(req, res) {
+  try {
+    const result = await service.settleBatchCycle(req.params.batchId);
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function markSettlementPaid(req, res) {
+  try {
+    const result = await service.markSettlementPaid(req.params.settlementId);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function listSettlements(req, res) {
+  try {
+    const data = await service.listSettlements(req.params.batchId);
+    return res.json({ success: true, data });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 module.exports = {
   createBatch,
   listBatches,
@@ -109,4 +166,10 @@ module.exports = {
   generateSessions,
   bulkAssignStudents,
   removeBatchStudent,
+  getBatchDetail,
+  getUnassignedGroupStudents,
+  getSettlementPreview,
+  settleBatchCycle,
+  markSettlementPaid,
+  listSettlements,
 };

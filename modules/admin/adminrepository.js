@@ -323,8 +323,22 @@ exports.findPersonalTutorById = async (id) => {
     return await prisma.personal_tutors.findUnique({ where: { id } });
 };
 
+exports.findPersonalTutorByStudentId = async (studentId) => {
+    return await prisma.personal_tutors.findFirst({
+        where: { student_id: Number(studentId) },
+        select: { id: true, teacher_professional_id: true },
+    });
+};
+
 exports.findIndividualParticipantById = async (id) => {
     return await prisma.individual_participants.findUnique({ where: { id } });
+};
+
+exports.findIndividualParticipantByStudentId = async (studentId) => {
+    return await prisma.individual_participants.findFirst({
+        where: { student_id: Number(studentId) },
+        select: { id: true, trainer_professional_id: true },
+    });
 };
 
 exports.findProfessionalById = async (id, type) => {
@@ -557,6 +571,8 @@ exports.updateFeeStructureById = async (id, { total_fee, effective_monthly, cust
 
 exports.createFeeStructure = async (data) => {
     const { activity_id, coaching_type, society_category, custom_category_name, standard, term_months, total_fee, effective_monthly, adminUserId } = data;
+    // Prisma requires non-null values in composite unique keys — use "" as sentinel for "no standard"
+    const standardKey = standard ?? '';
     return await prisma.fee_structures.upsert({
         where: {
             activity_id_coaching_type_society_category_custom_category_name_standard_term_months: {
@@ -564,7 +580,7 @@ exports.createFeeStructure = async (data) => {
                 coaching_type,
                 society_category:     society_category     ?? null,
                 custom_category_name: custom_category_name ?? null,
-                standard:             standard             ?? null,
+                standard:             standardKey,
                 term_months:          Number(term_months),
             },
         },
@@ -573,7 +589,7 @@ exports.createFeeStructure = async (data) => {
             coaching_type,
             society_category:     society_category     ?? null,
             custom_category_name: custom_category_name ?? null,
-            standard:             standard             ?? null,
+            standard:             standardKey || null,
             term_months:          Number(term_months),
             total_fee,
             effective_monthly:    effective_monthly ?? null,
@@ -919,6 +935,105 @@ exports.getAllGroupCoachingStudents = async () => {
     });
 };
 
+/**
+ * Returns students eligible to be added to a specific group_coaching batch.
+ * Filters by society_id + activity name (derived from activity_id) and student_type = group_coaching.
+ * Excludes students already in the batch.
+ */
+exports.getGroupCoachingStudentsForBatch = async (batchId, societyId, activityId) => {
+    // Resolve activity name from id
+    const activity = activityId
+        ? await prisma.activities.findUnique({ where: { id: Number(activityId) }, select: { name: true } })
+        : null;
+
+    // Students already in this batch — exclude them
+    const alreadyIn = await prisma.batch_students.findMany({
+        where: { batch_id: Number(batchId) },
+        select: { student_id: true },
+    });
+    const excludeIds = alreadyIn.map(r => r.student_id);
+
+    return prisma.individual_participants.findMany({
+        where: {
+            ...(societyId  && { society_id: Number(societyId) }),
+            ...(activity   && { activity: activity.name }),
+            students: {
+                student_type: "group_coaching",
+                ...(excludeIds.length > 0 && { id: { notIn: excludeIds } }),
+            },
+        },
+        select: {
+            id: true,
+            activity: true,
+            society_id: true,
+            society_name: true,
+            batch_id: true,
+            students: {
+                select: {
+                    id: true,
+                    users: { select: { full_name: true, mobile: true } },
+                },
+            },
+        },
+        orderBy: { id: "desc" },
+    });
+};
+
+/**
+ * Returns students eligible to be added to a specific school_student batch.
+ * Filters by school_id + activity_id (activity_ids is a JSON array on school_students).
+ * Excludes students already in the batch.
+ */
+exports.getSchoolStudentsForBatch = async (batchId, schoolId, activityId) => {
+    // Students already in this batch — exclude them
+    const alreadyIn = await prisma.batch_students.findMany({
+        where: { batch_id: Number(batchId) },
+        select: { student_id: true },
+    });
+    const excludeIds = alreadyIn.map(r => r.student_id);
+
+    const where = {
+        school_id: Number(schoolId),
+        students: {
+            student_type: "school_student",
+            ...(excludeIds.length > 0 && { id: { notIn: excludeIds } }),
+        },
+    };
+
+    const rows = await prisma.school_students.findMany({
+        where,
+        select: {
+            id:           true,
+            student_name: true,
+            standard:     true,
+            activities:   true,
+            school_id:    true,
+            students: {
+                select: {
+                    id:    true,
+                    users: { select: { full_name: true, mobile: true } },
+                },
+            },
+        },
+        orderBy: { id: "desc" },
+    });
+
+    // Filter by activityId if provided (activities is stored as JSON array of ids)
+    if (activityId) {
+        const actId = Number(activityId);
+        return rows.filter(r => {
+            try {
+                const ids = typeof r.activities === "string"
+                    ? JSON.parse(r.activities)
+                    : (r.activities || []);
+                return ids.map(Number).includes(actId);
+            } catch { return false; }
+        });
+    }
+
+    return rows;
+};
+
 // ── Payments list ─────────────────────────────────────────────────────────
 
 exports.listPayments = async ({ serviceType, status, userId, from, to } = {}) => {
@@ -1006,11 +1121,17 @@ exports.getPersonalTutorForSession = async (id) => {
             batch: true,
             teacher_for: true,
             dob: true,
+            preferred_time: true,
             teacher_professional_id: true,
             students: {
                 select: {
                     id: true,
                     users: { select: { full_name: true, mobile: true, address: true } },
+                    parent_consents: {
+                        select: { parent_name: true, emergency_contact_no: true },
+                        orderBy: { created_at: 'desc' },
+                        take: 1,
+                    },
                 },
             },
         },
@@ -1027,12 +1148,19 @@ exports.getIndividualParticipantForSession = async (id) => {
             society_name: true,
             dob: true,
             age: true,
+            preferred_batch: true,
+            preferred_time: true,
             trainer_professional_id: true,
             societies: { select: { id: true, society_name: true, address: true } },
             students: {
                 select: {
                     id: true,
                     users: { select: { full_name: true, mobile: true, address: true } },
+                    parent_consents: {
+                        select: { parent_name: true, emergency_contact_no: true },
+                        orderBy: { created_at: 'desc' },
+                        take: 1,
+                    },
                 },
             },
         },
@@ -1040,7 +1168,7 @@ exports.getIndividualParticipantForSession = async (id) => {
 };
 
 // Professionals for session creation with busy/available at the given slot
-exports.getProfessionalsForSession = async (professionType, { date, startTime, endTime, subject, activity } = {}) => {
+exports.getProfessionalsForSession = async (professionType, { date, startTime, endTime, subject } = {}) => {
     const parseTime = (t) => {
         if (!t) return undefined;
         const [h, m, s = "0"] = String(t).split(":");
@@ -1064,24 +1192,44 @@ exports.getProfessionalsForSession = async (professionType, { date, startTime, e
         busyIds = new Set(conflicts.map((r) => r.professional_id));
     }
 
-    const whereDetails = professionType === "teacher"
-        ? { teachers: subject ? { some: { subject: { contains: subject } } } : { some: {} } }
-        : { trainers: activity ? { some: { specified_game: { contains: activity } } } : { some: {} } };
+    const baseWhere = { profession_type: professionType, users: { approval_status: "approved" } };
 
-    const rows = await prisma.professionals.findMany({
-        where: {
-            profession_type: professionType,
-            users: { approval_status: "approved" },
-            ...whereDetails,
-        },
-        select: {
-            id: true,
-            place: true,
-            users: { select: { full_name: true, mobile: true, address: true } },
-            teachers: { select: { subject: true, experience_details: true } },
-            trainers: { select: { category: true, specified_game: true, experience_details: true } },
-        },
-    });
+    let rows = [];
+    if (professionType === "teacher") {
+        // Try filtered by subject first; fall back to all teachers if none match
+        if (subject) {
+            rows = await prisma.professionals.findMany({
+                where: { ...baseWhere, teachers: { some: { subject: { contains: subject } } } },
+                select: {
+                    id: true, place: true,
+                    users: { select: { full_name: true, mobile: true, address: true } },
+                    teachers: { select: { subject: true, experience_details: true } },
+                },
+            });
+        }
+        if (!rows.length) {
+            // No teacher matched the specific subject — return all approved teachers
+            rows = await prisma.professionals.findMany({
+                where: { ...baseWhere, teachers: { some: {} } },
+                select: {
+                    id: true, place: true,
+                    users: { select: { full_name: true, mobile: true, address: true } },
+                    teachers: { select: { subject: true, experience_details: true } },
+                },
+            });
+        }
+    } else {
+        // specified_game is a JSON array — string contains won't work reliably.
+        // Always return all approved trainers; admin picks the right one.
+        rows = await prisma.professionals.findMany({
+            where: { ...baseWhere, trainers: { some: {} } },
+            select: {
+                id: true, place: true,
+                users: { select: { full_name: true, mobile: true, address: true } },
+                trainers: { select: { category: true, specified_game: true, experience_details: true } },
+            },
+        });
+    }
 
     return rows.map((r) => ({ ...r, is_available: !busyIds.has(r.id) }));
 };

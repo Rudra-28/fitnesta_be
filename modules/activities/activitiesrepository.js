@@ -87,7 +87,7 @@ exports.getFeesForActivities = async (activityIds, coachingType, termMonths, sta
             activity_id: { in: activityIds },
             coaching_type: coachingType,
             term_months: termMonths,
-            standard,
+            ...(standard != null ? { standard } : {}),
         },
         select: { activity_id: true, total_fee: true },
     });

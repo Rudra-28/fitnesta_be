@@ -169,6 +169,7 @@ exports.getSessionById = async (sessionId, professionalId) => {
     return prisma.sessions.findFirst({
         where: { id: Number(sessionId), professional_id: Number(professionalId) },
         include: {
+            activities: { select: { id: true, name: true } },
             batches: {
                 select: {
                     id: true, batch_name: true, batch_type: true,
@@ -178,12 +179,25 @@ exports.getSessionById = async (sessionId, professionalId) => {
                 },
             },
             students: {
-                select: { id: true, users: { select: { full_name: true, mobile: true, email: true, photo: true } } },
+                select: {
+                    id: true,
+                    student_type: true,
+                    users: { select: { full_name: true, mobile: true, email: true, photo: true, address: true } },
+                    parent_consents: { select: { parent_name: true, emergency_contact_no: true }, orderBy: { id: "desc" }, take: 1 },
+                    personal_tutors: { select: { teacher_for: true }, take: 1 },
+                },
             },
             session_participants: {
                 select: {
                     attended: true,
-                    students: { select: { id: true, users: { select: { full_name: true, photo: true } } } },
+                    students: {
+                        select: {
+                            id: true,
+                            student_type: true,
+                            users: { select: { full_name: true, mobile: true, email: true, photo: true, address: true } },
+                            parent_consents: { select: { parent_name: true, emergency_contact_no: true }, orderBy: { id: "desc" }, take: 1 },
+                        },
+                    },
                 },
             },
             session_feedback: {

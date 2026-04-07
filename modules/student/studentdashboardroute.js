@@ -17,6 +17,9 @@ if (process.env.DEV_SKIP_PAYMENT === "true") {
   router.post("/orders/:temp_uuid/dev-confirm", studentGuard, kitOrderController.devFinalizeKitOrder);
 }
 
+// ── Toggle state ───────────────────────────────────────────────────────────
+router.get("/toggle", studentGuard, ctrl.getToggleState);
+
 // ── Subjects (personal_tutor) ──────────────────────────────────────────────
 router.get("/subjects/stats",                studentGuard, ctrl.getSubjectsDashboardStats);
 router.get("/subjects",                      studentGuard, ctrl.getSubjectsWithSessions);
@@ -30,6 +33,10 @@ router.get("/activities",                     studentGuard, ctrl.getActivitiesWi
 router.get("/activities/reminder",            studentGuard, ctrl.getActivitiesReminder);
 router.get("/activities/sessions",            studentGuard, ctrl.getActivitiesSessions);
 router.get("/activities/sessions/:sessionId", studentGuard, ctrl.getActivitiesSessionById);
+
+// ── Subject Addon (buy a new subject) ─────────────────────────────────────
+router.get("/subjects/available",                studentGuard, ctrl.getAvailableSubjects);
+router.post("/subjects/buy",                     studentGuard, ctrl.initiateSubjectAddon);
 
 // ── Feedback ───────────────────────────────────────────────────────────────
 router.post("/sessions/:id/feedback", studentGuard, ctrl.submitFeedback);

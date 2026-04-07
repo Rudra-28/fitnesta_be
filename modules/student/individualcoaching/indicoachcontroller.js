@@ -53,18 +53,28 @@ exports.submitRegistration = async (req, res) => {
     formData.consent_date = toYYYYMMDD(formData.consent_date);
 
     if (formData && !formData.user_info) {
-      // Resolve activity_id — accept singular or first element of an array
-      let rawActivityId = formData.activity_id;
-      if (!rawActivityId && formData.activity_ids) {
-        let ids = formData.activity_ids;
-        if (typeof ids === "string") {
-          try { ids = JSON.parse(ids); } catch { /* keep */ }
-        }
-        if (typeof ids === "number") ids = [ids];
-        if (typeof ids === "string") ids = [Number(ids)];
-        rawActivityId = Array.isArray(ids) && ids.length > 0 ? ids[0] : null;
+      // Resolve activity_ids — accept array, JSON string, or repeated fields
+      let ids = formData.activity_ids;
+      if (typeof ids === "string") {
+        try { ids = JSON.parse(ids); } catch { /* keep */ }
       }
-      formData.activity_id = rawActivityId ? parseInt(rawActivityId) : null;
+      if (typeof ids === "number") ids = [ids];
+      if (typeof ids === "string") ids = [Number(ids)];
+      if (!Array.isArray(ids) || ids.length === 0) {
+        // Fallback to singular activity_id
+        ids = formData.activity_id ? [parseInt(formData.activity_id)] : [];
+      }
+      const activity_ids = ids.map(Number).filter((n) => !isNaN(n) && n > 0);
+
+      // ── Activity debug logs ──────────────────────────────────────────────
+      const rawActivities = formData.activities || formData.activity_enrolled;
+      const activityList = rawActivities
+        ? String(rawActivities).split(",").map((a) => a.trim()).filter(Boolean)
+        : [];
+      console.log("[IC] activity_ids (for fee lookup):", activity_ids);
+      console.log("[IC] activities field (display label):", rawActivities);
+      console.log("[IC] activities count:", activityList.length, "| list:", activityList);
+      // ────────────────────────────────────────────────────────────────────
 
       // Resolve term_months — ensure it's an integer
       if (formData.term_months) {
@@ -97,6 +107,7 @@ exports.submitRegistration = async (req, res) => {
       formData.preferred_batch ||
       formData.batch ||
       formData.preferredBatch || null,
+          preferred_time: formData.preferred_time || formData.preferredTime || null,
         },
         consentDetails: {
           society_name:       consentSocietyName,
@@ -108,7 +119,7 @@ exports.submitRegistration = async (req, res) => {
         },
         // Payment fields — Flutter must send these so we can look up the fee
         payment: {
-          activity_id: formData.activity_id ? parseInt(formData.activity_id) : null,
+          activity_ids,
           term_months: formData.term_months ? parseInt(formData.term_months) : null,
           coaching_type: formData.coaching_type || serviceType,
         },
