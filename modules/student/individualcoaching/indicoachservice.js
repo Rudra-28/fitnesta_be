@@ -116,10 +116,12 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
         ? JSON.parse(pending.form_data)
         : pending.form_data) || {};
 
+    const termMonths = data.payment?.term_months ? parseInt(data.payment.term_months) : 1;
+
     const result = await prisma.$transaction(async (tx) => {
         const userId    = await repo.insertUser(tx, data.user_info);
         const studentId = await repo.insertStudent(tx, userId, pending.service_type);
-        await repo.insertindividualcoaching(tx, studentId, data.individualcoaching);
+        await repo.insertindividualcoaching(tx, studentId, data.individualcoaching, termMonths);
         if (data.consentDetails?.parentName) {
             await repo.insertParentConsent(tx, studentId, data.consentDetails);
         }
@@ -127,8 +129,6 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
     });
 
     await repo.updatePendingStatus(pending.id, "approved");
-
-    const termMonths = data.payment?.term_months ? parseInt(data.payment.term_months) : 1;
 
     await paymentsRepo.recordPayment({
         tempUuid,

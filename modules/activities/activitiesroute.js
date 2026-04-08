@@ -9,5 +9,6 @@ const controller = require("./activitiescontroller");
 // GET /api/v1/activities                              (plain list, no fees)
 router.get("/", controller.getActivities);
 router.get("/subjects", controller.getSubjects);
+router.get("/standards", controller.getPersonalTutorStandards);
 
 module.exports = router;

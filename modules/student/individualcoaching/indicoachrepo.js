@@ -27,7 +27,7 @@ exports.insertStudent = async (tx, userId, type) => {
     return student.id;
 };
 
-exports.insertindividualcoaching = async (tx, studentId, data) => {
+exports.insertindividualcoaching = async (tx, studentId, data, termMonths = 1) => {
     await tx.individual_participants.create({
         data: {
             student_id:  studentId,
@@ -40,6 +40,7 @@ exports.insertindividualcoaching = async (tx, studentId, data) => {
             kits:        data?.kit_type || null,
             preferred_batch: data?.preferred_batch || null,
             preferred_time: data?.preferred_time || data?.preferredTime || null,
+            term_months: termMonths,
         },
     });
 };

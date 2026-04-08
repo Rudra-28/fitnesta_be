@@ -219,6 +219,206 @@ exports.markTravellingAllowancePaid = async (id) => {
     });
 };
 
+// ── ME Wallet Breakdown (rich, grouped) ───────────────────────────────────
+
+/**
+ * Rich ME wallet breakdown grouped by entity.
+ *
+ * pending bucket  → on_hold rows (group/school, threshold not met) + pending rows (individual/tutor)
+ * approved bucket → approved rows
+ * paid bucket     → paid rows
+ *
+ * Society/school groups show: entity name, student count, threshold, per-student items, onboarding item.
+ * Individual/tutor rows show flat per-student items.
+ */
+exports.getMEWalletBreakdown = async (meProfessionalId, bucketStatus) => {
+    const THRESHOLD = 20;
+
+    const statusFilter = bucketStatus === "pending"
+        ? { status: { in: ["on_hold", "pending"] } }
+        : { status: bucketStatus };
+
+    const rows = await prisma.commissions.findMany({
+        where:   { professional_id: meProfessionalId, ...statusFilter },
+        orderBy: { created_at: "asc" },
+    });
+
+    // ── Split rows by category ─────────────────────────────────────────────
+    const groupRows      = rows.filter(r => r.source_type === "group_coaching_society" && r.entity_id);
+    const schoolRows     = rows.filter(r => (r.source_type === "group_coaching_school" || r.source_type === "school_registration") && r.entity_id);
+    const individualRows = rows.filter(r => r.source_type === "individual_coaching");
+    const tutorRows      = rows.filter(r => r.source_type === "personal_tutor");
+
+    // ── Resolve student user_ids for group/school admission rows ──────────
+    // source_id on admission rows = student_user_id
+    const admissionStudentIds = [
+        ...groupRows.filter(r => r.base_amount > 0),
+        ...schoolRows.filter(r => r.source_type === "group_coaching_school"),
+    ].map(r => r.source_id);
+
+    let studentNameMap = {};
+    if (admissionStudentIds.length > 0) {
+        const users = await prisma.users.findMany({
+            where:  { id: { in: admissionStudentIds } },
+            select: { id: true, full_name: true, mobile: true },
+        });
+        studentNameMap = Object.fromEntries(users.map(u => [u.id, u]));
+    }
+
+    // ── Resolve individual_coaching / personal_tutor student names ─────────
+    const indStudentIds  = individualRows.map(r => r.source_id);
+    const tutorStudentIds = tutorRows.map(r => r.source_id);
+    const directStudentIds = [...new Set([...indStudentIds, ...tutorStudentIds])];
+    let directStudentMap = {};
+    if (directStudentIds.length > 0) {
+        const users = await prisma.users.findMany({
+            where:  { id: { in: directStudentIds } },
+            select: { id: true, full_name: true, mobile: true },
+        });
+        directStudentMap = Object.fromEntries(users.map(u => [u.id, u]));
+    }
+
+    // ── Group society rows by entity_id ────────────────────────────────────
+    const societyEntityIds = [...new Set(groupRows.map(r => r.entity_id).filter(Boolean))];
+    let societyMap = {};
+    if (societyEntityIds.length > 0) {
+        const societies = await prisma.societies.findMany({
+            where:  { id: { in: societyEntityIds } },
+            select: { id: true, society_name: true },
+        });
+        societyMap = Object.fromEntries(societies.map(s => [s.id, s]));
+    }
+
+    // ── Group school rows by entity_id ─────────────────────────────────────
+    const schoolEntityIds = [...new Set(schoolRows.map(r => r.entity_id).filter(Boolean))];
+    let schoolMap = {};
+    if (schoolEntityIds.length > 0) {
+        const schools = await prisma.schools.findMany({
+            where:  { id: { in: schoolEntityIds } },
+            select: { id: true, school_name: true },
+        });
+        schoolMap = Object.fromEntries(schools.map(s => [s.id, s]));
+    }
+
+    // ── Build society groups ───────────────────────────────────────────────
+    const societyGroups = [];
+    for (const entityId of societyEntityIds) {
+        const entityRows    = groupRows.filter(r => r.entity_id === entityId);
+        const onboarding    = entityRows.find(r => parseFloat(r.base_amount) === 0);
+        const admissions    = entityRows.filter(r => parseFloat(r.base_amount) > 0);
+        const studentCount  = await prisma.individual_participants.count({
+            where: { society_id: entityId, students: { student_type: "group_coaching" } },
+        });
+        const totalHeld     = entityRows.reduce((s, r) => s + parseFloat(r.commission_amount), 0);
+
+        societyGroups.push({
+            entity_type:       "society",
+            entity_id:         entityId,
+            entity_name:       societyMap[entityId]?.society_name ?? null,
+            students_enrolled: studentCount,
+            threshold:         THRESHOLD,
+            threshold_reached: studentCount >= THRESHOLD,
+            total_amount:      parseFloat(totalHeld.toFixed(2)),
+            onboarding: onboarding ? {
+                commission_id:     onboarding.id,
+                amount:            parseFloat(onboarding.commission_amount),
+                status:            onboarding.status,
+                created_at:        onboarding.created_at,
+            } : null,
+            admissions: admissions.map(r => ({
+                commission_id:  r.id,
+                student_user_id: r.source_id,
+                student_name:   studentNameMap[r.source_id]?.full_name ?? null,
+                student_mobile: studentNameMap[r.source_id]?.mobile ?? null,
+                base_amount:    parseFloat(r.base_amount),
+                rate:           parseFloat(r.commission_rate),
+                amount:         parseFloat(r.commission_amount),
+                status:         r.status,
+                created_at:     r.created_at,
+            })),
+        });
+    }
+
+    // ── Build school groups ────────────────────────────────────────────────
+    const schoolGroups = [];
+    for (const entityId of schoolEntityIds) {
+        const entityRows   = schoolRows.filter(r => r.entity_id === entityId);
+        const onboarding   = entityRows.find(r => r.source_type === "school_registration");
+        const admissions   = entityRows.filter(r => r.source_type === "group_coaching_school");
+        const studentCount = await prisma.school_students.count({ where: { school_id: entityId } });
+        const totalHeld    = entityRows.reduce((s, r) => s + parseFloat(r.commission_amount), 0);
+
+        schoolGroups.push({
+            entity_type:       "school",
+            entity_id:         entityId,
+            entity_name:       schoolMap[entityId]?.school_name ?? null,
+            students_enrolled: studentCount,
+            threshold:         THRESHOLD,
+            threshold_reached: studentCount >= THRESHOLD,
+            total_amount:      parseFloat(totalHeld.toFixed(2)),
+            onboarding: onboarding ? {
+                commission_id: onboarding.id,
+                amount:        parseFloat(onboarding.commission_amount),
+                status:        onboarding.status,
+                created_at:    onboarding.created_at,
+            } : null,
+            admissions: admissions.map(r => ({
+                commission_id:   r.id,
+                student_user_id: r.source_id,
+                student_name:    studentNameMap[r.source_id]?.full_name ?? null,
+                student_mobile:  studentNameMap[r.source_id]?.mobile ?? null,
+                base_amount:     parseFloat(r.base_amount),
+                rate:            parseFloat(r.commission_rate),
+                amount:          parseFloat(r.commission_amount),
+                status:          r.status,
+                created_at:      r.created_at,
+            })),
+        });
+    }
+
+    // ── Build individual / tutor flat rows ─────────────────────────────────
+    const individualItems = individualRows.map(r => ({
+        commission_id:   r.id,
+        source_type:     "individual_coaching",
+        student_user_id: r.source_id,
+        student_name:    directStudentMap[r.source_id]?.full_name ?? null,
+        student_mobile:  directStudentMap[r.source_id]?.mobile ?? null,
+        base_amount:     parseFloat(r.base_amount),
+        rate:            parseFloat(r.commission_rate),
+        amount:          parseFloat(r.commission_amount),
+        status:          r.status,
+        created_at:      r.created_at,
+    }));
+
+    const tutorItems = tutorRows.map(r => ({
+        commission_id:   r.id,
+        source_type:     "personal_tutor",
+        student_user_id: r.source_id,
+        student_name:    directStudentMap[r.source_id]?.full_name ?? null,
+        student_mobile:  directStudentMap[r.source_id]?.mobile ?? null,
+        base_amount:     parseFloat(r.base_amount),
+        rate:            parseFloat(r.commission_rate),
+        amount:          parseFloat(r.commission_amount),
+        status:          r.status,
+        created_at:      r.created_at,
+    }));
+
+    // ── Totals ─────────────────────────────────────────────────────────────
+    const totalSociety    = societyGroups.reduce((s, g) => s + g.total_amount, 0);
+    const totalSchool     = schoolGroups.reduce((s, g) => s + g.total_amount, 0);
+    const totalIndividual = individualItems.reduce((s, i) => s + i.amount, 0);
+    const totalTutor      = tutorItems.reduce((s, i) => s + i.amount, 0);
+
+    return {
+        bucket:           bucketStatus,
+        total:            parseFloat((totalSociety + totalSchool + totalIndividual + totalTutor).toFixed(2)),
+        societies:        societyGroups,
+        schools:          schoolGroups,
+        individual_coaching: individualItems,
+        personal_tutor:   tutorItems,
+    };
+};
+
 // ── ME Earnings Summary ────────────────────────────────────────────────────
 
 /**
@@ -356,6 +556,10 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
         .filter((r) => assignmentSourceTypes.has(r.source_type))
         .map((r) => r.source_id);
 
+    const kitOrderIds = rows
+        .filter((r) => r.source_type === "kit_order")
+        .map((r) => r.source_id);
+
     let assignmentMap = {};
     if (assignmentIds.length > 0) {
         const assignments = await prisma.trainer_assignments.findMany({
@@ -373,9 +577,31 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
         assignmentMap = Object.fromEntries(assignments.map((a) => [a.id, a]));
     }
 
+    let kitOrderMap = {};
+    if (kitOrderIds.length > 0) {
+        const kitOrders = await prisma.kit_orders.findMany({
+            where:  { id: { in: kitOrderIds } },
+            select: {
+                id:           true,
+                total_amount: true,
+                unit_price:   true,
+                delivery_charge: true,
+                quantity:     true,
+                order_status: true,
+                created_at:   true,
+                vendor_products: { select: { product_name: true } },
+                users:        { select: { full_name: true } },
+            },
+        });
+        kitOrderMap = Object.fromEntries(kitOrders.map((o) => [o.id, o]));
+    }
+
     return rows.map((r) => {
         const assignment = assignmentSourceTypes.has(r.source_type)
             ? assignmentMap[r.source_id] ?? null
+            : null;
+        const kitOrder = r.source_type === "kit_order"
+            ? kitOrderMap[r.source_id] ?? null
             : null;
         return {
             id:                parseFloat(r.id),
@@ -386,7 +612,6 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
             commission_amount: parseFloat(r.commission_amount),
             status:            r.status,
             created_at:        r.created_at,
-            // Assignment context (null for ME commissions)
             assignment: assignment ? {
                 entity_name:        assignment.societies?.society_name
                                  ?? assignment.schools?.school_name
@@ -394,6 +619,17 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
                 activity_name:      assignment.activities?.name ?? null,
                 assigned_from:      assignment.assigned_from,
                 sessions_allocated: assignment.sessions_allocated,
+            } : null,
+            kit_order: kitOrder ? {
+                order_id:       kitOrder.id,
+                product_name:   kitOrder.vendor_products?.product_name ?? null,
+                customer_name:  kitOrder.users?.full_name ?? null,
+                quantity:       kitOrder.quantity,
+                unit_price:     parseFloat(kitOrder.unit_price),
+                delivery_charge: parseFloat(kitOrder.delivery_charge),
+                total_amount:   parseFloat(kitOrder.total_amount),
+                order_status:   kitOrder.order_status,
+                ordered_at:     kitOrder.created_at,
             } : null,
         };
     });
@@ -489,10 +725,14 @@ exports.storeFundAccount = async (professionalId, contactId, fundAccountId) => {
     });
 };
 
-/** Called by webhook: payout.processed → mark all requested commissions as paid. */
+/** Called by webhook: payout.processed → mark all requested commissions as paid.
+ *  Returns { user_id } of the professional for FCM notification. */
 exports.markPayoutPaid = async (payoutId) => {
-    const wallet = await prisma.wallets.findFirst({ where: { last_payout_id: payoutId } });
-    if (!wallet) return;
+    const wallet = await prisma.wallets.findFirst({
+        where:   { last_payout_id: payoutId },
+        include: { professionals: { select: { user_id: true } } },
+    });
+    if (!wallet) return null;
 
     await prisma.$transaction(async (tx) => {
         await tx.commissions.updateMany({
@@ -504,12 +744,18 @@ exports.markPayoutPaid = async (payoutId) => {
             data:  { last_payout_status: "processed", updated_at: new Date() },
         });
     });
+
+    return { user_id: wallet.professionals?.user_id ?? null };
 };
 
-/** Called by webhook: payout.failed → revert requested commissions back to approved. */
+/** Called by webhook: payout.failed → revert requested commissions back to approved.
+ *  Returns { user_id } of the professional for FCM notification. */
 exports.revertPayoutToApproved = async (payoutId) => {
-    const wallet = await prisma.wallets.findFirst({ where: { last_payout_id: payoutId } });
-    if (!wallet) return;
+    const wallet = await prisma.wallets.findFirst({
+        where:   { last_payout_id: payoutId },
+        include: { professionals: { select: { user_id: true } } },
+    });
+    if (!wallet) return null;
 
     await prisma.$transaction(async (tx) => {
         await tx.commissions.updateMany({
@@ -521,6 +767,8 @@ exports.revertPayoutToApproved = async (payoutId) => {
             data:  { last_payout_status: "failed", updated_at: new Date() },
         });
     });
+
+    return { user_id: wallet.professionals?.user_id ?? null };
 };
 
 /**

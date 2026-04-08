@@ -64,6 +64,7 @@ exports.initiateRegistration = async (formData, serviceType) => {
         ids,
         "personal_tutor",
         parseInt(term_months),
+        null,
         standard
     );
 
@@ -118,10 +119,12 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
         ? JSON.parse(pending.form_data)
         : pending.form_data;
 
+    const termMonths = data.payment?.term_months ? parseInt(data.payment.term_months) : 1;
+
     const result = await prisma.$transaction(async (tx) => {
         const userId    = await repo.insertUser(tx, data.user_info);
         const studentId = await repo.insertStudent(tx, userId, "personal_tutor");
-        await repo.insertpersonalTutor(tx, studentId, data.tutorDetails);
+        await repo.insertpersonalTutor(tx, studentId, data.tutorDetails, termMonths);
         await repo.insertParentConsent(tx, studentId, data.consentDetails);
         return { userId };
     });

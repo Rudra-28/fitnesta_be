@@ -96,7 +96,18 @@ exports.updateOrderStatus = async (orderId, vendorId, status) => {
 exports.getOrderByIdForVendor = async (orderId, vendorId) => {
     return await prisma.kit_orders.findFirst({
         where: { id: orderId, vendor_id: vendorId },
+        include: {
+            vendor_products: { select: { price: true } },
+        },
     });
+};
+
+exports.getProfessionalByVendorId = async (vendorId) => {
+    const vendor = await prisma.vendors.findFirst({
+        where: { id: vendorId },
+        select: { professional_id: true },
+    });
+    return vendor ? { id: vendor.professional_id } : null;
 };
 
 // ── Student side ───────────────────────────────────────────────────────────

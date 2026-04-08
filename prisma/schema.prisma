@@ -9,11 +9,12 @@ datasource db {
 }
 
 model activities {
-  id                  Int                   @id @default(autoincrement())
-  name                String                @db.VarChar(150)
-  notes               String?               @db.VarChar(255)
-  is_active           Boolean?              @default(true)
-  created_at          DateTime?             @default(now()) @db.Timestamp(0)
+  id                  Int                         @id @default(autoincrement())
+  name                String                      @db.VarChar(150)
+  notes               String?                     @db.VarChar(255)
+  is_active           Boolean?                    @default(true)
+  activity_category   activities_activity_category @default(sports)
+  created_at          DateTime?                   @default(now()) @db.Timestamp(0)
   fee_structures      fee_structures[]
   trainer_batches     trainer_batches[]
   batches             batches[]
@@ -82,6 +83,7 @@ model individual_participants {
   preferred_time          String?        @db.VarChar(50)
   trainer_professional_id Int?
   batch_id                Int?
+  term_months             Int            @default(1) @db.TinyInt
   students                students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
   societies               societies?     @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
   professionals           professionals? @relation(fields: [trainer_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_3")
@@ -163,6 +165,7 @@ model personal_tutors {
   teacher_for             String?        @db.VarChar(100)
   preferred_time          String?        @db.VarChar(50)
   teacher_professional_id Int?
+  term_months             Int            @default(1) @db.TinyInt
   students                students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_1")
   professionals           professionals? @relation(fields: [teacher_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_2")
 
@@ -220,6 +223,7 @@ model school_students {
   address      String?   @db.Text
   activities   String?   @db.Text
   kit_type     String?   @db.Text
+  term_months  Int       @default(9) @db.TinyInt
   created_at   DateTime? @default(now()) @db.Timestamp(0)
   students     students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_1")
   schools      schools   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_2")
@@ -424,12 +428,14 @@ model users {
   approval_status users_approval_status @default(pending)
   approved_by     Int?
   approval_note   String?               @db.Text
+  fcm_token       String?               @db.VarChar(255)
   admins          admins[]
   professionals   professionals[]
   societies       societies[]
   students        students[]
-  payments        payments[]
-  kit_orders      kit_orders[]
+  payments           payments[]
+  kit_orders         kit_orders[]
+  kit_order_refunds  kit_order_refunds[]
 }
 
 model vendors {
@@ -498,6 +504,7 @@ enum commissions_professional_type {
   marketing_executive
   trainer
   teacher
+  vendor
 }
 
 enum fee_structures_coaching_type {
@@ -522,6 +529,7 @@ enum commissions_source_type {
   personal_tutor
   event_ticket
   school_registration
+  kit_order
 }
 
 enum fitnesta_profit_logs_source_type {
@@ -616,6 +624,27 @@ enum payments_status {
   failed
 }
 
+model kit_order_refunds {
+  id              Int      @id @default(autoincrement())
+  kit_order_id    Int
+  student_user_id Int
+  amount          Decimal  @db.Decimal(10, 2)
+  reason          String?  @db.VarChar(255)
+  status          kit_order_refunds_status @default(pending)
+  created_at      DateTime @default(now()) @db.Timestamp(0)
+  updated_at      DateTime @default(now()) @db.Timestamp(0)
+  kit_orders      kit_orders @relation(fields: [kit_order_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users           users      @relation(fields: [student_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([kit_order_id])
+  @@index([student_user_id])
+}
+
+enum kit_order_refunds_status {
+  pending
+  processed
+}
+
 model kit_orders {
   id                  Int                   @id @default(autoincrement())
   student_user_id     Int
@@ -642,6 +671,7 @@ model kit_orders {
   users               users                 @relation(fields: [student_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vendor_products     vendor_products       @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   vendors             vendors               @relation(fields: [vendor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  kit_order_refunds   kit_order_refunds[]
 
   @@index([student_user_id])
   @@index([product_id])
@@ -838,4 +868,9 @@ model session_participants {
 
   @@unique([session_id, student_id], map: "uq_session_participant")
   @@index([student_id])
+}
+
+enum activities_activity_category {
+  sports
+  non_sports
 }

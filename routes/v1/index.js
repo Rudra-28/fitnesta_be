@@ -26,5 +26,6 @@ router.use("/me-dashboard", require('../../modules/professionals/marketingExe/da
 router.use("/trainer-dashboard", require('../../modules/professionals/trainer/trainerdashboard/trainerdashboardroute'));
 router.use("/activities", require('../../modules/activities/activitiesroute'));
 router.use("/payments", require('../../modules/payments/paymentsroute'));
+router.use("/notifications", require('../../modules/notifications/notificationsroute'));
 
 module.exports = router;

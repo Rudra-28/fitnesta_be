@@ -1,4 +1,6 @@
 const service = require("./adminservice");
+const { sendNotification } = require("../../utils/fcm");
+const prisma = require("../../config/prisma");
 
 exports.listFeeStructures = async (req, res) => {
     try {
@@ -64,6 +66,22 @@ exports.approve = async (req, res) => {
             req.admin.userId,
             req.body?.note
         );
+
+        // Notify the registrant — look up their user_id from the pending record
+        try {
+            const pending = await prisma.pending_registrations.findUnique({
+                where:  { id: Number(req.params.id) },
+                select: { form_data: true, service_type: true },
+            });
+            const formData = typeof pending?.form_data === "string"
+                ? JSON.parse(pending.form_data)
+                : pending?.form_data;
+            const userId = formData?.user_id ?? formData?.userId ?? null;
+            if (userId) {
+                sendNotification(userId, "Registration Approved", "Your registration has been approved. You can now log in.", { type: "registration_approved" });
+            }
+        } catch (_) {}
+
         res.json({ success: true, ...result });
     } catch (err) {
         console.error("Approve error:", err.message);
@@ -232,6 +250,27 @@ exports.assignTeacher = async (req, res) => {
             Number(personal_tutor_id),
             Number(teacher_professional_id)
         );
+
+        // Notify student and teacher
+        try {
+            const [tutor, teacher] = await Promise.all([
+                prisma.personal_tutors.findUnique({
+                    where:   { id: Number(personal_tutor_id) },
+                    include: { students: { select: { user_id: true } } },
+                }),
+                prisma.professionals.findUnique({
+                    where:  { id: Number(teacher_professional_id) },
+                    select: { user_id: true },
+                }),
+            ]);
+            if (tutor?.students?.user_id) {
+                sendNotification(tutor.students.user_id, "Teacher Assigned", "A teacher has been assigned to you.", { type: "teacher_assigned" });
+            }
+            if (teacher?.user_id) {
+                sendNotification(teacher.user_id, "New Student Assigned", "A new student has been assigned to you.", { type: "student_assigned" });
+            }
+        } catch (_) {}
+
         res.json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "PERSONAL_TUTOR_NOT_FOUND" ? 404
@@ -251,6 +290,27 @@ exports.assignTrainer = async (req, res) => {
             Number(individual_participant_id),
             Number(trainer_professional_id)
         );
+
+        // Notify student and trainer
+        try {
+            const [participant, trainer] = await Promise.all([
+                prisma.individual_participants.findUnique({
+                    where:   { id: Number(individual_participant_id) },
+                    include: { students: { select: { user_id: true } } },
+                }),
+                prisma.professionals.findUnique({
+                    where:  { id: Number(trainer_professional_id) },
+                    select: { user_id: true },
+                }),
+            ]);
+            if (participant?.students?.user_id) {
+                sendNotification(participant.students.user_id, "Trainer Assigned", "A trainer has been assigned to you.", { type: "trainer_assigned" });
+            }
+            if (trainer?.user_id) {
+                sendNotification(trainer.user_id, "New Student Assigned", "A new student has been assigned to you.", { type: "student_assigned" });
+            }
+        } catch (_) {}
+
         res.json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "INDIVIDUAL_PARTICIPANT_NOT_FOUND" ? 404
@@ -370,6 +430,19 @@ exports.listCommissions = async (req, res) => {
 exports.approveCommission = async (req, res) => {
     try {
         const result = await service.approveCommission(req.params.id);
+
+        // Notify the professional
+        try {
+            const commission = await prisma.commissions.findUnique({
+                where:   { id: Number(req.params.id) },
+                include: { professionals: { select: { user_id: true } } },
+            });
+            if (commission?.professionals?.user_id) {
+                const amount = parseFloat(commission.commission_amount).toFixed(2);
+                sendNotification(commission.professionals.user_id, "Commission Approved", `Your commission of ₹${amount} has been approved.`, { type: "commission_approved", commission_id: String(commission.id) });
+            }
+        } catch (_) {}
+
         res.json({ success: true, data: result });
     } catch (err) {
         const status = err.message === "COMMISSION_NOT_FOUND"      ? 404
@@ -382,6 +455,19 @@ exports.approveCommission = async (req, res) => {
 exports.markCommissionPaid = async (req, res) => {
     try {
         const result = await service.markCommissionPaid(req.params.id);
+
+        // Notify the professional
+        try {
+            const commission = await prisma.commissions.findUnique({
+                where:   { id: Number(req.params.id) },
+                include: { professionals: { select: { user_id: true } } },
+            });
+            if (commission?.professionals?.user_id) {
+                const amount = parseFloat(commission.commission_amount).toFixed(2);
+                sendNotification(commission.professionals.user_id, "Payment Credited", `₹${amount} has been credited to your wallet.`, { type: "commission_paid", commission_id: String(commission.id) });
+            }
+        } catch (_) {}
+
         res.json({ success: true, data: result });
     } catch (err) {
         const status = err.message === "COMMISSION_NOT_FOUND"    ? 404
@@ -453,6 +539,42 @@ exports.listPayments = async (req, res) => {
     }
 };
 
+exports.listPayIns = async (req, res) => {
+    try {
+        const { service_type, from, to } = req.query;
+        const data = await service.listPayIns({ serviceType: service_type, from, to });
+        res.json({ success: true, ...data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.listPayOuts = async (req, res) => {
+    try {
+        const { professional_type, commission_status, refund_status, from, to } = req.query;
+        const data = await service.listPayOuts({
+            professionalType:  professional_type,
+            commissionStatus:  commission_status,
+            refundStatus:      refund_status,
+            from,
+            to,
+        });
+        res.json({ success: true, ...data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.markRefundProcessed = async (req, res) => {
+    try {
+        await service.markRefundProcessed(req.params.id);
+        res.json({ success: true, message: "Refund marked as processed." });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 // ── Student assignment overview ────────────────────────────────────────────
 
 exports.listStudentAssignments = async (req, res) => {
@@ -515,6 +637,23 @@ exports.getStudentActivities = async (req, res) => {
         const { studentId } = req.params;
         const data = await service.getStudentActivities(studentId);
         res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getProfessionalsByActivity = async (req, res) => {
+    try {
+        const { activityId } = req.params;
+        const { type } = req.query;
+        if (!type || (type !== "trainer" && type !== "teacher")) {
+            return res.status(400).json({ success: false, error: "type is required (trainer | teacher)" });
+        }
+        const data = type === "trainer"
+            ? await service.getTrainersForActivity(activityId)
+            : await service.getTeachersForSubject(activityId);
+        res.json({ success: true, count: data.length, data });
     } catch (err) {
         const status = err.message === "NOT_FOUND" ? 404 : 500;
         res.status(status).json({ success: false, error: err.message });
@@ -592,6 +731,22 @@ exports.reject = async (req, res) => {
             req.admin.userId,
             req.body?.note
         );
+
+        // Notify the registrant
+        try {
+            const pending = await prisma.pending_registrations.findUnique({
+                where:  { id: Number(req.params.id) },
+                select: { form_data: true },
+            });
+            const formData = typeof pending?.form_data === "string"
+                ? JSON.parse(pending.form_data)
+                : pending?.form_data;
+            const userId = formData?.user_id ?? formData?.userId ?? null;
+            if (userId) {
+                sendNotification(userId, "Registration Rejected", "Your registration was not approved. Please contact support.", { type: "registration_rejected" });
+            }
+        } catch (_) {}
+
         res.json({ success: true, ...result });
     } catch (err) {
         console.error("Reject error:", err.message);

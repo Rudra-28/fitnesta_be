@@ -2,7 +2,6 @@ const repo = require("./activitiesrepository");
 
 const VALID_COACHING_TYPES = ["individual_coaching", "group_coaching", "personal_tutor", "school_student"];
 const VALID_SOCIETY_CATEGORIES = ["A+", "A", "B"];
-const VALID_STANDARDS = ["1ST-2ND", "3RD-4TH", "5TH-6TH", "7TH-8TH", "8TH-10TH", "ANY"];
 
 // "trainer" is a virtual alias — returns activities for both individual_coaching and school_student
 const ALIAS_MAP = { trainer: "trainer" };
@@ -12,6 +11,10 @@ const SOCIETY_CATEGORY_DISPLAY = {
     A_: "A+",
     A:  "A",
     B:  "B",
+};
+
+exports.getPersonalTutorStandards = async () => {
+    return await repo.getPersonalTutorStandards();
 };
 
 exports.getActivities = async (coachingType, societyCategory = null, standard = null, termMonths = null) => {
@@ -62,13 +65,14 @@ exports.getActivities = async (coachingType, societyCategory = null, standard = 
     }
 
     if (resolved === "personal_tutor") {
+        const validStandards = await repo.getPersonalTutorStandards();
         if (!standard) {
-            const err = new Error(`standard is required for personal_tutor. Allowed values: ${VALID_STANDARDS.join(", ")}`);
+            const err = new Error(`standard is required for personal_tutor. Allowed values: ${validStandards.join(", ")}`);
             err.status = 400;
             throw err;
         }
-        if (!VALID_STANDARDS.includes(standard)) {
-            const err = new Error(`Invalid standard. Allowed values: ${VALID_STANDARDS.join(", ")}`);
+        if (!validStandards.includes(standard)) {
+            const err = new Error(`Invalid standard. Allowed values: ${validStandards.join(", ")}`);
             err.status = 400;
             throw err;
         }

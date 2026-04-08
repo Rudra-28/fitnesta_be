@@ -66,6 +66,15 @@ async function cancelSession(req, res) {
   }
 }
 
+async function generateIndividualSessions(req, res) {
+  try {
+    const result = await service.generateIndividualSessions(req.body);
+    return res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 async function getSessionFeedback(req, res) {
   try {
     const feedback = await service.getSessionFeedback(req.params.sessionId);
@@ -77,6 +86,7 @@ async function getSessionFeedback(req, res) {
 
 module.exports = {
   createSession,
+  generateIndividualSessions,
   listSessions,
   getSession,
   updateSessionStatus,

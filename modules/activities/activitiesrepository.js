@@ -76,17 +76,47 @@ exports.getFeeForActivity = async (activityId, coachingType, termMonths, society
 /**
  * Look up fees for multiple activities at once (personal tutor multi-subject).
  * @param {number[]} activityIds
- * @param {string}   coachingType - 'personal_tutor'
- * @param {number}   termMonths   - 1 | 3
+ * @param {string}   coachingType - 'personal_tutor' | 'group_coaching' | 'individual_coaching'
+ * @param {number}   termMonths   - 1 | 3 | 6 | 9
+ * @param {string}   societyCategory - 'A_' | 'A' | 'B'
  * @param {string}   standard     - e.g. '8TH-10TH'
  * @returns {Array<{ activity_id: number, total_fee: Decimal }>}
  */
-exports.getFeesForActivities = async (activityIds, coachingType, termMonths, standard) => {
+/**
+ * Fetch activity names by IDs. Used for building receipt line items.
+ * @param {number[]} activityIds
+ */
+exports.getActivitiesByIds = async (activityIds) => {
+    return await prisma.activities.findMany({
+        where: { id: { in: activityIds } },
+        select: { id: true, name: true },
+    });
+};
+
+/**
+ * Fetch distinct non-null standards for personal_tutor from fee_structures.
+ * @returns {string[]}
+ */
+exports.getPersonalTutorStandards = async () => {
+    const rows = await require("../../config/prisma").fee_structures.findMany({
+        where: {
+            coaching_type: "personal_tutor",
+            standard: { not: null },
+        },
+        select: { standard: true },
+        distinct: ["standard"],
+        orderBy: { standard: "asc" },
+    });
+    return rows.map((r) => r.standard);
+};
+
+exports.getFeesForActivities = async (activityIds, coachingType, termMonths, societyCategory = null, standard = null) => {
     return await prisma.fee_structures.findMany({
         where: {
             activity_id: { in: activityIds },
             coaching_type: coachingType,
             term_months: termMonths,
+            ...(societyCategory != null ? { society_category: societyCategory } : {}),
             ...(standard != null ? { standard } : {}),
         },
         select: { activity_id: true, total_fee: true },

@@ -102,7 +102,7 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
     const result = await prisma.$transaction(async (tx) => {
         const userId    = await repo.insertUser(tx, data);
         const studentId = await repo.insertStudent(tx, userId, pending.service_type);
-        await repo.insertSchoolStudent(tx, studentId, data);
+        await repo.insertSchoolStudent(tx, studentId, data, 9);
         return { userId, studentId };
     });
 

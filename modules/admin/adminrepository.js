@@ -1066,6 +1066,83 @@ exports.listPayments = async ({ serviceType, status, userId, from, to } = {}) =>
     });
 };
 
+// ── Pay-ins ────────────────────────────────────────────────────────────────
+
+exports.listPayIns = async ({ serviceType, from, to } = {}) => {
+    return await prisma.payments.findMany({
+        where: {
+            status: "captured",
+            ...(serviceType && { service_type: serviceType }),
+            ...((from || to) ? { captured_at: { ...(from && { gte: new Date(from) }), ...(to && { lte: new Date(to) }) } } : {}),
+        },
+        select: {
+            id: true,
+            razorpay_payment_id: true,
+            service_type: true,
+            amount: true,
+            currency: true,
+            term_months: true,
+            captured_at: true,
+            users: { select: { id: true, full_name: true, mobile: true } },
+        },
+        orderBy: { captured_at: "desc" },
+    });
+};
+
+// ── Pay-outs ───────────────────────────────────────────────────────────────
+
+exports.listPayOutCommissions = async ({ professionalType, status, from, to } = {}) => {
+    return await prisma.commissions.findMany({
+        where: {
+            ...(professionalType && { professional_type: professionalType }),
+            ...(status           && { status }),
+            ...((from || to) ? { created_at: { ...(from && { gte: new Date(from) }), ...(to && { lte: new Date(to) }) } } : {}),
+        },
+        select: {
+            id: true,
+            professional_type: true,
+            source_type: true,
+            source_id: true,
+            commission_amount: true,
+            status: true,
+            created_at: true,
+            professionals: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+        },
+        orderBy: { created_at: "desc" },
+    });
+};
+
+exports.listPayOutRefunds = async ({ status, from, to } = {}) => {
+    return await prisma.kit_order_refunds.findMany({
+        where: {
+            ...(status && { status }),
+            ...((from || to) ? { created_at: { ...(from && { gte: new Date(from) }), ...(to && { lte: new Date(to) }) } } : {}),
+        },
+        select: {
+            id: true,
+            kit_order_id: true,
+            amount: true,
+            reason: true,
+            status: true,
+            created_at: true,
+            users: { select: { id: true, full_name: true, mobile: true } },
+            kit_orders: { select: { razorpay_payment_id: true, vendor_products: { select: { product_name: true } } } },
+        },
+        orderBy: { created_at: "desc" },
+    });
+};
+
+exports.getRefundById = async (id) => {
+    return await prisma.kit_order_refunds.findUnique({ where: { id: Number(id) } });
+};
+
+exports.markRefundProcessed = async (refundId) => {
+    return await prisma.kit_order_refunds.update({
+        where: { id: Number(refundId) },
+        data:  { status: "processed" },
+    });
+};
+
 // ── Sessions list ──────────────────────────────────────────────────────────
 
 exports.listSessions = async ({ type, from, to, professionalId, status } = {}) => {
@@ -1168,7 +1245,7 @@ exports.getIndividualParticipantForSession = async (id) => {
 };
 
 // Professionals for session creation with busy/available at the given slot
-exports.getProfessionalsForSession = async (professionType, { date, startTime, endTime, subject } = {}) => {
+exports.getProfessionalsForSession = async (professionType, { date, startTime, endTime, subject, activityId } = {}) => {
     const parseTime = (t) => {
         if (!t) return undefined;
         const [h, m, s = "0"] = String(t).split(":");
@@ -1219,10 +1296,12 @@ exports.getProfessionalsForSession = async (professionType, { date, startTime, e
             });
         }
     } else {
-        // specified_game is a JSON array — string contains won't work reliably.
-        // Always return all approved trainers; admin picks the right one.
+        // Filter by specified_game JSON array (stores activity IDs) when activityId is provided
+        const trainerWhere = activityId
+            ? { ...baseWhere, trainers: { some: { specified_game: { array_contains: Number(activityId) } } } }
+            : { ...baseWhere, trainers: { some: {} } };
         rows = await prisma.professionals.findMany({
-            where: { ...baseWhere, trainers: { some: {} } },
+            where: trainerWhere,
             select: {
                 id: true, place: true,
                 users: { select: { full_name: true, mobile: true, address: true } },

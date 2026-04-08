@@ -24,6 +24,7 @@ router.post("/reject/:id", controller.reject);                             // PO
 
 // ── Approved professionals list ───────────────────────────────────────────
 router.get("/professionals", controller.listProfessionals);                // GET /api/v1/admin/professionals?type=trainer
+router.get("/activities/:activityId/professionals", controller.getProfessionalsByActivity); // GET /api/v1/admin/activities/:activityId/professionals?type=trainer|teacher
 
 // ── Activities (for batch creation dropdown) ──────────────────────────────
 router.get("/activities", controller.listActivities);                              // GET /api/v1/admin/activities?coaching_type=group_coaching
@@ -61,6 +62,14 @@ router.put("/fee-structures/:id", controller.upsertFeeStructure);          // PU
 // ── Payments ───────────────────────────────────────────────────────────────
 // Filters: ?service_type=personal_tutor|individual_coaching|...  &status=captured|refunded|failed  &user_id=5  &from=&to=
 router.get("/payments", controller.listPayments);                           // GET  /api/v1/admin/payments
+
+// ── Pay-ins / Pay-outs ─────────────────────────────────────────────────────
+// GET /api/v1/admin/payments/pay-ins   ?service_type=&from=&to=
+// GET /api/v1/admin/payments/pay-outs  ?professional_type=&commission_status=&refund_status=&from=&to=
+// PATCH /api/v1/admin/payments/refunds/:id/mark-processed
+router.get("/payments/pay-ins",  controller.listPayIns);
+router.get("/payments/pay-outs", controller.listPayOuts);
+router.patch("/payments/refunds/:id/mark-processed", controller.markRefundProcessed);
 
 // ── Commission rules (admin can view and edit rates) ──────────────────────
 router.get("/commission-rules", controller.listCommissionRules);              // GET  /api/v1/admin/commission-rules

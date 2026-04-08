@@ -44,3 +44,46 @@ exports.getPendingRegistration = async (tempUuid) => {
         where: { temp_uuid: tempUuid },
     });
 };
+
+/**
+ * Fetch a single payment + its pending_registration form_data.
+ * studentUserId guard ensures students can only read their own receipts.
+ */
+exports.getReceiptData = async (tempUuid, studentUserId) => {
+    const rows = await prisma.$queryRaw`
+        SELECT
+            p.temp_uuid,
+            p.razorpay_payment_id,
+            p.service_type,
+            p.amount,
+            p.term_months,
+            p.captured_at AS paid_at,
+            pr.form_data
+        FROM payments p
+        JOIN pending_registrations pr ON pr.temp_uuid = p.temp_uuid
+        WHERE p.temp_uuid = ${tempUuid}
+          AND p.student_user_id = ${studentUserId}
+        LIMIT 1
+    `;
+    return rows[0] ?? null;
+};
+
+/**
+ * Fetch all payments for a student, newest first.
+ */
+exports.getStudentReceipts = async (studentUserId) => {
+    return await prisma.$queryRaw`
+        SELECT
+            p.temp_uuid,
+            p.razorpay_payment_id,
+            p.service_type,
+            p.amount,
+            p.term_months,
+            p.captured_at AS paid_at,
+            pr.form_data
+        FROM payments p
+        JOIN pending_registrations pr ON pr.temp_uuid = p.temp_uuid
+        WHERE p.student_user_id = ${studentUserId}
+        ORDER BY p.captured_at DESC
+    `;
+};

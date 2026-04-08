@@ -28,7 +28,7 @@ exports.insertStudent = async (tx, userId, type) => {
     return student.id;
 };
 
-exports.insertpersonalTutor = async (tx, studentId, data) => {
+exports.insertpersonalTutor = async (tx, studentId, data, termMonths = 1) => {
     await tx.personal_tutors.create({
         data: {
             student_id: studentId,
@@ -37,6 +37,7 @@ exports.insertpersonalTutor = async (tx, studentId, data) => {
             batch: data?.batch || null,
             teacher_for: data?.teacherFor || null,
             preferred_time: data?.preferred_time || data?.preferredTime || null,
+            term_months: termMonths,
         },
     });
 };

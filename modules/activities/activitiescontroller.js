@@ -11,6 +11,15 @@ exports.getActivities = async (req, res) => {
     }
 };
 
+exports.getPersonalTutorStandards = async (_req, res) => {
+    try {
+        const standards = await service.getPersonalTutorStandards();
+        return res.status(200).json({ success: true, standards });
+    } catch (err) {
+        return res.status(err.status ?? 500).json({ success: false, message: err.message });
+    }
+};
+
 exports.getSubjects = async (_req, res) => {
     try {
         const data = await service.getActivities("personal_tutor");

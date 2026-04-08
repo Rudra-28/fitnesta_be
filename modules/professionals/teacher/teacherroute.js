@@ -3,6 +3,8 @@ const router = express.Router();
 const { verifyMobileUnique } = require("../../../middleware/checkduplicate");
 const upload = require("../../../utils/fileupload");
 const controller = require("./teachercontroller");
+const editController = require("./teacherEditController");
+const { verifyAccessToken } = require("../../../middleware/authmiddleware");
 
 const teacherUploads = upload.fields([
   { name: 'panCard' },
@@ -15,4 +17,6 @@ const teacherUploads = upload.fields([
 // teacherUploads must come before verifyMobileUnique so multipart body is parsed first.
 // Validation is handled inside the service (not as route middleware).
 router.post("/", teacherUploads, verifyMobileUnique, controller.createTeacher);
+router.patch("/edit-profile", verifyAccessToken, editController.editTeacher);
+
 module.exports = router;

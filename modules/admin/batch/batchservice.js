@@ -1,7 +1,56 @@
 const prisma = require("../../../config/prisma");
-const repo = require("./batchrepo");
+const repo   = require("./batchrepo");
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// ── Standard session cap lookup ───────────────────────────────────────────────
+// Returns the standard monthly session count for a given batch type + activity category.
+// This is the denominator used in commission calculations AND the session count used
+// when auto-generating sessions for a cycle.
+async function resolveStandardCap(batchType, activityId) {
+    const activity = await prisma.activities.findUnique({
+        where:  { id: activityId },
+        select: { activity_category: true },
+    });
+    const cat = activity?.activity_category ?? "sports";
+
+    const ruleKeyMap = {
+        group_coaching: {
+            sports:     "group_society_sports_sessions_cap",
+            non_sports: "group_society_non_sports_sessions_cap",
+        },
+        school_student: {
+            sports:     "group_school_sports_sessions_cap",
+            non_sports: "group_school_non_sports_sessions_cap",
+        },
+    };
+
+    const ruleKey = ruleKeyMap[batchType]?.[cat];
+    if (!ruleKey) return 18; // fallback
+
+    const rule = await prisma.commission_rules.findUnique({ where: { rule_key: ruleKey } });
+    return rule ? parseFloat(rule.value) : 18;
+}
+
+// Generate exactly `sessionCount` session dates starting from startDate
+// on the given daysOfWeek, skipping already-existing dates.
+function computeSessionDatesByCap(daysOfWeek, startDate, sessionCount, existingDatesSet) {
+    const result  = [];
+    const current = new Date(startDate);
+    current.setHours(0, 0, 0, 0);
+
+    while (result.length < sessionCount) {
+        const dayName = DAY_NAMES[current.getDay()];
+        const dateStr = current.toISOString().slice(0, 10);
+        if (daysOfWeek.includes(dayName) && !existingDatesSet.has(dateStr)) {
+            result.push(new Date(current));
+        }
+        current.setDate(current.getDate() + 1);
+        // Safety: stop after scanning 180 days to avoid infinite loop
+        if (current > new Date(startDate.getTime() + 180 * 86400000)) break;
+    }
+    return result;
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -128,10 +177,7 @@ async function createBatch({
     );
   }
 
-  // Set initial cycle window starting from start_date
-  const cycleEndDt = new Date(startDt);
-  cycleEndDt.setDate(cycleEndDt.getDate() + 30);
-
+  // Cycle end is derived after session generation — set a wide placeholder for now
   return repo.createBatch({
     batch_type,
     society_id: society_id ? Number(society_id) : null,
@@ -146,7 +192,7 @@ async function createBatch({
     start_date: startDt,
     end_date: endDt,
     cycle_start_date: startDt,
-    cycle_end_date:   cycleEndDt,
+    cycle_end_date:   startDt, // will be updated when sessions are generated
   });
 }
 
@@ -248,76 +294,84 @@ async function deleteBatch(batchId) {
 }
 
 /**
- * Generate sessions for the next 30-day cycle of a batch.
- * The cycle window is determined as follows:
- *   - If the batch has no cycle_start_date yet (first generation), cycle starts today.
- *   - If a cycle is already active (cycle_end_date >= today), sessions are added to it.
- *   - After a settlement the batch's cycle_start_date is already advanced; this handles new cycle too.
- * Sessions are created for every matching day-of-week within [cycleStart, cycleEnd].
- * Existing sessions on those dates are skipped (deduped).
- * The batch's cycle_start_date and cycle_end_date are updated after generation.
+ * Generate sessions for the current (or next) cycle of a batch.
+ *
+ * Uses the standard session cap (from commission_rules via activity_category)
+ * to determine exactly how many sessions to generate — NOT a fixed 30-day window.
+ *
+ * e.g. Society Sports (cap=20, 5 days/week) → generates 20 sessions forward from cycle_start.
+ *      Society Dance  (cap=15, 3 days/week) → generates 15 sessions forward from cycle_start.
+ *
+ * The cycle_end_date is set to the date of the LAST generated session.
+ * Existing session dates are skipped (deduplication).
  */
 async function generateSessions(batchId) {
-  const batch = await repo.getBatchById(Number(batchId));
-  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
-  if (!batch.is_active) throw Object.assign(new Error("Batch is inactive"), { code: "BATCH_INACTIVE" });
+    const batch = await repo.getBatchById(Number(batchId));
+    if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+    if (!batch.is_active) throw Object.assign(new Error("Batch is inactive"), { code: "BATCH_INACTIVE" });
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+    const standardCap = await resolveStandardCap(batch.batch_type, batch.activity_id);
 
-  // Determine cycle window
-  let cycleStart;
-  if (batch.cycle_start_date) {
-    cycleStart = new Date(batch.cycle_start_date);
+    // Cycle starts from the stored cycle_start_date (or batch start_date on first run)
+    const cycleStart = new Date(batch.cycle_start_date ?? batch.start_date);
     cycleStart.setHours(0, 0, 0, 0);
-  } else {
-    cycleStart = new Date(today);
-  }
 
-  const cycleEnd = new Date(cycleStart);
-  cycleEnd.setDate(cycleEnd.getDate() + 30);
+    const daysOfWeek = Array.isArray(batch.days_of_week)
+        ? batch.days_of_week
+        : JSON.parse(batch.days_of_week);
 
-  const daysOfWeek = Array.isArray(batch.days_of_week) ? batch.days_of_week : JSON.parse(batch.days_of_week);
-  const existingDates = await repo.getExistingSessionDatesForBatch(batch.id, cycleStart, cycleEnd);
-  const sessionDates = computeSessionDates(daysOfWeek, cycleStart, cycleEnd, existingDates);
+    // Use a wide look-ahead window to find enough dates (180 days max)
+    const lookAheadEnd = new Date(cycleStart.getTime() + 180 * 86400000);
+    const existingDates = await repo.getExistingSessionDatesForBatch(batch.id, cycleStart, lookAheadEnd);
 
-  if (sessionDates.length === 0) {
-    return { generated: 0, message: "No new session dates to generate in this cycle." };
-  }
+    const sessionDates = computeSessionDatesByCap(daysOfWeek, cycleStart, standardCap, existingDates);
 
-  // Get current batch students
-  const batchStudents = await repo.getBatchStudents(batch.id);
-  const studentIds = batchStudents.map((bs) => bs.student_id);
+    if (sessionDates.length === 0) {
+        return { generated: 0, message: "No new session dates to generate in this cycle." };
+    }
 
-  let generatedCount = 0;
-  for (const date of sessionDates) {
-    await repo.createSessionWithParticipants(
-      {
-        session_type: batch.batch_type,
-        batch_id: batch.id,
-        student_id: null,
-        professional_id: batch.professional_id,
-        scheduled_date: date,
-        start_time: batch.start_time,
-        end_time: batch.end_time,
-        status: "scheduled",
-      },
-      studentIds
-    );
-    generatedCount++;
-  }
+    // cycle_end = last generated session date
+    const cycleEnd = new Date(sessionDates[sessionDates.length - 1]);
 
-  // Update the cycle window on the batch
-  await prisma.batches.update({
-    where: { id: batch.id },
-    data: {
-      cycle_start_date: cycleStart,
-      cycle_end_date:   cycleEnd,
-      updated_at:       new Date(),
-    },
-  });
+    // Get current batch students for session_participants
+    const batchStudents = await repo.getBatchStudents(batch.id);
+    const studentIds    = batchStudents.map((bs) => bs.student_id);
 
-  return { generated: generatedCount, cycle_start: cycleStart, cycle_end: cycleEnd };
+    let generatedCount = 0;
+    for (const date of sessionDates) {
+        await repo.createSessionWithParticipants(
+            {
+                session_type:    batch.batch_type === "school_student" ? "school_student" : "group_coaching",
+                batch_id:        batch.id,
+                student_id:      null,
+                professional_id: batch.professional_id,
+                activity_id:     batch.activity_id,
+                scheduled_date:  date,
+                start_time:      batch.start_time,
+                end_time:        batch.end_time,
+                status:          "scheduled",
+            },
+            studentIds
+        );
+        generatedCount++;
+    }
+
+    // Update cycle window on the batch
+    await prisma.batches.update({
+        where: { id: batch.id },
+        data: {
+            cycle_start_date: cycleStart,
+            cycle_end_date:   cycleEnd,
+            updated_at:       new Date(),
+        },
+    });
+
+    return {
+        generated:   generatedCount,
+        standard_cap: standardCap,
+        cycle_start: cycleStart,
+        cycle_end:   cycleEnd,
+    };
 }
 
 async function bulkAssignStudents(batchId, studentIds) {
@@ -498,77 +552,129 @@ async function getSettlementPreview(batchId) {
 }
 
 async function computeSettlementPreview(batch) {
-  const cycleStart = new Date(batch.cycle_start_date);
-  const cycleEnd   = new Date(batch.cycle_end_date);
+    const cycleStart = new Date(batch.cycle_start_date);
+    const cycleEnd   = new Date(batch.cycle_end_date);
 
-  // Sessions in this cycle
-  const sessions = await prisma.sessions.findMany({
-    where: {
-      batch_id:       batch.id,
-      scheduled_date: { gte: cycleStart, lte: cycleEnd },
-      status:         { not: "cancelled" },
-    },
-    select: { id: true, status: true },
-  });
+    // Standard cap = denominator for per-session rate (from commission_rules + activity_category)
+    const standardCap = await resolveStandardCap(batch.batch_type, batch.activity_id);
 
-  const sessionsAllocated = sessions.length;
-  const completedIds      = sessions.filter(s => s.status === "completed").map(s => s.id);
-  const sessionsAttended  = completedIds.length; // trainer attended = session completed via punch-out
-
-  // Sum effective_monthly_fees of all current batch students via their individual_participant records
-  const batchStudentIds = batch.batch_students.map(bs => bs.student_id);
-
-  let baseAmount = 0;
-  if (batchStudentIds.length > 0) {
-    // Get activity + society for each student to look up fee
-    const participants = await prisma.individual_participants.findMany({
-      where: { student_id: { in: batchStudentIds }, batch_id: batch.id },
-      select: { student_id: true },
+    // Sessions generated in this cycle
+    const sessions = await prisma.sessions.findMany({
+        where: {
+            batch_id:       batch.id,
+            scheduled_date: { gte: cycleStart, lte: cycleEnd },
+            status:         { not: "cancelled" },
+        },
+        select: { id: true, status: true, professional_id: true },
     });
 
-    if (participants.length > 0) {
-      // Look up fee structure for this batch's activity and society category
-      const society = batch.societies;
-      const feeRecord = await prisma.fee_structures.findFirst({
-        where: {
-          activity_id:    batch.activity_id,
-          coaching_type:  "group_coaching",
-          society_category: society?.society_category ?? undefined,
-        },
-        select: { effective_monthly: true },
-      });
+    const sessionsGenerated = sessions.length;
+    const sessionsAttended  = sessions.filter(s => s.status === "completed").length;
 
-      const effectiveMonthly = feeRecord?.effective_monthly ? parseFloat(feeRecord.effective_monthly) : 0;
-      baseAmount = effectiveMonthly * participants.length;
+    // Sum effective monthly fees per student in the batch (using their term_months)
+    const batchStudentIds = (batch.batch_students ?? []).map(bs => bs.student_id);
+    let baseAmount = 0;
+
+    if (batchStudentIds.length > 0) {
+        const isSchool = batch.batch_type === "school_student";
+
+        if (isSchool) {
+            // School students: look up their fee from payments (school_student service)
+            for (const studentId of batchStudentIds) {
+                const student = await prisma.students.findUnique({
+                    where:  { id: studentId },
+                    select: {
+                        school_students: { select: { term_months: true } },
+                        users:           { select: { id: true } },
+                    },
+                });
+                const userId     = student?.users?.id;
+                const termMonths = student?.school_students?.[0]?.term_months ?? 9;
+                if (!userId) continue;
+                const payment = await prisma.payments.findFirst({
+                    where:   { student_user_id: userId, service_type: "school_student", status: "captured" },
+                    orderBy: { captured_at: "desc" },
+                    select:  { amount: true },
+                });
+                if (payment) baseAmount += parseFloat((parseFloat(payment.amount) / termMonths).toFixed(2));
+            }
+        } else {
+            // Society group coaching: look up individual_participants for term_months + fee_structure
+            const society = batch.societies;
+            for (const studentId of batchStudentIds) {
+                const ip = await prisma.individual_participants.findFirst({
+                    where:  { student_id: studentId, batch_id: batch.id },
+                    select: { term_months: true },
+                });
+                const termMonths = ip?.term_months ?? 1;
+                const fs = await prisma.fee_structures.findFirst({
+                    where: {
+                        activity_id:      batch.activity_id,
+                        coaching_type:    "group_coaching",
+                        term_months:      termMonths,
+                        society_category: society?.society_category ?? undefined,
+                    },
+                    select: { effective_monthly: true, total_fee: true },
+                });
+                if (fs) {
+                    baseAmount += fs.effective_monthly
+                        ? parseFloat(fs.effective_monthly)
+                        : parseFloat(fs.total_fee);
+                }
+            }
+        }
     }
-  }
 
-  // Get trainer commission rate from commission_rules
-  const commissionRule = await prisma.commission_rules.findFirst({
-    where: { rule_key: "trainer_group_society_rate" },
-    select: { value: true },
-  });
-  const commissionRate = commissionRule ? parseFloat(commissionRule.value) : 0;
+    // Commission rate: check student count vs min threshold for society batches
+    const isSchoolBatch   = batch.batch_type === "school_student";
+    const ruleKey         = isSchoolBatch ? "trainer_group_school_rate" : "trainer_group_society_rate";
+    const minStudentsRule = isSchoolBatch ? null : "trainer_group_society_min_students";
+    const flatRule        = isSchoolBatch ? null : "trainer_group_society_flat_amount";
 
-  // Prorate: base * rate * (attended / allocated)
-  const proration       = sessionsAllocated > 0 ? sessionsAttended / sessionsAllocated : 0;
-  const commissionAmount = parseFloat((baseAmount * (commissionRate / 100) * proration).toFixed(2));
+    const commissionRule  = await prisma.commission_rules.findUnique({ where: { rule_key: ruleKey } });
+    const commissionRate  = commissionRule ? parseFloat(commissionRule.value) : (isSchoolBatch ? 45 : 50);
 
-  const today        = new Date();
-  today.setHours(0, 0, 0, 0);
-  const cycleComplete = today > cycleEnd;
+    let commissionAmount = 0;
+    let isFlat = false;
+    let flatPerSession = 0;
 
-  return {
-    cycle_start:        cycleStart,
-    cycle_end:          cycleEnd,
-    cycle_complete:     cycleComplete,
-    sessions_allocated: sessionsAllocated,
-    sessions_attended:  sessionsAttended,
-    base_amount:        parseFloat(baseAmount.toFixed(2)),
-    commission_rate:    commissionRate,
-    commission_amount:  commissionAmount,
-    settlement_locked:  !cycleComplete,
-  };
+    if (!isSchoolBatch && minStudentsRule) {
+        const minRule = await prisma.commission_rules.findUnique({ where: { rule_key: minStudentsRule } });
+        const minStudents = minRule ? parseFloat(minRule.value) : 10;
+
+        if (batchStudentIds.length < minStudents) {
+            isFlat = true;
+            const flatRuleRow = await prisma.commission_rules.findUnique({ where: { rule_key: flatRule } });
+            flatPerSession    = flatRuleRow ? parseFloat(flatRuleRow.value) : 300;
+            commissionAmount  = parseFloat((sessionsAttended * flatPerSession).toFixed(2));
+        }
+    }
+
+    if (!isFlat) {
+        const totalPool      = parseFloat(((baseAmount * commissionRate) / 100).toFixed(2));
+        const perSessionRate = standardCap > 0 ? parseFloat((totalPool / standardCap).toFixed(2)) : 0;
+        commissionAmount     = parseFloat((sessionsAttended * perSessionRate).toFixed(2));
+    }
+
+    const today        = new Date();
+    today.setHours(0, 0, 0, 0);
+    const cycleComplete = today > cycleEnd;
+
+    return {
+        cycle_start:         cycleStart,
+        cycle_end:           cycleEnd,
+        cycle_complete:      cycleComplete,
+        settlement_locked:   !cycleComplete,
+        standard_cap:        standardCap,
+        sessions_generated:  sessionsGenerated,
+        sessions_attended:   sessionsAttended,
+        student_count:       batchStudentIds.length,
+        base_amount:         parseFloat(baseAmount.toFixed(2)),
+        commission_rate:     isFlat ? 0 : commissionRate,
+        is_flat_rate:        isFlat,
+        flat_per_session:    isFlat ? flatPerSession : null,
+        commission_amount:   commissionAmount,
+    };
 }
 
 /**
@@ -602,14 +708,14 @@ async function settleBatchCycle(batchId) {
 
   const preview = await computeSettlementPreview(batch);
 
-  // Write settlement record + credit wallet in a transaction
+  // Write settlement record + commission record in a transaction
   await prisma.$transaction(async (tx) => {
     await tx.batch_cycle_settlements.create({
       data: {
-        batch_id:          batch.id,
-        cycle_start:       new Date(batch.cycle_start_date),
-        cycle_end:         new Date(batch.cycle_end_date),
-        sessions_allocated: preview.sessions_allocated,
+        batch_id:           batch.id,
+        cycle_start:        new Date(batch.cycle_start_date),
+        cycle_end:          new Date(batch.cycle_end_date),
+        sessions_allocated: preview.sessions_generated,
         sessions_attended:  preview.sessions_attended,
         base_amount:        preview.base_amount,
         commission_rate:    preview.commission_rate,
@@ -620,25 +726,35 @@ async function settleBatchCycle(batchId) {
     });
 
     if (preview.commission_amount > 0) {
-      // Credit trainer wallet
-      await tx.wallets.upsert({
-        where:  { professional_id: batch.professional_id },
-        create: { professional_id: batch.professional_id, balance: preview.commission_amount },
-        update: { balance: { increment: preview.commission_amount }, updated_at: new Date() },
+      // Credit trainer/teacher commissions wallet (status: pending → admin approves → marks paid)
+      const sourceType = batch.batch_type === "school_student"
+          ? "group_coaching_school"
+          : "group_coaching_society";
+
+      await tx.commissions.create({
+        data: {
+          professional_id:   batch.professional_id,
+          professional_type: "trainer",
+          source_type:       sourceType,
+          source_id:         batch.id,
+          entity_id:         batch.society_id ?? batch.school_id ?? null,
+          base_amount:       preview.base_amount,
+          commission_rate:   preview.commission_rate,
+          commission_amount: preview.commission_amount,
+          status:            "pending",
+        },
       });
     }
 
     // Advance cycle: new cycle starts the day after current cycle_end
     const newCycleStart = new Date(batch.cycle_end_date);
     newCycleStart.setDate(newCycleStart.getDate() + 1);
-    const newCycleEnd = new Date(newCycleStart);
-    newCycleEnd.setDate(newCycleEnd.getDate() + 30);
 
     await tx.batches.update({
       where: { id: batch.id },
       data: {
         cycle_start_date: newCycleStart,
-        cycle_end_date:   newCycleEnd,
+        cycle_end_date:   newCycleStart, // will be updated by generateSessions
         last_settled_at:  new Date(),
         updated_at:       new Date(),
       },

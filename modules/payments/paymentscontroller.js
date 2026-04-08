@@ -1,12 +1,15 @@
 const crypto = require("crypto");
 const { verifyWebhookSignature } = require("../../utils/razorpay");
-const paymentsRepo   = require("./paymentsrepo");
-const icService      = require("../student/individualcoaching/indicoachservice");
-const ptService      = require("../student/personaltutor/perstutorservice");
-const ptAddonService = require("../student/subjectaddon/subjectaddonservice");
-const ssService      = require("../student/school-student/schoolstudentservice");
+const { sendNotification } = require("../../utils/fcm");
+const paymentsRepo    = require("./paymentsrepo");
+const paymentsService = require("./paymentsservice");
+const { streamReceiptPDF } = require("./receiptpdf");
+const icService       = require("../student/individualcoaching/indicoachservice");
+const ptService       = require("../student/personaltutor/perstutorservice");
+const ptAddonService  = require("../student/subjectaddon/subjectaddonservice");
+const ssService       = require("../student/school-student/schoolstudentservice");
 const kitOrderService = require("../student/kitorder/kitorderservice");
-const commissionRepo = require("../commissions/commissionrepo");
+const commissionRepo  = require("../commissions/commissionrepo");
 
 const SERVICE_MAP = {
     individual_coaching:   icService,
@@ -70,8 +73,16 @@ exports.verifyPayment = async (req, res) => {
             : pending.form_data;
         const realAmount = formDataParsed?.calculated_amount ?? 0;
 
-        await service.finalizeRegistration(temp_uuid, razorpay_payment_id, realAmount);
-        return res.status(200).json({ success: true, message: "Payment verified and registration finalized" });
+        const { userId } = await service.finalizeRegistration(temp_uuid, razorpay_payment_id, realAmount);
+
+        let receipt = null;
+        try {
+            receipt = await paymentsService.getReceipt(temp_uuid, userId);
+        } catch (_) { /* non-fatal — Flutter can fetch via GET /receipt/:temp_uuid */ }
+
+        sendNotification(userId, "Payment Successful", "Your registration is confirmed.", { type: "payment_confirmed", temp_uuid });
+
+        return res.status(200).json({ success: true, message: "Payment verified and registration finalized", receipt });
     } catch (error) {
         console.error("Payment verify error:", error);
         return res.status(500).json({ success: false, message: error.message });
@@ -180,6 +191,48 @@ exports.handlePaymentWebhook = async (req, res) => {
  * Configure a separate webhook URL in the Razorpay X Dashboard:
  *   POST /api/v1/payments/payout-webhook
  */
+/**
+ * GET /api/v1/payments/receipts
+ * List all receipts for the logged-in student (auth required).
+ */
+exports.listReceipts = async (req, res) => {
+    try {
+        const receipts = await paymentsService.listReceipts(req.user.userId);
+        return res.status(200).json({ success: true, receipts });
+    } catch (error) {
+        console.error("listReceipts error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/v1/payments/receipt/:temp_uuid
+ * Fetch a single receipt for the logged-in student (auth required).
+ */
+exports.getReceipt = async (req, res) => {
+    try {
+        const receipt = await paymentsService.getReceipt(req.params.temp_uuid, req.user.userId);
+        return res.status(200).json({ success: true, receipt });
+    } catch (error) {
+        const status = error.status || 500;
+        return res.status(status).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/v1/payments/receipt/:temp_uuid/pdf
+ * Stream a PDF receipt for the logged-in student.
+ */
+exports.downloadReceiptPDF = async (req, res) => {
+    try {
+        const receipt = await paymentsService.getReceipt(req.params.temp_uuid, req.user.userId);
+        streamReceiptPDF(receipt, res);
+    } catch (error) {
+        const status = error.status || 500;
+        return res.status(status).json({ success: false, message: error.message });
+    }
+};
+
 exports.handlePayoutWebhook = async (req, res) => {
     try {
         const signature = req.headers["x-razorpay-signature"];
@@ -193,10 +246,16 @@ exports.handlePayoutWebhook = async (req, res) => {
         if (!payoutId) return res.status(200).json({ received: true });
 
         if (event === "payout.processed") {
-            await commissionRepo.markPayoutPaid(payoutId);
+            const professional = await commissionRepo.markPayoutPaid(payoutId);
+            if (professional?.user_id) {
+                sendNotification(professional.user_id, "Payout Successful", "Your withdrawal has been processed and credited.", { type: "payout_processed" });
+            }
             console.log(`[Payout] processed — payout_id: ${payoutId}`);
         } else if (event === "payout.failed" || event === "payout.reversed") {
-            await commissionRepo.revertPayoutToApproved(payoutId);
+            const professional = await commissionRepo.revertPayoutToApproved(payoutId);
+            if (professional?.user_id) {
+                sendNotification(professional.user_id, "Payout Failed", "Your withdrawal could not be processed. Please retry.", { type: "payout_failed" });
+            }
             console.log(`[Payout] ${event} — reverted to approved — payout_id: ${payoutId}`);
         }
 

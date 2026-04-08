@@ -39,22 +39,55 @@ const repo   = require("./commissionrepo");
  *  - term_months = 1 → effective_monthly is null in DB, use total_fee directly
  *  - others          → look up fee_structures by coaching_type + society_category + activity + term_months
  */
-async function resolveEffectiveMonthly(studentUserId, serviceType, activityName, societyCategory) {
-    const rows = await prisma.$queryRaw`
-        SELECT amount, term_months FROM payments
-        WHERE  student_user_id = ${studentUserId}
-          AND  service_type    = ${serviceType}
-          AND  status          = 'captured'
-        ORDER BY captured_at DESC LIMIT 1
-    `;
-    const payment = rows[0];
-    if (!payment) return null;
+/**
+ * Resolve the effective monthly fee for a student.
+ *
+ * @param {number} studentUserId
+ * @param {string} serviceType   — 'group_coaching' | 'individual_coaching' | 'personal_tutor' | 'school_student'
+ * @param {string|null} activityName
+ * @param {string|null} societyCategory
+ * @param {number|null} termMonthsOverride — pass participant.term_months directly to skip DB lookup
+ */
+async function resolveEffectiveMonthly(studentUserId, serviceType, activityName, societyCategory, termMonthsOverride = null) {
+    let termMonths = termMonthsOverride;
+    let totalFee   = null;
 
-    const termMonths = payment.term_months ?? 1;
-    const totalFee   = parseFloat(payment.amount);
+    if (termMonths === null) {
+        // Fallback: look up from payments (for legacy records without term_months on participant)
+        const rows = await prisma.$queryRaw`
+            SELECT amount, term_months FROM payments
+            WHERE  student_user_id = ${studentUserId}
+              AND  service_type    = ${serviceType}
+              AND  status          = 'captured'
+            ORDER BY captured_at DESC LIMIT 1
+        `;
+        const payment = rows[0];
+        if (!payment) return null;
+        termMonths = payment.term_months ?? 1;
+        totalFee   = parseFloat(payment.amount);
+    }
 
-    if (serviceType === "school_student") return parseFloat((totalFee / 9).toFixed(2));
-    if (termMonths === 1)                 return totalFee;
+    if (serviceType === "school_student") {
+        if (totalFee === null) {
+            const rows = await prisma.$queryRaw`
+                SELECT amount FROM payments
+                WHERE student_user_id = ${studentUserId} AND service_type = 'school_student' AND status = 'captured'
+                ORDER BY captured_at DESC LIMIT 1
+            `;
+            totalFee = rows[0] ? parseFloat(rows[0].amount) : null;
+        }
+        return totalFee !== null ? parseFloat((totalFee / 9).toFixed(2)) : null;
+    }
+
+    if (termMonths === 1) {
+        if (totalFee !== null) return totalFee;
+        const rows = await prisma.$queryRaw`
+            SELECT amount FROM payments
+            WHERE student_user_id = ${studentUserId} AND service_type = ${serviceType} AND status = 'captured'
+            ORDER BY captured_at DESC LIMIT 1
+        `;
+        return rows[0] ? parseFloat(rows[0].amount) : null;
+    }
 
     const coachingTypeMap = {
         group_coaching:      "group_coaching",
@@ -337,7 +370,7 @@ exports.previewSettlement = async (professionalId = null) => {
             professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
             societies:     { select: { id: true, society_name: true, society_category: true } },
             schools:       { select: { id: true, school_name: true } },
-            activities:    { select: { id: true, name: true } },
+            activities:    { select: { id: true, name: true, activity_category: true } },
         },
     });
 
@@ -373,7 +406,7 @@ exports.confirmSettlement = async (assignmentIds = null) => {
             professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
             societies:     { select: { id: true, society_name: true, society_category: true } },
             schools:       { select: { id: true, school_name: true } },
-            activities:    { select: { id: true, name: true } },
+            activities:    { select: { id: true, name: true, activity_category: true } },
         },
     });
 
@@ -418,6 +451,34 @@ exports.confirmSettlement = async (assignmentIds = null) => {
 
 // ── Settlement core calculation ────────────────────────────────────────────
 
+/**
+ * Resolve the standard monthly session cap for this assignment.
+ * This is always used as the denominator — never sessions_allocated.
+ * Ensures per-session rate is the same regardless of how many sessions
+ * a specific trainer was allocated.
+ */
+function resolveStandardCap(assignment_type, activityCategory, rules) {
+    const cat = activityCategory ?? "sports";
+
+    if (assignment_type === "group_coaching_society") {
+        return cat === "sports"
+            ? parseFloat(rules.group_society_sports_sessions_cap?.value     ?? 20)
+            : parseFloat(rules.group_society_non_sports_sessions_cap?.value ?? 15);
+    }
+    if (assignment_type === "group_coaching_school") {
+        return cat === "sports"
+            ? parseFloat(rules.group_school_sports_sessions_cap?.value      ?? 18)
+            : parseFloat(rules.group_school_non_sports_sessions_cap?.value  ?? 15);
+    }
+    if (assignment_type === "individual_coaching") {
+        return parseFloat(rules.individual_coaching_sessions_cap?.value ?? 18);
+    }
+    if (assignment_type === "personal_tutor") {
+        return parseFloat(rules.personal_tutor_sessions_cap?.value ?? 18);
+    }
+    return 18; // safe fallback
+}
+
 async function buildSettlementItem(assignment, rules) {
     const { id, professional_id, professional_type, assignment_type, society_id, school_id, activity_id,
             sessions_allocated, assigned_from, last_settled_at, professionals, societies, schools, activities } = assignment;
@@ -449,24 +510,37 @@ async function buildSettlementItem(assignment, rules) {
         // pass it directly so resolveEffectiveMonthly doesn't re-query per student
         const societyCategory = societies?.society_category ?? null;
 
-        const students = await prisma.individual_participants.findMany({
+        // Find this trainer's batch for this society + activity
+        const trainerBatch = await prisma.batches.findFirst({
             where: {
+                professional_id: professional_id,
                 society_id,
-                ...(activities?.name ? { activity: activities.name } : {}),
-                students: { student_type: "group_coaching" },
+                ...(activity_id ? { activity_id } : {}),
+                is_active: true,
             },
-            select: { students: { select: { user_id: true } } },
+            select: {
+                id: true,
+                batch_students: {
+                    select: { students: { select: { user_id: true, individual_participants: { select: { term_months: true, activity: true } } } } },
+                },
+            },
         });
 
-        for (const s of students) {
-            const uid = s.students?.user_id;
+        const batchStudents = trainerBatch?.batch_students ?? [];
+        const studentCount  = batchStudents.length;
+
+        for (const bs of batchStudents) {
+            const uid = bs.students?.user_id;
             if (!uid) continue;
-            const em = await resolveEffectiveMonthly(uid, "group_coaching", activities?.name ?? null, societyCategory);
+            // Pick the individual_participant entry matching this activity
+            const ip = bs.students?.individual_participants?.find(p =>
+                !activities?.name || p.activity === activities.name
+            );
+            const em = await resolveEffectiveMonthly(uid, "group_coaching", activities?.name ?? null, societyCategory, ip?.term_months ?? null);
             if (em) effectiveFeeBase += em;
         }
 
-        const minStudents   = parseFloat(rules.trainer_group_society_min_students?.value ?? 10);
-        const studentCount  = await repo.countSocietyStudentsForActivity(society_id, activities?.name ?? null);
+        const minStudents = parseFloat(rules.trainer_group_society_min_students?.value ?? 10);
 
         if (studentCount < minStudents) {
             isFlat               = true;
@@ -476,20 +550,30 @@ async function buildSettlementItem(assignment, rules) {
         }
 
     } else if (assignment_type === "group_coaching_school" && school_id) {
-        const schoolStudents = await prisma.school_students.findMany({
-            where: { school_id },
-            select: { students: { select: { user_id: true } } },
+        // Scope to this trainer's batch for this school + activity
+        const trainerBatch = await prisma.batches.findFirst({
+            where: {
+                professional_id: professional_id,
+                school_id,
+                ...(activity_id ? { activity_id } : {}),
+                is_active: true,
+            },
+            select: {
+                id: true,
+                batch_students: {
+                    select: { students: { select: { user_id: true, school_students: { select: { term_months: true } } } } },
+                },
+            },
         });
 
-        for (const s of schoolStudents) {
-            const uid = s.students?.user_id;
+        const batchStudents = trainerBatch?.batch_students ?? [];
+
+        for (const bs of batchStudents) {
+            const uid = bs.students?.user_id;
             if (!uid) continue;
-            const payment = await prisma.$queryRaw`
-                SELECT amount FROM payments
-                WHERE student_user_id = ${uid} AND service_type = 'school_student' AND status = 'captured'
-                ORDER BY captured_at DESC LIMIT 1
-            `;
-            if (payment[0]) effectiveFeeBase += parseFloat((parseFloat(payment[0].amount) / 9).toFixed(2));
+            const termMonths = bs.students?.school_students?.[0]?.term_months ?? 9;
+            const em = await resolveEffectiveMonthly(uid, "school_student", null, null, termMonths);
+            if (em) effectiveFeeBase += em;
         }
 
         commissionRate = parseFloat(rules.trainer_group_school_rate?.value ?? 45);
@@ -500,13 +584,13 @@ async function buildSettlementItem(assignment, rules) {
                 trainer_professional_id: professional_id,
                 students: { student_type: "individual_coaching" },
             },
-            select: { society_id: true, activity: true, students: { select: { user_id: true } } },
+            select: { society_id: true, activity: true, term_months: true, students: { select: { user_id: true } } },
         });
 
         for (const p of participants) {
             const uid = p.students?.user_id;
             if (!uid) continue;
-            const em = await resolveEffectiveMonthly(uid, "individual_coaching", p.activity, null);
+            const em = await resolveEffectiveMonthly(uid, "individual_coaching", p.activity, null, p.term_months ?? null);
             if (em) effectiveFeeBase += em;
         }
 
@@ -515,13 +599,13 @@ async function buildSettlementItem(assignment, rules) {
     } else if (assignment_type === "personal_tutor") {
         const tutors = await prisma.personal_tutors.findMany({
             where: { teacher_professional_id: professional_id },
-            select: { students: { select: { user_id: true } } },
+            select: { term_months: true, students: { select: { user_id: true } } },
         });
 
         for (const t of tutors) {
             const uid = t.students?.user_id;
             if (!uid) continue;
-            const em = await resolveEffectiveMonthly(uid, "personal_tutor", null, null);
+            const em = await resolveEffectiveMonthly(uid, "personal_tutor", null, null, t.term_months ?? null);
             if (em) effectiveFeeBase += em;
         }
 
@@ -529,6 +613,8 @@ async function buildSettlementItem(assignment, rules) {
     }
 
     // ── 3. Calculate commission ───────────────────────────────────────────
+    const standardCap = resolveStandardCap(assignment_type, activities?.activity_category ?? null, rules);
+
     let commissionPerSession, commissionAmount;
 
     if (isFlat) {
@@ -536,33 +622,35 @@ async function buildSettlementItem(assignment, rules) {
         commissionAmount     = parseFloat((sessionsAttended * flatAmountPerSession).toFixed(2));
     } else {
         const totalCommissionPool = parseFloat(((effectiveFeeBase * commissionRate) / 100).toFixed(2));
-        commissionPerSession      = sessions_allocated > 0
-            ? parseFloat((totalCommissionPool / sessions_allocated).toFixed(2))
+        commissionPerSession      = standardCap > 0
+            ? parseFloat((totalCommissionPool / standardCap).toFixed(2))
             : 0;
         commissionAmount          = parseFloat((sessionsAttended * commissionPerSession).toFixed(2));
     }
 
     return {
-        assignment_id:        id,
+        assignment_id:           id,
         professional_id,
-        professional_name:    professionals?.users?.full_name ?? null,
-        professional_mobile:  professionals?.users?.mobile ?? null,
+        professional_name:       professionals?.users?.full_name ?? null,
+        professional_mobile:     professionals?.users?.mobile ?? null,
         professional_type,
         assignment_type,
-        entity_name:          societies?.society_name ?? schools?.school_name ?? null,
-        activity_name:        activities?.name ?? null,
-        assigned_from:        assigned_from,
-        last_settled_at:      last_settled_at,
-        window_start:         windowStart,
-        window_end:           windowEnd,
+        entity_name:             societies?.society_name ?? schools?.school_name ?? null,
+        activity_name:           activities?.name ?? null,
+        activity_category:       activities?.activity_category ?? null,
+        assigned_from:           assigned_from,
+        last_settled_at:         last_settled_at,
+        window_start:            windowStart,
+        window_end:              windowEnd,
+        standard_sessions_cap:   standardCap,
         sessions_allocated,
-        sessions_attended:    sessionsAttended,
-        effective_fee_base:   parseFloat(effectiveFeeBase.toFixed(2)),
-        commission_rate:      isFlat ? 0 : commissionRate,
-        is_flat_rate:         isFlat,
+        sessions_attended:       sessionsAttended,
+        effective_fee_base:      parseFloat(effectiveFeeBase.toFixed(2)),
+        commission_rate:         isFlat ? 0 : commissionRate,
+        is_flat_rate:            isFlat,
         flat_amount_per_session: isFlat ? flatAmountPerSession : null,
-        commission_per_session: commissionPerSession,
-        commission_amount:    commissionAmount,
+        commission_per_session:  commissionPerSession,
+        commission_amount:       commissionAmount,
     };
 }
 

@@ -647,8 +647,8 @@ exports.approveCommission = async (id) => {
 exports.markCommissionPaid = async (id) => {
     const commission = await adminRepo.getCommissionById(id);
     if (!commission) throw new Error("COMMISSION_NOT_FOUND");
-    if (commission.status === "paid")    throw new Error("ALREADY_PAID");
-    if (commission.status === "on_hold") throw new Error("COMMISSION_STILL_ON_HOLD");
+    if (commission.status === "paid")                              throw new Error("ALREADY_PAID");
+    if (commission.status === "on_hold" || commission.status === "pending") throw new Error("COMMISSION_NOT_APPROVED");
 
     const amount = parseFloat(commission.commission_amount);
     return await adminRepo.markCommissionPaid(id, amount, commission.professional_id);
@@ -752,6 +752,80 @@ exports.listPayments = async (filters) => {
         captured_at: r.captured_at,
         user: r.users ? { id: r.users.id, full_name: r.users.full_name, mobile: r.users.mobile } : null,
     }));
+};
+
+exports.listPayIns = async ({ serviceType, from, to } = {}) => {
+    const rows = await adminRepo.listPayIns({ serviceType, from, to });
+    const total = rows.reduce((sum, r) => sum + parseFloat(r.amount), 0);
+    return {
+        total: parseFloat(total.toFixed(2)),
+        count: rows.length,
+        items: rows.map((r) => ({
+            id:                  r.id,
+            razorpay_payment_id: r.razorpay_payment_id,
+            service_type:        r.service_type,
+            amount:              parseFloat(r.amount),
+            currency:            r.currency,
+            term_months:         r.term_months,
+            captured_at:         r.captured_at,
+            user: r.users ? { id: r.users.id, full_name: r.users.full_name, mobile: r.users.mobile } : null,
+        })),
+    };
+};
+
+exports.listPayOuts = async ({ professionalType, commissionStatus, refundStatus, from, to } = {}) => {
+    const [commissions, refunds] = await Promise.all([
+        adminRepo.listPayOutCommissions({ professionalType, status: commissionStatus, from, to }),
+        adminRepo.listPayOutRefunds({ status: refundStatus, from, to }),
+    ]);
+
+    const commissionItems = commissions.map((c) => ({
+        type:              "commission",
+        id:                c.id,
+        professional_type: c.professional_type,
+        source_type:       c.source_type,
+        source_id:         c.source_id,
+        amount:            parseFloat(c.commission_amount),
+        status:            c.status,
+        created_at:        c.created_at,
+        professional: c.professionals ? {
+            id:        c.professionals.id,
+            full_name: c.professionals.users?.full_name,
+            mobile:    c.professionals.users?.mobile,
+        } : null,
+    }));
+
+    const refundItems = refunds.map((r) => ({
+        type:         "kit_refund",
+        id:           r.id,
+        kit_order_id: r.kit_order_id,
+        amount:       parseFloat(r.amount),
+        reason:       r.reason,
+        status:       r.status,
+        created_at:   r.created_at,
+        product_name: r.kit_orders?.vendor_products?.product_name ?? null,
+        razorpay_payment_id: r.kit_orders?.razorpay_payment_id ?? null,
+        user: r.users ? { id: r.users.id, full_name: r.users.full_name, mobile: r.users.mobile } : null,
+    }));
+
+    const allItems = [...commissionItems, ...refundItems]
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+    const total = allItems.reduce((sum, i) => sum + i.amount, 0);
+
+    return {
+        total:              parseFloat(total.toFixed(2)),
+        commission_count:   commissionItems.length,
+        refund_count:       refundItems.length,
+        items:              allItems,
+    };
+};
+
+exports.markRefundProcessed = async (refundId) => {
+    const refund = await adminRepo.getRefundById(refundId);
+    if (!refund) throw Object.assign(new Error("REFUND_NOT_FOUND"), { status: 404 });
+    if (refund.status === "processed") throw Object.assign(new Error("ALREADY_PROCESSED"), { status: 409 });
+    return await adminRepo.markRefundProcessed(refundId);
 };
 
 // ── Student assignment overview (read-only) ───────────────────────────────
@@ -961,7 +1035,7 @@ exports.getTrainersForActivity = async (activityId, filters = {}) => {
 
     const result = await adminRepo.getProfessionalsForSession("trainer", {
         ...filters,
-        activity: activity.name,
+        activityId: activity.id,
     });
     return result;
 };

@@ -38,7 +38,7 @@ exports.getWalletBreakdown = async (meUserId, status) => {
         throw err;
     }
     const professional = await getMeProfessional(meUserId);
-    return await commissionRepo.getWalletBreakdown(professional.id, status);
+    return await commissionRepo.getMEWalletBreakdown(professional.id, status);
 };
 
 exports.getTransactionHistory = async (meUserId, filters) => {

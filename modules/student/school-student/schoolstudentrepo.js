@@ -27,7 +27,7 @@ exports.insertStudent = async (tx, userId, type) => {
     return student.id;
 };
 
-exports.insertSchoolStudent = async (tx, studentId, data) => {
+exports.insertSchoolStudent = async (tx, studentId, data, termMonths = 9) => {
     await tx.school_students.create({
         data: {
             student_id: studentId,
@@ -38,6 +38,7 @@ exports.insertSchoolStudent = async (tx, studentId, data) => {
             activities: data.activity_ids && data.activity_ids.length > 0
                 ? JSON.stringify(data.activity_ids)
                 : null,
+            term_months: termMonths,
         },
     });
 };
