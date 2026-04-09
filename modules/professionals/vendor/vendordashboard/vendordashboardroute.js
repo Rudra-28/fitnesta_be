@@ -27,6 +27,9 @@ router.delete("/products/:id", vendorGuard, controller.deleteProduct);
 router.get("/orders",                        vendorGuard, kitOrderController.getVendorOrders);
 router.patch("/orders/:order_id/status",     vendorGuard, kitOrderController.updateOrderStatus);
 
+// ── Insights ───────────────────────────────────────────────────────────────
+router.get("/insights", vendorGuard, controller.getInsights);               // GET /api/v1/vendor-dashboard/insights
+
 // ── Wallet ─────────────────────────────────────────────────────────────────
 router.get("/wallet",           vendorGuard, controller.getWalletSummary);    // GET  /api/v1/vendor-dashboard/wallet
 router.get("/wallet/transactions",   vendorGuard, controller.getTransactionHistory);  // GET /api/v1/vendor-dashboard/wallet/transactions

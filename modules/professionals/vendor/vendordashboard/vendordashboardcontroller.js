@@ -1,4 +1,5 @@
-const service = require("./vendordashboardservice");
+const service         = require("./vendordashboardservice");
+const insightsService = require("./vendorinsightsservice");
 
 exports.addProduct = async (req, res) => {
     try {
@@ -106,3 +107,13 @@ exports.getTransactionHistory = async (req, res) => {
     }
 };
 
+// ── Insights ───────────────────────────────────────────────────────────────
+
+exports.getInsights = async (req, res) => {
+    try {
+        const data = await insightsService.getInsights(req.vendor.id);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(err.statusCode || 500).json({ success: false, error: err.message });
+    }
+};

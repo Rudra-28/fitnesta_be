@@ -1,9 +1,10 @@
-const express = require("express"); 
+const express = require("express");
 const router = express.Router();
 const vendorController = require("../professionals/vendor/vendordashboard/vendordashboardcontroller");
 const kitOrderController = require("./kitorder/kitordercontroller");
+const activityPurchaseCtrl = require("./activitypurchase/activitypurchasecontroller");
 const studentGuard = require("./studentmiddleware");
-const ctrl = require("./studentdashboardcontroller"); 
+const ctrl = require("./studentdashboardcontroller");
 
 // ── Products (Kits) — public ───────────────────────────────────────────────
 router.get("/products", vendorController.getAllProductsPublic);
@@ -16,6 +17,9 @@ router.get("/orders/:order_id", studentGuard, kitOrderController.getMyOrderById)
 if (process.env.DEV_SKIP_PAYMENT === "true") {
   router.post("/orders/:temp_uuid/dev-confirm", studentGuard, kitOrderController.devFinalizeKitOrder);
 }
+
+// ── Edit profile ───────────────────────────────────────────────────────────
+router.patch("/edit-profile", studentGuard, ctrl.editProfile);               // PATCH /api/v1/student-dashboard/edit-profile
 
 // ── Toggle state ───────────────────────────────────────────────────────────
 router.get("/toggle", studentGuard, ctrl.getToggleState);
@@ -37,6 +41,15 @@ router.get("/activities/sessions/:sessionId", studentGuard, ctrl.getActivitiesSe
 // ── Subject Addon (buy a new subject) ─────────────────────────────────────
 router.get("/subjects/available",                studentGuard, ctrl.getAvailableSubjects);
 router.post("/subjects/buy",                     studentGuard, ctrl.initiateSubjectAddon);
+
+// ── Activity Purchase (buy a sport activity for existing student) ──────────
+router.get("/activity-purchase/societies",       studentGuard, activityPurchaseCtrl.getSocieties);
+router.get("/activity-purchase/schools",         studentGuard, activityPurchaseCtrl.getSchools);
+router.get("/activity-purchase/fees",            studentGuard, activityPurchaseCtrl.getFees);
+router.post("/activity-purchase/initiate",       studentGuard, activityPurchaseCtrl.initiateActivityPurchase);
+if (process.env.DEV_SKIP_PAYMENT === "true") {
+  router.post("/activity-purchase/:temp_uuid/dev-confirm", studentGuard, activityPurchaseCtrl.devConfirm);
+}
 
 // ── Feedback ───────────────────────────────────────────────────────────────
 router.post("/sessions/:id/feedback", studentGuard, ctrl.submitFeedback);

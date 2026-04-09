@@ -2,6 +2,10 @@ const service = require("./vendorEditService");
 
 exports.editVendor = async (req, res) => {
     try {
+        console.log(`[Vendor Edit Profile] Request received for User ID: ${req.user.userId}`);
+        console.log(`[Vendor Edit Profile] Request Body:`, req.body);
+        console.log(`[Vendor Edit Profile] Uploaded Files:`, req.files ? Object.keys(req.files) : 'None');
+
         const fileData = {};
         if (req.files) {
             if (req.files['panCard'])        fileData.panCard        = req.files['panCard'][0].path;
@@ -12,6 +16,7 @@ exports.editVendor = async (req, res) => {
         const data = { ...req.body, ...fileData };
         const result = await service.editVendor(req.user.userId, data);
 
+        console.log(`[Vendor Edit Profile] Successfully updated. Returning Response:`, result);
         res.status(200).json(result);
     } catch (err) {
         console.error("Vendor edit profile error:", err.message);

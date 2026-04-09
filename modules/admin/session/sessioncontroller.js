@@ -75,6 +75,34 @@ async function generateIndividualSessions(req, res) {
   }
 }
 
+async function extendMembership(req, res) {
+  try {
+    const result = await service.extendMembership(req.body);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function rescheduleSession(req, res) {
+  try {
+    const { scheduled_date, start_time, end_time } = req.body;
+    const session = await service.rescheduleSession(req.params.sessionId, { scheduled_date, start_time, end_time });
+    return res.json({ success: true, data: session });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function getStudentSessionBatches(req, res) {
+  try {
+    const batches = await service.getStudentSessionBatches(req.params.studentId);
+    return res.json({ success: true, data: batches });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 async function getSessionFeedback(req, res) {
   try {
     const feedback = await service.getSessionFeedback(req.params.sessionId);
@@ -87,9 +115,12 @@ async function getSessionFeedback(req, res) {
 module.exports = {
   createSession,
   generateIndividualSessions,
+  extendMembership,
   listSessions,
   getSession,
   updateSessionStatus,
   cancelSession,
+  rescheduleSession,
+  getStudentSessionBatches,
   getSessionFeedback,
 };

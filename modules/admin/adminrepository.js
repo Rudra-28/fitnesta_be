@@ -150,6 +150,7 @@ exports.getAllPersonalTutors = async () => {
 
 exports.getAllIndividualParticipants = async () => {
     return await prisma.individual_participants.findMany({
+        where: { students: { student_type: "individual_coaching" } },
         select: {
             id: true,
             activity: true,
@@ -443,65 +444,7 @@ exports.markCommissionPaid = async (id, commissionAmount, professionalId) => {
     });
 };
 
-// ── Withdrawal requests ────────────────────────────────────────────────────
 
-/**
- * List all professionals who have at least one "requested" commission, with totals.
- */
-exports.listWithdrawalRequests = async () => {
-    const rows = await prisma.commissions.groupBy({
-        by:     ["professional_id"],
-        where:  { status: "requested" },
-        _sum:   { commission_amount: true },
-        _count: { id: true },
-    });
-
-    if (rows.length === 0) return [];
-
-    const ids          = rows.map((r) => r.professional_id);
-    const professionals = await prisma.professionals.findMany({
-        where:  { id: { in: ids } },
-        select: {
-            id:               true,
-            profession_type:  true,
-            users:            { select: { full_name: true, mobile: true } },
-        },
-    });
-    const profMap = Object.fromEntries(professionals.map((p) => [p.id, p]));
-
-    return rows.map((r) => ({
-        professional_id:   r.professional_id,
-        professional:      profMap[r.professional_id] ?? null,
-        entry_count:       r._count.id,
-        total_amount:      parseFloat(r._sum.commission_amount ?? 0),
-    }));
-};
-
-/**
- * Mark all "requested" commissions for a professional as "paid" (full withdrawal payout).
- */
-exports.markWithdrawalsPaid = async (professionalId) => {
-    const requested = await prisma.commissions.findMany({
-        where:  { professional_id: Number(professionalId), status: "requested" },
-        select: { id: true, commission_amount: true },
-    });
-
-    if (requested.length === 0) return { count: 0, total_amount: 0 };
-
-    const ids         = requested.map((c) => c.id);
-    const totalAmount = parseFloat(
-        requested.reduce((sum, c) => sum + parseFloat(c.commission_amount), 0).toFixed(2)
-    );
-
-    await prisma.$transaction(async (tx) => {
-        await tx.commissions.updateMany({
-            where: { id: { in: ids } },
-            data:  { status: "paid" },
-        });
-    });
-
-    return { count: requested.length, total_amount: totalAmount };
-};
 
 // ── Travelling allowances ──────────────────────────────────────────────────
 
@@ -915,6 +858,7 @@ exports.getAllSchoolStudents = async () => {
 
 exports.getAllGroupCoachingStudents = async () => {
     return await prisma.individual_participants.findMany({
+        where: { students: { student_type: "group_coaching" } },
         select: {
             id: true,
             activity: true,
@@ -1369,5 +1313,89 @@ exports.markReviewed = async (tx, id, status, reviewedBy, note) => {
             review_note: note ?? null,
             reviewed_at: new Date(),
         },
+    });
+};
+
+// ── Audit logs ────────────────────────────────────────────────────────────
+
+exports.getAuditLogs = async ({ adminUserId, action, from, to, limit, offset }) => {
+    const where = {};
+    if (adminUserId) where.admin_user_id = Number(adminUserId);
+    if (action)      where.action        = action;
+    if (from || to) {
+        where.performed_at = {};
+        if (from) where.performed_at.gte = new Date(from);
+        if (to)   where.performed_at.lte = new Date(to);
+    }
+
+    const [rows, total] = await Promise.all([
+        prisma.audit_logs.findMany({
+            where,
+            orderBy: { performed_at: "desc" },
+            take:  limit  ? Number(limit)  : 50,
+            skip:  offset ? Number(offset) : 0,
+        }),
+        prisma.audit_logs.count({ where }),
+    ]);
+
+    return { total, rows };
+};
+
+// ── Sub-admin management ───────────────────────────────────────────────────
+
+exports.findUserByMobile = async (mobile) => {
+    return prisma.users.findFirst({ where: { mobile } });
+};
+
+exports.createSubAdmin = async ({ full_name, mobile, email }) => {
+    return prisma.$transaction(async (tx) => {
+        const user = await tx.users.create({
+            data: {
+                uuid:            require("crypto").randomUUID(),
+                role:            "admin",
+                full_name,
+                mobile,
+                email:           email ?? null,
+                is_verified:     true,
+                approval_status: "approved",
+            },
+        });
+        const adminRow = await tx.admins.create({
+            data: { user_id: user.id, scope: "sub_admin" },
+        });
+        return { user, adminRow };
+    });
+};
+
+exports.listAdmins = async () => {
+    return prisma.admins.findMany({
+        select: {
+            id:         true,
+            scope:      true,
+            created_at: true,
+            users: {
+                select: {
+                    id:        true,
+                    full_name: true,
+                    mobile:    true,
+                    email:     true,
+                },
+            },
+        },
+        orderBy: [{ scope: "asc" }, { created_at: "asc" }],
+    });
+};
+
+exports.findAdminByUserId = async (userId) => {
+    return prisma.admins.findFirst({ where: { user_id: Number(userId) } });
+};
+
+exports.removeSubAdmin = async (userId) => {
+    return prisma.$transaction(async (tx) => {
+        await tx.admins.deleteMany({ where: { user_id: Number(userId) } });
+        await tx.users.update({
+            where: { id: Number(userId) },
+            data:  { role: "removed" },
+        });
     });
 };

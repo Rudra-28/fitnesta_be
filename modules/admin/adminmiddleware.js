@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
 const prisma = require("../../config/prisma");
 
-module.exports = async (req, res, next) => {
+const adminGuard = async (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -12,18 +12,32 @@ module.exports = async (req, res, next) => {
         const token = authHeader.split(" ")[1];
         const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
 
-        if (!["admin", "sub_admin"].includes(decoded.role)) {
+        if (decoded.role !== "admin") {
             return res.status(403).json({ success: false, message: "Access denied. Admins only." });
         }
 
-        const user = await prisma.users.findUnique({ where: { id: decoded.userId } });
-        if (!user) {
-            return res.status(401).json({ success: false, message: "User no longer exists." });
+        const adminRow = await prisma.admins.findFirst({
+            where: { user_id: decoded.userId },
+            select: { scope: true, users: { select: { id: true } } },
+        });
+        if (!adminRow) {
+            return res.status(401).json({ success: false, message: "Admin record not found." });
         }
 
-        req.admin = decoded;
+        req.admin = { ...decoded, scope: adminRow.scope };
         next();
     } catch (err) {
         return res.status(401).json({ success: false, message: "Invalid or expired token." });
     }
 };
+
+// Only super_admin can pass this — place after adminGuard
+const superAdminGuard = (req, res, next) => {
+    if (req.admin?.scope !== "super_admin") {
+        return res.status(403).json({ success: false, message: "Access denied. Super-admin only." });
+    }
+    next();
+};
+
+module.exports = adminGuard;
+module.exports.superAdminGuard = superAdminGuard;

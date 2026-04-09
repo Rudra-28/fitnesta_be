@@ -85,6 +85,43 @@ async function getSubjectAddonStatus(tempUuid) {
   return subjectAddon.getAddonStatus(tempUuid);
 }
 
+async function editProfile(userId, data) {
+  const s = await _getStudent(userId);
+
+  // ── users table fields (common to all types) ──────────────────────────────
+  const userData = {};
+  if (data.fullName       !== undefined) userData.full_name = data.fullName;
+  if (data.contactNumber  !== undefined) userData.mobile    = data.contactNumber;
+  if (data.address        !== undefined) userData.address   = data.address;
+
+  // ── type-specific fields ──────────────────────────────────────────────────
+  const typeData = {};
+
+  if (s.student_type === "individual_coaching" || s.student_type === "group_coaching") {
+    if (data.fullName       !== undefined) typeData.participant_name = data.fullName;
+    if (data.contactNumber  !== undefined) typeData.mobile           = data.contactNumber;
+    if (data.flatNo         !== undefined) typeData.flat_no          = data.flatNo;
+    if (data.societyName    !== undefined) typeData.society_name     = data.societyName;
+    if (data.kitType        !== undefined) typeData.kits             = data.kitType;
+    if (data.preferredBatch !== undefined) typeData.preferred_batch  = data.preferredBatch;
+    if (data.preferredTime  !== undefined) typeData.preferred_time   = data.preferredTime;
+
+  } else if (s.student_type === "personal_tutor") {
+    if (data.standard       !== undefined) typeData.standard       = data.standard;
+    if (data.batch          !== undefined) typeData.batch          = data.batch;
+    if (data.teacherFor     !== undefined) typeData.teacher_for    = data.teacherFor;
+    if (data.preferredTime  !== undefined) typeData.preferred_time = data.preferredTime;
+
+  } else if (s.student_type === "school_student") {
+    if (data.fullName       !== undefined) typeData.student_name = data.fullName;
+    if (data.standard       !== undefined) typeData.standard     = data.standard;
+    if (data.address        !== undefined) typeData.address      = data.address;
+  }
+
+  await repo.editProfile(Number(userId), s.student_type, userData, typeData);
+  return { success: true, message: "Profile updated successfully" };
+}
+
 async function submitFeedback(userId, sessionId, rating, comment) {
   const s = await _getStudent(userId);
   if (!rating || rating < 1 || rating > 5) throw Object.assign(new Error("rating must be 1–5"), { code: "INVALID" });
@@ -99,4 +136,5 @@ module.exports = {
   getSubjectsWithSessions, getActivitiesWithSessions,
   getAvailableSubjects, initiateSubjectAddon, getSubjectAddonStatus,
   submitFeedback,
+  editProfile,
 };

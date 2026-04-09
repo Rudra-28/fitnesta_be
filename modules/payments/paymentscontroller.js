@@ -4,20 +4,24 @@ const { sendNotification } = require("../../utils/fcm");
 const paymentsRepo    = require("./paymentsrepo");
 const paymentsService = require("./paymentsservice");
 const { streamReceiptPDF } = require("./receiptpdf");
-const icService       = require("../student/individualcoaching/indicoachservice");
-const ptService       = require("../student/personaltutor/perstutorservice");
-const ptAddonService  = require("../student/subjectaddon/subjectaddonservice");
-const ssService       = require("../student/school-student/schoolstudentservice");
-const kitOrderService = require("../student/kitorder/kitorderservice");
-const commissionRepo  = require("../commissions/commissionrepo");
+const icService              = require("../student/individualcoaching/indicoachservice");
+const ptService              = require("../student/personaltutor/perstutorservice");
+const ptAddonService         = require("../student/subjectaddon/subjectaddonservice");
+const ssService              = require("../student/school-student/schoolstudentservice");
+const kitOrderService        = require("../student/kitorder/kitorderservice");
+const activityPurchaseService = require("../student/activitypurchase/activitypurchaseservice");
+const commissionRepo         = require("../commissions/commissionrepo");
 
 const SERVICE_MAP = {
-    individual_coaching:   icService,
-    group_coaching:        icService,
-    personal_tutor:        ptService,
-    personal_tutor_addon:  ptAddonService,
-    school_student:        ssService,
-    kit_order:             kitOrderService,
+    individual_coaching:             icService,
+    group_coaching:                  icService,
+    personal_tutor:                  ptService,
+    personal_tutor_addon:            ptAddonService,
+    school_student:                  ssService,
+    kit_order:                       kitOrderService,
+    activity_purchase_individual:    activityPurchaseService,
+    activity_purchase_group:         activityPurchaseService,
+    activity_purchase_school:        activityPurchaseService,
 };
 
 /**
@@ -186,11 +190,7 @@ exports.handlePaymentWebhook = async (req, res) => {
     }
 };
 
-/**
- * Razorpay Payouts webhook — handles payout.processed and payout.failed.
- * Configure a separate webhook URL in the Razorpay X Dashboard:
- *   POST /api/v1/payments/payout-webhook
- */
+
 /**
  * GET /api/v1/payments/receipts
  * List all receipts for the logged-in student (auth required).
@@ -233,35 +233,4 @@ exports.downloadReceiptPDF = async (req, res) => {
     }
 };
 
-exports.handlePayoutWebhook = async (req, res) => {
-    try {
-        const signature = req.headers["x-razorpay-signature"];
-        if (!verifyWebhookSignature(req.rawBody, signature)) {
-            return res.status(400).json({ success: false, message: "Invalid webhook signature" });
-        }
 
-        const event    = req.body.event;
-        const payoutId = req.body?.payload?.payout?.entity?.id;
-
-        if (!payoutId) return res.status(200).json({ received: true });
-
-        if (event === "payout.processed") {
-            const professional = await commissionRepo.markPayoutPaid(payoutId);
-            if (professional?.user_id) {
-                sendNotification(professional.user_id, "Payout Successful", "Your withdrawal has been processed and credited.", { type: "payout_processed" });
-            }
-            console.log(`[Payout] processed — payout_id: ${payoutId}`);
-        } else if (event === "payout.failed" || event === "payout.reversed") {
-            const professional = await commissionRepo.revertPayoutToApproved(payoutId);
-            if (professional?.user_id) {
-                sendNotification(professional.user_id, "Payout Failed", "Your withdrawal could not be processed. Please retry.", { type: "payout_failed" });
-            }
-            console.log(`[Payout] ${event} — reverted to approved — payout_id: ${payoutId}`);
-        }
-
-        return res.status(200).json({ received: true });
-    } catch (error) {
-        console.error("Payout webhook error:", error);
-        return res.status(200).json({ received: true });
-    }
-};

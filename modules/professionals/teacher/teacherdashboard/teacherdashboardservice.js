@@ -166,7 +166,7 @@ exports.endSession = async (userId, sessionId) => {
     return { success: true, data: updated };
 };
 
-const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
+const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
 
 exports.getWalletSummary = async (userId) => {
     const professionalId = await resolveTeacher(userId);

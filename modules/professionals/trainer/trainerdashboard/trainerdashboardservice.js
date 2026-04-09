@@ -1,5 +1,6 @@
 const repo             = require("./trainerdashboardrepo");
 const commissionRepo   = require("../../../commissions/commissionrepo");
+const commissionService = require("../../../commissions/commissionservice");
 
 const VALID_STATUSES = ["upcoming", "ongoing", "completed", "cancelled"];
 
@@ -132,10 +133,16 @@ async function punchOut(userId, sessionId) {
   const session = await repo.getSessionForTrainer(sessionId, professionalId);
   if (!session) throw Object.assign(new Error("Session not found"), { code: "SESSION_NOT_FOUND" });
   if (session.status !== "ongoing") throw Object.assign(new Error("Session must be ongoing to punch out"), { code: "INVALID_STATUS" });
-  return repo.punchOut(sessionId);
+  const result = await repo.punchOut(sessionId);
+
+  // Trigger travelling allowance calculation (fire-and-forget)
+  commissionService.upsertTravellingAllowance(professionalId, session.scheduled_date)
+    .catch(err => console.error("[TA] Error triggering allowance:", err.message));
+
+  return result;
 }
 
-const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
+const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
 
 async function getWalletSummary(userId) {
   const professionalId = await repo.getTrainerProfessionalId(userId);

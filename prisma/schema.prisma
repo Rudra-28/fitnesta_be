@@ -84,6 +84,13 @@ model individual_participants {
   trainer_professional_id Int?
   batch_id                Int?
   term_months             Int            @default(1) @db.TinyInt
+  membership_start_date   DateTime?      @db.Date
+  membership_end_date     DateTime?      @db.Date
+  session_cap             Int?           @db.TinyInt
+  session_days_of_week    Json?
+  session_start_time      DateTime?      @db.Time(0)
+  session_end_time        DateTime?      @db.Time(0)
+  is_active               Boolean        @default(true)
   students                students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
   societies               societies?     @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
   professionals           professionals? @relation(fields: [trainer_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_3")
@@ -166,6 +173,13 @@ model personal_tutors {
   preferred_time          String?        @db.VarChar(50)
   teacher_professional_id Int?
   term_months             Int            @default(1) @db.TinyInt
+  membership_start_date   DateTime?      @db.Date
+  membership_end_date     DateTime?      @db.Date
+  session_cap             Int?           @db.TinyInt
+  session_days_of_week    Json?
+  session_start_time      DateTime?      @db.Time(0)
+  session_end_time        DateTime?      @db.Time(0)
+  is_active               Boolean        @default(true)
   students                students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_1")
   professionals           professionals? @relation(fields: [teacher_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_2")
 
@@ -436,6 +450,7 @@ model users {
   payments           payments[]
   kit_orders         kit_orders[]
   kit_order_refunds  kit_order_refunds[]
+  support_tickets    support_tickets[]
 }
 
 model vendors {
@@ -717,6 +732,7 @@ enum sessions_status {
   ongoing
   completed
   cancelled
+  absent
 }
 
 enum sessions_session_type {
@@ -873,4 +889,69 @@ model session_participants {
 enum activities_activity_category {
   sports
   non_sports
+}
+
+model support_tickets {
+  id          Int                      @id @default(autoincrement())
+  user_id     Int
+  message     String                   @db.Text
+  status      support_tickets_status   @default(open)
+  resolved_at DateTime?                @db.Timestamp(0)
+  resolved_by Int?
+  created_at  DateTime                 @default(now()) @db.Timestamp(0)
+
+  users users @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([status])
+}
+
+enum support_tickets_status {
+  open
+  resolved
+}
+
+enum legal_content_dashboard_type {
+  trainer
+  teacher
+  marketing_executive
+  vendor
+  student
+}
+
+enum legal_content_content_type {
+  terms_and_conditions
+  privacy_and_policy
+}
+
+model legal_content {
+  id             Int                            @id @default(autoincrement())
+  dashboard_type legal_content_dashboard_type
+  content_type   legal_content_content_type
+  content        String                         @db.LongText
+  updated_by     Int?
+  updated_at     DateTime                       @default(now()) @updatedAt @db.Timestamp(0)
+  created_at     DateTime                       @default(now()) @db.Timestamp(0)
+
+  @@unique([dashboard_type, content_type], map: "uq_legal_dashboard_content")
+}
+
+// ─── Admin Audit Log ──────────────────────────────────────────────────────────
+// Every mutating action performed on the admin panel is recorded here.
+
+model audit_logs {
+  id            Int       @id @default(autoincrement())
+  admin_user_id Int
+  admin_name    String?   @db.VarChar(100)
+  admin_scope   String?   @db.VarChar(20)
+  action        String    @db.VarChar(60)
+  entity_type   String?   @db.VarChar(60)
+  entity_id     Int?
+  details       Json?
+  ip_address    String?   @db.VarChar(45)
+  performed_at  DateTime  @default(now()) @db.Timestamp(0)
+
+  @@index([admin_user_id])
+  @@index([action])
+  @@index([performed_at])
 }

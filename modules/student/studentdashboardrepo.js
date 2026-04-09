@@ -392,6 +392,49 @@ function _withCounts(entry) {
 
 // ── Session detail ─────────────────────────────────────────────────────────
 
+// ── Edit profile ──────────────────────────────────────────────────────────
+
+/**
+ * Single transaction: update users row + whichever type-specific row the
+ * student has (individual_participants | personal_tutors | school_students |
+ * batch_students for group_coaching).
+ *
+ * Only keys present in typeData are written — nothing is nulled out.
+ */
+async function editProfile(userId, studentType, userData, typeData) {
+  return prisma.$transaction(async (tx) => {
+    if (Object.keys(userData).length > 0) {
+      await tx.users.update({ where: { id: userId }, data: userData });
+    }
+
+    if (Object.keys(typeData).length === 0) return;
+
+    // Re-fetch the student id inside the transaction
+    const user = await tx.users.findUnique({
+      where: { id: userId },
+      select: { students: { select: { id: true } } },
+    });
+    const studentId = user?.students?.[0]?.id;
+    if (!studentId) throw new Error("Student record not found");
+
+    if (studentType === "individual_coaching" || studentType === "group_coaching") {
+      const ip = await tx.individual_participants.findFirst({ where: { student_id: studentId }, select: { id: true } });
+      if (!ip) throw new Error("Individual participant record not found");
+      await tx.individual_participants.update({ where: { id: ip.id }, data: typeData });
+
+    } else if (studentType === "personal_tutor") {
+      const pt = await tx.personal_tutors.findFirst({ where: { student_id: studentId }, select: { id: true } });
+      if (!pt) throw new Error("Personal tutor record not found");
+      await tx.personal_tutors.update({ where: { id: pt.id }, data: typeData });
+
+    } else if (studentType === "school_student") {
+      const ss = await tx.school_students.findFirst({ where: { student_id: studentId }, select: { id: true } });
+      if (!ss) throw new Error("School student record not found");
+      await tx.school_students.update({ where: { id: ss.id }, data: typeData });
+    }
+  });
+}
+
 module.exports = {
   getStudentIdByUserId,
   getToggleState,
@@ -406,6 +449,7 @@ module.exports = {
   getSubjectsWithSessions,
   getActivitiesWithSessions,
   submitFeedback,
+  editProfile,
 };
 
 async function submitFeedback(studentId, sessionId, rating, comment) {

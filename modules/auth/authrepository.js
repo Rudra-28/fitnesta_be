@@ -16,6 +16,24 @@ const findUserByMobile = async (mobile) => {
     });
 };
 
+const findUserById = async (id) => {
+    return await prisma.users.findUnique({
+        where: { id },
+        select: {
+            id: true,
+            mobile: true,
+            role: true,
+            subrole: true,
+            email: true,
+            full_name: true,
+            address: true,
+            photo: true,
+            is_verified: true,
+            approval_status: true,
+        },
+    });
+};
+
 const findProfessionalByUserIdAndType = async (userId, professionType) => {
     return await prisma.professionals.findFirst({
         where: { user_id: userId, profession_type: professionType },
@@ -65,6 +83,7 @@ const markUserVerified = async (userId) => {
 
 module.exports = {
     findUserByMobile,
+    findUserById,
     findPendingByMobile,
     findProfessionalByUserIdAndType,
     findStudentByUserIdAndType,

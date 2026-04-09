@@ -46,7 +46,7 @@ const verifyAccessToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Access token missing or malformed" });
+    return res.status(401).json({ success: false, message: "Access token missing or malformed" });
   }
 
   const token = authHeader.split(" ")[1];
@@ -56,13 +56,13 @@ const verifyAccessToken = async (req, res, next) => {
 
     const user = await prisma.users.findUnique({ where: { id: decoded.userId } });
     if (!user) {
-      return res.status(401).json({ message: "User no longer exists" });
+      return res.status(401).json({ success: false, message: "User no longer exists" });
     }
 
     req.user = decoded;
     next();
   } catch (error) {
-    res.status(401).json({ message: "Invalid or expired token" });
+    res.status(401).json({ success: false, message: "Invalid or expired token" });
   }
 };
 

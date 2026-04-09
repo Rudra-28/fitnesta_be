@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const repo = require("./authrepository");
+const prisma = require("../../config/prisma");
 
 exports.loginUser = async (mobile, role) => {
   // 1. Sanitize the mobile number (remove +91 if present)
@@ -35,8 +36,14 @@ exports.loginUser = async (mobile, role) => {
   let student_type   = null;
 
   // 5. Role Specific Verification
-  if (role === "admin" || role === "sub_admin") {
-    // no sub-table to check for admins
+  let adminScope = null;
+  if (role === "admin") {
+    const adminRow = await prisma.admins.findFirst({
+      where:  { user_id: user.id },
+      select: { scope: true },
+    });
+    if (!adminRow) throw new Error("ADMIN_RECORD_NOT_FOUND");
+    adminScope = adminRow.scope;
   } else if (role === "professional") {
     const profs = await repo.findProfessionalsByUserId(user.id);
     if (profs.length === 0) {
@@ -68,11 +75,12 @@ exports.loginUser = async (mobile, role) => {
   // 4. Sign your own JWT for app session management
   const token = jwt.sign(
     {
-      userId: user.id,
-      mobile: user.mobile,
-      role: user.role,
-      subrole: role === "professional" ? subrole : null,
-      student_type: role === "student" ? student_type : null
+      userId:       user.id,
+      mobile:       user.mobile,
+      role:         user.role,
+      scope:        role === "admin" ? adminScope : null,
+      subrole:      role === "professional" ? subrole : null,
+      student_type: role === "student" ? student_type : null,
     },
     process.env.JWT_ACCESS_SECRET,
     { expiresIn: "7d" }
@@ -81,15 +89,16 @@ exports.loginUser = async (mobile, role) => {
   return {
     token,
     user: {
-      id: user.id,
-      name: user.full_name,
-      email: user.email,
-      mobile: user.mobile,
-      role: user.role,
-      subrole: role === "professional" ? subrole : null,
+      id:           user.id,
+      name:         user.full_name,
+      email:        user.email,
+      mobile:       user.mobile,
+      role:         user.role,
+      scope:        role === "admin" ? adminScope : null,
+      subrole:      role === "professional" ? subrole : null,
       referral_code: role === "professional" ? referral_code : null,
       student_type: role === "student" ? student_type : null,
-      isVerified: user.is_verified ? 1 : 0
-    }
+      isVerified:   user.is_verified ? 1 : 0,
+    },
   };
 };

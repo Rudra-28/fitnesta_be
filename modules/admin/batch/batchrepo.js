@@ -109,6 +109,7 @@ async function removeBatchStudent(batchId, studentId) {
 // ── Session generation helpers ──────────────────────────────────────────────
 
 async function getExistingSessionDatesForBatch(batchId, startDate, endDate) {
+  if (batchId === -1) return new Set(); // new batch — no existing sessions possible
   const rows = await prisma.sessions.findMany({
     where: {
       batch_id: batchId,

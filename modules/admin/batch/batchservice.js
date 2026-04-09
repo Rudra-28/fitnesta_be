@@ -139,8 +139,14 @@ async function createBatch({
     throw Object.assign(new Error("school_id is required for school_student batch"), { code: "SOCIETY_OR_SCHOOL_REQUIRED" });
   }
 
+  if (!start_date || !end_date) {
+    throw Object.assign(new Error("start_date and end_date are required"), { code: "DATE_RANGE_INVALID" });
+  }
   const startDt = new Date(start_date);
   const endDt = new Date(end_date);
+  if (isNaN(startDt.getTime()) || isNaN(endDt.getTime())) {
+    throw Object.assign(new Error("start_date and end_date must be valid dates"), { code: "DATE_RANGE_INVALID" });
+  }
   if (endDt < startDt) {
     throw Object.assign(new Error("end_date must be after start_date"), { code: "DATE_RANGE_INVALID" });
   }
@@ -681,7 +687,7 @@ async function computeSettlementPreview(batch) {
  * Settle the current cycle for a batch.
  * Locked until cycle_end_date has passed.
  * Creates a batch_cycle_settlements record, credits the trainer's wallet,
- * then auto-starts the next 30-day cycle.
+ * then advances the cycle start to the day after cycle_end_date.
  */
 async function settleBatchCycle(batchId) {
   const batch = await repo.getBatchById(Number(batchId));

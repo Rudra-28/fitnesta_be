@@ -76,7 +76,7 @@ exports.deleteProduct = async (userId, productId) => {
 
 // ── Wallet ─────────────────────────────────────────────────────────────────
 
-const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
+const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
 
 exports.getWalletSummary = async (userId) => {
     const { professionalId } = await resolveVendor(userId);

@@ -1,7 +1,9 @@
 const express = require("express");
 const router = express.Router();
 const guard = require("./adminmiddleware");
+const { superAdminGuard } = require("./adminmiddleware");
 const controller = require("./admincontroller");
+const sessionController = require("./session/sessioncontroller");
 const upload = require("../../utils/fileupload");
 
 const docUpload = upload.fields([{ name: "activityAgreementPdf", maxCount: 1 }]);
@@ -16,6 +18,15 @@ const handleUpload = (req, res, next) => {
 };
 
 router.use(guard); // every route below requires a valid admin JWT
+
+// ── Audit logs ────────────────────────────────────────────────────────────
+// GET /api/v1/admin/audit-logs?admin_user_id=&action=&from=&to=&limit=&offset=
+router.get("/audit-logs", controller.getAuditLogs);
+
+// ── Sub-admin management (super_admin only) ───────────────────────────────
+router.get("/sub-admins", superAdminGuard, controller.listAdmins);                        // GET    /api/v1/admin/sub-admins
+router.post("/sub-admins", superAdminGuard, controller.createSubAdmin);                   // POST   /api/v1/admin/sub-admins
+router.delete("/sub-admins/:userId", superAdminGuard, controller.removeSubAdmin);         // DELETE /api/v1/admin/sub-admins/:userId
 
 router.get("/pending", controller.listPending);                            // GET  /api/v1/admin/pending?type=trainer
 router.get("/pending/:id", controller.listPending);                        // GET  /api/v1/admin/pending/:id
@@ -81,9 +92,7 @@ router.get("/commissions", controller.listCommissions);                         
 router.patch("/commissions/:id/approve", controller.approveCommission);          // PATCH /api/v1/admin/commissions/3/approve
 router.patch("/commissions/:id/mark-paid", controller.markCommissionPaid);       // PATCH /api/v1/admin/commissions/3/mark-paid
 
-// ── Withdrawal requests ────────────────────────────────────────────────────
-router.get("/withdrawals", controller.listWithdrawalRequests);                               // GET   /api/v1/admin/withdrawals  — lists all professionals with requested status
-router.patch("/withdrawals/:professionalId/approve", controller.approveWithdrawal);          // PATCH /api/v1/admin/withdrawals/5/approve
+
 
 // ── Trainer travelling allowances ─────────────────────────────────────────
 // Filters: ?trainer_professional_id=5  &status=pending|paid
@@ -125,10 +134,21 @@ router.get("/students/:studentId/subjects/:activityId/teachers", controller.getT
 // GET /api/v1/admin/students/:studentId/activities/:activityId/trainers?date=&start_time=&end_time=
 router.get("/students/:studentId/activities", controller.getStudentActivities);
 router.get("/students/:studentId/activities/:activityId/trainers", controller.getTrainersForActivity);
+router.get("/students/:studentId/session-batches", sessionController.getStudentSessionBatches); // GET /api/v1/admin/students/:studentId/session-batches
 
 // ── Batches per society or school ─────────────────────────────────────────
 router.get("/societies/:id/batches", controller.getSocietyBatches);   // GET /api/v1/admin/societies/1/batches
 router.get("/schools/:id/batches", controller.getSchoolBatches);       // GET /api/v1/admin/schools/1/batches
+
+// ── Support tickets ───────────────────────────────────────────────────────
+router.get("/support-tickets", controller.listSupportTickets);                        // GET   /api/v1/admin/support-tickets?status=open|resolved
+router.patch("/support-tickets/:id/resolve", controller.resolveSupportTicket);        // PATCH /api/v1/admin/support-tickets/3/resolve
+
+// ── Legal content (T&C and Privacy Policy per dashboard) ─────────────────
+// dashboard_type: trainer | teacher | marketing_executive | vendor | student
+// content_type:   terms_and_conditions | privacy_and_policy
+router.post("/legal", controller.upsertLegalContent);                      // POST /api/v1/admin/legal
+router.get("/legal", controller.getLegalContent);                          // GET  /api/v1/admin/legal?dashboard_type=&content_type=
 
 // ── Settlement ────────────────────────────────────────────────────────────
 router.get("/settlement/preview", controller.getSettlementPreview);                        // GET  /api/v1/admin/settlement/preview?professional_id=5 (optional)

@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { handlePaymentWebhook, handlePayoutWebhook, verifyPayment, devFinalize, listReceipts, getReceipt, downloadReceiptPDF } = require("./paymentscontroller");
+const { handlePaymentWebhook, verifyPayment, devFinalize, listReceipts, getReceipt, downloadReceiptPDF } = require("./paymentscontroller");
 const studentAuth = require("../student/studentmiddleware");
 
 // POST /api/v1/payments/verify  — called by Flutter after Razorpay SDK closes
@@ -18,8 +18,7 @@ router.get("/receipt/:temp_uuid/pdf", studentAuth, downloadReceiptPDF);
 // POST /api/v1/payments/webhook        — Razorpay payment events (payment.captured)
 router.post("/webhook", handlePaymentWebhook);
 
-// POST /api/v1/payments/payout-webhook — Razorpay X payout events (payout.processed / payout.failed)
-router.post("/payout-webhook", handlePayoutWebhook);
+
 
 // DEV ONLY — bypass Razorpay and finalize any pending registration directly
 // Remove DEV_SKIP_PAYMENT from .env to disable this in production

@@ -1,4 +1,5 @@
 const service = require("./authservice");
+const repo = require("./authrepository");
 
 exports.login = async (req, res) => {
   try {
@@ -51,5 +52,59 @@ exports.login = async (req, res) => {
       message: message,
       error_code: error.message // Useful for frontend debugging
     });
+  }
+};
+
+exports.getMe = async (req, res) => {
+  try {
+    const { userId, role } = req.user; // populated by verifyAccessToken
+    
+    // We can reuse the loginUser logic by fetching the user first, or just hit the DB
+    // To match exact login response, let's fetch from DB directly.
+    const user = await repo.findUserById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    let subrole = null;
+    let referral_code = null;
+    let student_type = null;
+
+    if (role === "professional") {
+      const profs = await repo.findProfessionalsByUserId(user.id);
+      if (profs.length > 0) {
+        subrole = profs[0].profession_type;
+        referral_code = profs[0].referral_code ?? null;
+      }
+    } else if (role === "student") {
+      const students = await repo.findStudentsByUserId(user.id);
+      if (students.length > 0) {
+        student_type = students[0].student_type;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "User fetched successfully",
+      data: {
+        user: {
+          id: user.id,
+          name: user.full_name,
+          email: user.email,
+          mobile: user.mobile,
+          address: user.address ?? null,
+          photo: user.photo ?? null,
+          role: user.role,
+          subrole: role === "professional" ? subrole : null,
+          referral_code: role === "professional" ? referral_code : null,
+          student_type: role === "student" ? student_type : null,
+          isVerified: user.is_verified ? 1 : 0
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error("GET /me Error:", error.message);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };

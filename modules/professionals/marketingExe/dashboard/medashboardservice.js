@@ -24,7 +24,7 @@ exports.getEarnings = async (meUserId) => {
     return await commissionRepo.getMEEarningsSummary(professional.id);
 };
 
-const VALID_WALLET_STATUSES = ["pending", "approved", "requested", "paid"];
+const VALID_WALLET_STATUSES = ["pending", "approved", "paid"];
 
 exports.getWalletSummary = async (meUserId) => {
     const professional = await getMeProfessional(meUserId);

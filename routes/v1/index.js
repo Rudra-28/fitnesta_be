@@ -27,5 +27,6 @@ router.use("/trainer-dashboard", require('../../modules/professionals/trainer/tr
 router.use("/activities", require('../../modules/activities/activitiesroute'));
 router.use("/payments", require('../../modules/payments/paymentsroute'));
 router.use("/notifications", require('../../modules/notifications/notificationsroute'));
+router.use("/support", require('../../modules/support/supportroute'));
 
 module.exports = router;

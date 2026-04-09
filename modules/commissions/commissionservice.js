@@ -392,9 +392,11 @@ exports.previewSettlement = async (professionalId = null) => {
  * Confirm settlement: commit all (or filtered) active assignments.
  * Creates commission records, updates last_settled_at.
  *
- * @param {number[]|null} assignmentIds — specific IDs to settle (null = all active)
+ * @param {number[]|null} assignmentIds   — specific IDs to settle (null = all active)
+ * @param {Object}        capOverrides    — map of { [assignmentId]: overrideCap } for IC/PT assignments
+ *                                          e.g. { 5: 15 } means use 15 as denominator for assignment 5
  */
-exports.confirmSettlement = async (assignmentIds = null) => {
+exports.confirmSettlement = async (assignmentIds = null, capOverrides = {}) => {
     const rules = await repo.getAllRules();
 
     const assignments = await prisma.trainer_assignments.findMany({
@@ -414,7 +416,8 @@ exports.confirmSettlement = async (assignmentIds = null) => {
 
     for (const a of assignments) {
         try {
-            const item = await buildSettlementItem(a, rules);
+            const capOverride = capOverrides[a.id] ?? null;
+            const item = await buildSettlementItem(a, rules, capOverride);
 
             if (item.commission_amount <= 0) {
                 settled.push({ assignment_id: a.id, skipped: true, reason: "zero commission" });
@@ -479,7 +482,7 @@ function resolveStandardCap(assignment_type, activityCategory, rules) {
     return 18; // safe fallback
 }
 
-async function buildSettlementItem(assignment, rules) {
+async function buildSettlementItem(assignment, rules, capOverride = null) {
     const { id, professional_id, professional_type, assignment_type, society_id, school_id, activity_id,
             sessions_allocated, assigned_from, last_settled_at, professionals, societies, schools, activities } = assignment;
 
@@ -489,15 +492,30 @@ async function buildSettlementItem(assignment, rules) {
         : new Date(assigned_from);
     const windowEnd = new Date();
 
-    const sessionsAttended = await prisma.trainer_batches.count({
-        where: {
-            trainer_professional_id: professional_id,
-            ...(society_id  ? { society_id }  : {}),
-            ...(school_id   ? { school_id }   : {}),
-            ...(activity_id ? { activity_id } : {}),
-            batch_date: { gte: windowStart, lte: windowEnd },
-        },
-    });
+    let sessionsAttended;
+
+    if (assignment_type === "individual_coaching" || assignment_type === "personal_tutor") {
+        // IC/PT: count from sessions table (individual sessions per professional)
+        sessionsAttended = await prisma.sessions.count({
+            where: {
+                professional_id,
+                session_type: assignment_type === "individual_coaching" ? "individual_coaching" : "personal_tutor",
+                status:       "completed",
+                scheduled_date: { gte: windowStart, lte: windowEnd },
+            },
+        });
+    } else {
+        // Group coaching: count from trainer_batches
+        sessionsAttended = await prisma.trainer_batches.count({
+            where: {
+                trainer_professional_id: professional_id,
+                ...(society_id  ? { society_id }  : {}),
+                ...(school_id   ? { school_id }   : {}),
+                ...(activity_id ? { activity_id } : {}),
+                batch_date: { gte: windowStart, lte: windowEnd },
+            },
+        });
+    }
 
     // ── 2. Sum effective monthly fees of students in this assignment ──────
     let effectiveFeeBase = 0;
@@ -615,6 +633,11 @@ async function buildSettlementItem(assignment, rules) {
     // ── 3. Calculate commission ───────────────────────────────────────────
     const standardCap = resolveStandardCap(assignment_type, activities?.activity_category ?? null, rules);
 
+    // For IC/PT: allow admin to override the denominator if fewer sessions were completed
+    const isIndividual = assignment_type === "individual_coaching" || assignment_type === "personal_tutor";
+    const capOverrideAvailable = isIndividual && sessionsAttended < standardCap && sessionsAttended > 0;
+    const effectiveCap = (isIndividual && capOverride != null) ? capOverride : standardCap;
+
     let commissionPerSession, commissionAmount;
 
     if (isFlat) {
@@ -622,35 +645,38 @@ async function buildSettlementItem(assignment, rules) {
         commissionAmount     = parseFloat((sessionsAttended * flatAmountPerSession).toFixed(2));
     } else {
         const totalCommissionPool = parseFloat(((effectiveFeeBase * commissionRate) / 100).toFixed(2));
-        commissionPerSession      = standardCap > 0
-            ? parseFloat((totalCommissionPool / standardCap).toFixed(2))
+        commissionPerSession      = effectiveCap > 0
+            ? parseFloat((totalCommissionPool / effectiveCap).toFixed(2))
             : 0;
         commissionAmount          = parseFloat((sessionsAttended * commissionPerSession).toFixed(2));
     }
 
     return {
-        assignment_id:           id,
+        assignment_id:            id,
         professional_id,
-        professional_name:       professionals?.users?.full_name ?? null,
-        professional_mobile:     professionals?.users?.mobile ?? null,
+        professional_name:        professionals?.users?.full_name ?? null,
+        professional_mobile:      professionals?.users?.mobile ?? null,
         professional_type,
         assignment_type,
-        entity_name:             societies?.society_name ?? schools?.school_name ?? null,
-        activity_name:           activities?.name ?? null,
-        activity_category:       activities?.activity_category ?? null,
-        assigned_from:           assigned_from,
-        last_settled_at:         last_settled_at,
-        window_start:            windowStart,
-        window_end:              windowEnd,
-        standard_sessions_cap:   standardCap,
+        entity_name:              societies?.society_name ?? schools?.school_name ?? null,
+        activity_name:            activities?.name ?? null,
+        activity_category:        activities?.activity_category ?? null,
+        assigned_from,
+        last_settled_at,
+        window_start:             windowStart,
+        window_end:               windowEnd,
+        standard_sessions_cap:    standardCap,
+        effective_sessions_cap:   effectiveCap,
+        cap_override_available:   capOverrideAvailable,
+        cap_override_applied:     isIndividual && capOverride != null,
         sessions_allocated,
-        sessions_attended:       sessionsAttended,
-        effective_fee_base:      parseFloat(effectiveFeeBase.toFixed(2)),
-        commission_rate:         isFlat ? 0 : commissionRate,
-        is_flat_rate:            isFlat,
-        flat_amount_per_session: isFlat ? flatAmountPerSession : null,
-        commission_per_session:  commissionPerSession,
-        commission_amount:       commissionAmount,
+        sessions_attended:        sessionsAttended,
+        effective_fee_base:       parseFloat(effectiveFeeBase.toFixed(2)),
+        commission_rate:          isFlat ? 0 : commissionRate,
+        is_flat_rate:             isFlat,
+        flat_amount_per_session:  isFlat ? flatAmountPerSession : null,
+        commission_per_session:   commissionPerSession,
+        commission_amount:        commissionAmount,
     };
 }
 
@@ -702,8 +728,13 @@ exports.upsertTravellingAllowance = async (trainerProfessionalId, date) => {
         const dateOnly = new Date(date);
         dateOnly.setHours(0, 0, 0, 0);
 
-        const batchCount = await prisma.trainer_batches.count({
-            where: { trainer_professional_id: trainerProfessionalId, batch_date: dateOnly },
+        const batchCount = await prisma.sessions.count({
+            where: {
+                professional_id: trainerProfessionalId,
+                scheduled_date:  dateOnly,
+                status:          "completed",
+                batch_id:        { not: null }, // Only count batch sessions (group_coaching/school_student)
+            },
         });
         if (batchCount === 0) return;
 

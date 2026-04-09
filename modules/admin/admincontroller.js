@@ -1,6 +1,7 @@
 const service = require("./adminservice");
 const { sendNotification } = require("../../utils/fcm");
 const prisma = require("../../config/prisma");
+const auditLog = require("../../utils/auditLog");
 
 exports.listFeeStructures = async (req, res) => {
     try {
@@ -66,6 +67,12 @@ exports.approve = async (req, res) => {
             req.admin.userId,
             req.body?.note
         );
+
+        auditLog(req, "approve_registration", {
+            entity_type: "pending_registration",
+            entity_id:   Number(req.params.id),
+            details:     { note: req.body?.note ?? null },
+        });
 
         // Notify the registrant — look up their user_id from the pending record
         try {
@@ -185,6 +192,13 @@ exports.adminRegisterSociety = async (req, res) => {
             data.activityAgreementPdf = req.files.activityAgreementPdf[0].path;
         }
         const result = await service.adminRegisterSociety(data, req.admin.userId);
+
+        auditLog(req, "register_society", {
+            entity_type: "society",
+            entity_id:   result.society_id ?? null,
+            details:     { society_name: data.societyName ?? data.society_name ?? null },
+        });
+
         res.status(201).json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "ME_NOT_FOUND" ? 404 : 500;
@@ -211,6 +225,13 @@ exports.adminRegisterSchool = async (req, res) => {
             data.activityAgreementPdf = req.files.activityAgreementPdf[0].path;
         }
         const result = await service.adminRegisterSchool(data, req.admin.userId);
+
+        auditLog(req, "register_school", {
+            entity_type: "school",
+            entity_id:   result.school_id ?? null,
+            details:     { school_name: data.schoolName ?? data.school_name ?? null },
+        });
+
         res.status(201).json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "ME_NOT_FOUND" ? 404 : 500;
@@ -220,7 +241,19 @@ exports.adminRegisterSchool = async (req, res) => {
 
 exports.upsertFeeStructure = async (req, res) => {
     try {
-        const data = await service.upsertFeeStructure(req.body, req.admin.userId, req.params.id ?? null);
+        const feeId = req.params.id ?? null;
+        const data = await service.upsertFeeStructure(req.body, req.admin.userId, feeId);
+
+        auditLog(req, "upsert_fee_structure", {
+            entity_type: "fee_structure",
+            entity_id:   data.id ?? (feeId ? Number(feeId) : null),
+            details:     {
+                action:        feeId ? "update" : "create",
+                coaching_type: req.body.coaching_type ?? null,
+                total_fee:     req.body.total_fee ?? null,
+            },
+        });
+
         res.json({ success: true, data });
     } catch (err) {
         const status = err.message === "INVALID_COACHING_TYPE"         ? 400
@@ -271,6 +304,12 @@ exports.assignTeacher = async (req, res) => {
             }
         } catch (_) {}
 
+        auditLog(req, "assign_teacher", {
+            entity_type: "personal_tutor",
+            entity_id:   Number(req.body.personal_tutor_id),
+            details:     { teacher_professional_id: Number(req.body.teacher_professional_id) },
+        });
+
         res.json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "PERSONAL_TUTOR_NOT_FOUND" ? 404
@@ -311,6 +350,12 @@ exports.assignTrainer = async (req, res) => {
             }
         } catch (_) {}
 
+        auditLog(req, "assign_trainer", {
+            entity_type: "individual_participant",
+            entity_id:   Number(req.body.individual_participant_id),
+            details:     { trainer_professional_id: Number(req.body.trainer_professional_id) },
+        });
+
         res.json({ success: true, ...result });
     } catch (err) {
         const status = err.message === "INDIVIDUAL_PARTICIPANT_NOT_FOUND" ? 404
@@ -338,7 +383,22 @@ exports.confirmSettlement = async (req, res) => {
         const assignmentIds = Array.isArray(req.body.assignment_ids)
             ? req.body.assignment_ids.map(Number)
             : null;
-        const data = await service.confirmSettlement(assignmentIds);
+        // cap_overrides: optional map { "assignmentId": overrideCap }
+        // e.g. { "5": 15 } — admin confirmed to use 15 sessions instead of standard 20
+        const rawOverrides  = req.body.cap_overrides ?? {};
+        const capOverrides  = Object.fromEntries(
+            Object.entries(rawOverrides).map(([k, v]) => [Number(k), Number(v)])
+        );
+        const data = await service.confirmSettlement(assignmentIds, capOverrides);
+
+        auditLog(req, "confirm_settlement", {
+            entity_type: "settlement",
+            details:     {
+                assignment_ids:  assignmentIds ?? "all",
+                settled_count:   data.length,
+            },
+        });
+
         res.json({ success: true, count: data.length, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -373,6 +433,13 @@ exports.updateAssignmentSessionsCap = async (req, res) => {
         const { sessions_allocated } = req.body;
         if (!sessions_allocated) return res.status(400).json({ success: false, error: "sessions_allocated is required" });
         const data = await service.updateAssignmentSessionsCap(req.params.id, Number(sessions_allocated));
+
+        auditLog(req, "update_sessions_cap", {
+            entity_type: "trainer_assignment",
+            entity_id:   Number(req.params.id),
+            details:     { sessions_allocated: Number(sessions_allocated) },
+        });
+
         res.json({ success: true, data });
     } catch (err) {
         const status = err.message === "INVALID_SESSIONS_ALLOCATED" ? 400 : 500;
@@ -383,6 +450,12 @@ exports.updateAssignmentSessionsCap = async (req, res) => {
 exports.deactivateAssignment = async (req, res) => {
     try {
         const data = await service.deactivateAssignment(req.params.id);
+
+        auditLog(req, "deactivate_assignment", {
+            entity_type: "trainer_assignment",
+            entity_id:   Number(req.params.id),
+        });
+
         res.json({ success: true, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -408,6 +481,12 @@ exports.updateCommissionRule = async (req, res) => {
             return res.status(400).json({ success: false, error: "'value' is required in the request body" });
         }
         const updated = await service.updateCommissionRule(ruleKey, Number(value));
+
+        auditLog(req, "update_commission_rule", {
+            entity_type: "commission_rule",
+            details:     { rule_key: ruleKey, new_value: Number(value) },
+        });
+
         res.json({ success: true, data: updated });
     } catch (err) {
         const status = err.message === "RULE_NOT_FOUND" ? 404 : 500;
@@ -443,6 +522,11 @@ exports.approveCommission = async (req, res) => {
             }
         } catch (_) {}
 
+        auditLog(req, "approve_commission", {
+            entity_type: "commission",
+            entity_id:   Number(req.params.id),
+        });
+
         res.json({ success: true, data: result });
     } catch (err) {
         const status = err.message === "COMMISSION_NOT_FOUND"      ? 404
@@ -468,6 +552,11 @@ exports.markCommissionPaid = async (req, res) => {
             }
         } catch (_) {}
 
+        auditLog(req, "mark_commission_paid", {
+            entity_type: "commission",
+            entity_id:   Number(req.params.id),
+        });
+
         res.json({ success: true, data: result });
     } catch (err) {
         const status = err.message === "COMMISSION_NOT_FOUND"    ? 404
@@ -478,26 +567,7 @@ exports.markCommissionPaid = async (req, res) => {
     }
 };
 
-// ── Withdrawal requests ────────────────────────────────────────────────────
 
-exports.listWithdrawalRequests = async (req, res) => {
-    try {
-        const data = await service.listWithdrawalRequests();
-        res.json({ success: true, count: data.length, data });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-};
-
-exports.approveWithdrawal = async (req, res) => {
-    try {
-        const result = await service.approveWithdrawal(req.params.professionalId);
-        res.json({ success: true, message: "Withdrawal approved. Professional can now withdraw.", data: result });
-    } catch (err) {
-        const status = err.statusCode || 500;
-        res.status(status).json({ success: false, error: err.message });
-    }
-};
 
 // ── Travelling allowances ──────────────────────────────────────────────────
 
@@ -514,6 +584,12 @@ exports.listTravellingAllowances = async (req, res) => {
 exports.markTravellingAllowancePaid = async (req, res) => {
     try {
         const result = await service.markTravellingAllowancePaid(req.params.id);
+
+        auditLog(req, "mark_travelling_allowance_paid", {
+            entity_type: "travelling_allowance",
+            entity_id:   Number(req.params.id),
+        });
+
         res.json({ success: true, data: result });
     } catch (err) {
         const status = err.message === "TA_NOT_FOUND"  ? 404
@@ -568,6 +644,12 @@ exports.listPayOuts = async (req, res) => {
 exports.markRefundProcessed = async (req, res) => {
     try {
         await service.markRefundProcessed(req.params.id);
+
+        auditLog(req, "mark_refund_processed", {
+            entity_type: "refund",
+            entity_id:   Number(req.params.id),
+        });
+
         res.json({ success: true, message: "Refund marked as processed." });
     } catch (err) {
         const status = err.status || 500;
@@ -601,6 +683,17 @@ exports.listSessions = async (req, res) => {
 exports.createSession = async (req, res) => {
     try {
         const data = await service.createSession(req.body);
+
+        auditLog(req, "create_session", {
+            entity_type: "session",
+            entity_id:   data.id ?? null,
+            details:     {
+                session_type:    req.body.session_type ?? null,
+                professional_id: req.body.professional_id ?? null,
+                date:            req.body.date ?? null,
+            },
+        });
+
         res.status(201).json({ success: true, data });
     } catch (err) {
         const status = err.message === "MISSING_REQUIRED_FIELDS" ? 400 : 500;
@@ -747,12 +840,133 @@ exports.reject = async (req, res) => {
             }
         } catch (_) {}
 
+        auditLog(req, "reject_registration", {
+            entity_type: "pending_registration",
+            entity_id:   Number(req.params.id),
+            details:     { note: req.body?.note ?? null },
+        });
+
         res.json({ success: true, ...result });
     } catch (err) {
         console.error("Reject error:", err.message);
         const status = err.message === "PENDING_NOT_FOUND" ? 404
                      : err.message === "ALREADY_REVIEWED"  ? 409
                      : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Legal content ──────────────────────────────────────────────────────────
+
+exports.upsertLegalContent = async (req, res) => {
+    try {
+        const { dashboard_type, content_type, content } = req.body;
+        const data = await service.upsertLegalContent({ dashboard_type, content_type, content }, req.admin.userId);
+
+        auditLog(req, "upsert_legal_content", {
+            entity_type: "legal_content",
+            entity_id:   data.id ?? null,
+            details:     { dashboard_type, content_type },
+        });
+
+        res.status(200).json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getLegalContent = async (req, res) => {
+    try {
+        const { dashboard_type, content_type } = req.query;
+        const data = await service.getLegalContent({ dashboard_type, content_type });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── Audit logs ────────────────────────────────────────────────────────────
+
+exports.getAuditLogs = async (req, res) => {
+    try {
+        const { admin_user_id, action, from, to, limit, offset } = req.query;
+        const data = await service.getAuditLogs({ adminUserId: admin_user_id, action, from, to, limit, offset });
+        res.json({ success: true, total: data.total, count: data.rows.length, data: data.rows });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// ── Sub-admin management ───────────────────────────────────────────────────
+
+exports.listAdmins = async (req, res) => {
+    try {
+        const data = await service.listAdmins();
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.createSubAdmin = async (req, res) => {
+    try {
+        const { full_name, mobile, email } = req.body;
+        const data = await service.createSubAdmin({ full_name, mobile, email });
+
+        auditLog(req, "create_sub_admin", {
+            entity_type: "user",
+            entity_id:   data.user_id,
+            details:     { full_name, mobile },
+        });
+
+        res.status(201).json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.removeSubAdmin = async (req, res) => {
+    try {
+        await service.removeSubAdmin(req.params.userId);
+
+        auditLog(req, "remove_sub_admin", {
+            entity_type: "user",
+            entity_id:   Number(req.params.userId),
+        });
+
+        res.json({ success: true, message: "Sub-admin removed successfully." });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Support tickets ────────────────────────────────────────────────────────
+
+exports.listSupportTickets = async (req, res) => {
+    try {
+        const { status } = req.query; // open | resolved (optional)
+        const data = await service.listSupportTickets({ status });
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.resolveSupportTicket = async (req, res) => {
+    try {
+        const data = await service.resolveSupportTicket(req.params.id, req.admin.userId);
+
+        auditLog(req, "resolve_support_ticket", {
+            entity_type: "support_ticket",
+            entity_id:   Number(req.params.id),
+        });
+
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
         res.status(status).json({ success: false, error: err.message });
     }
 };

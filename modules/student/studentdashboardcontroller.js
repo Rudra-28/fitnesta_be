@@ -66,6 +66,11 @@ module.exports = {
     res.json({ success: true, count: data.length, data });
   }),
 
+  editProfile: wrap(async (req, res) => {
+    const data = await service.editProfile(req.user.userId, req.body);
+    res.json(data);
+  }),
+
   initiateSubjectAddon: wrap(async (req, res) => {
     const { activity_id, term_months } = req.body;
     if (!activity_id || !term_months) {

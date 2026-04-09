@@ -591,8 +591,8 @@ exports.getSettlementPreview = async (professionalId) => {
     return await commissionService.previewSettlement(professionalId ?? null);
 };
 
-exports.confirmSettlement = async (assignmentIds) => {
-    return await commissionService.confirmSettlement(assignmentIds ?? null);
+exports.confirmSettlement = async (assignmentIds, capOverrides = {}) => {
+    return await commissionService.confirmSettlement(assignmentIds ?? null, capOverrides);
 };
 
 exports.listTrainerAssignments = async ({ professionalId, isActive } = {}) => {
@@ -1102,4 +1102,154 @@ exports.getSchoolBatches = async (id) => {
             : null,
         student_count: r._count?.batch_students ?? 0,
     }));
+};
+
+
+// ── Legal content ──────────────────────────────────────────────────────────
+
+const VALID_DASHBOARD_TYPES = ["trainer", "teacher", "marketing_executive", "vendor", "student"];
+const VALID_CONTENT_TYPES   = ["terms_and_conditions", "privacy_and_policy"];
+
+exports.upsertLegalContent = async ({ dashboard_type, content_type, content }, adminUserId) => {
+    if (!dashboard_type || !VALID_DASHBOARD_TYPES.includes(dashboard_type)) {
+        throw Object.assign(new Error("INVALID_DASHBOARD_TYPE"), { status: 400 });
+    }
+    if (!content_type || !VALID_CONTENT_TYPES.includes(content_type)) {
+        throw Object.assign(new Error("INVALID_CONTENT_TYPE"), { status: 400 });
+    }
+    if (!content || typeof content !== "string" || !content.trim()) {
+        throw Object.assign(new Error("CONTENT_REQUIRED"), { status: 400 });
+    }
+
+    return await prisma.legal_content.upsert({
+        where: { dashboard_type_content_type: { dashboard_type, content_type } },
+        update: { content: content.trim(), updated_by: adminUserId ?? null },
+        create: { dashboard_type, content_type, content: content.trim(), updated_by: adminUserId ?? null },
+    });
+};
+
+exports.getLegalContent = async ({ dashboard_type, content_type }) => {
+    const where = {};
+    if (dashboard_type) where.dashboard_type = dashboard_type;
+    if (content_type)   where.content_type   = content_type;
+    return await prisma.legal_content.findMany({ where, orderBy: [{ dashboard_type: "asc" }, { content_type: "asc" }] });
+};
+
+// ── Support tickets ────────────────────────────────────────────────────────
+
+exports.listSupportTickets = async ({ status } = {}) => {
+    const tickets = await prisma.support_tickets.findMany({
+        where: status ? { status } : undefined,
+        orderBy: { created_at: "desc" },
+        include: {
+            users: {
+                select: {
+                    id: true,
+                    full_name: true,
+                    mobile: true,
+                    email: true,
+                    role: true,
+                    subrole: true,
+                    photo: true,
+                    students: {
+                        select: { id: true, student_type: true },
+                        take: 1,
+                    },
+                    professionals: {
+                        select: { id: true, profession_type: true, place: true },
+                        take: 1,
+                    },
+                },
+            },
+        },
+    });
+
+    return tickets.map((t) => {
+        const u = t.users;
+        const student = u.students?.[0] ?? null;
+        const professional = u.professionals?.[0] ?? null;
+
+        return {
+            id: t.id,
+            message: t.message,
+            status: t.status,
+            resolved_at: t.resolved_at,
+            created_at: t.created_at,
+            user: {
+                id: u.id,
+                full_name: u.full_name,
+                mobile: u.mobile,
+                email: u.email,
+                photo: u.photo,
+                role: u.role,
+                subrole: u.subrole,
+                // For students: student_type (personal_tutor | individual_coaching | school_student | …)
+                student_type: student?.student_type ?? null,
+                student_id: student?.id ?? null,
+                // For professionals: profession_type (trainer | teacher | marketing_executive | vendor)
+                profession_type: professional?.profession_type ?? null,
+                professional_id: professional?.id ?? null,
+                place: professional?.place ?? null,
+            },
+        };
+    });
+};
+
+exports.resolveSupportTicket = async (ticketId, adminUserId) => {
+    const ticket = await prisma.support_tickets.findUnique({ where: { id: Number(ticketId) } });
+    if (!ticket) throw Object.assign(new Error("TICKET_NOT_FOUND"), { status: 404 });
+    if (ticket.status === "resolved") throw Object.assign(new Error("ALREADY_RESOLVED"), { status: 409 });
+
+    return await prisma.support_tickets.update({
+        where: { id: Number(ticketId) },
+        data: { status: "resolved", resolved_at: new Date(), resolved_by: adminUserId ?? null },
+        select: { id: true, status: true, resolved_at: true },
+    });
+};
+
+// ── Audit logs ────────────────────────────────────────────────────────────
+
+exports.getAuditLogs = async (filters) => {
+    return adminRepo.getAuditLogs(filters);
+};
+
+// ── Sub-admin management (super_admin only) ────────────────────────────────
+
+exports.listAdmins = async () => {
+    const rows = await adminRepo.listAdmins();
+    return rows.map((a) => ({
+        admin_id:   a.id,
+        user_id:    a.users.id,
+        full_name:  a.users.full_name,
+        mobile:     a.users.mobile,
+        email:      a.users.email,
+        scope:      a.scope,
+        created_at: a.created_at,
+    }));
+};
+
+exports.createSubAdmin = async ({ full_name, mobile, email }) => {
+    if (!full_name || !mobile) throw Object.assign(new Error("MISSING_REQUIRED_FIELDS"), { status: 400 });
+
+    const existing = await adminRepo.findUserByMobile(mobile);
+    if (existing) throw Object.assign(new Error("MOBILE_ALREADY_EXISTS"), { status: 409 });
+
+    const { user, adminRow } = await adminRepo.createSubAdmin({ full_name, mobile, email });
+    return {
+        admin_id:   adminRow.id,
+        user_id:    user.id,
+        full_name:  user.full_name,
+        mobile:     user.mobile,
+        email:      user.email,
+        scope:      adminRow.scope,
+        created_at: adminRow.created_at,
+    };
+};
+
+exports.removeSubAdmin = async (userId) => {
+    const adminRow = await adminRepo.findAdminByUserId(userId);
+    if (!adminRow) throw Object.assign(new Error("ADMIN_NOT_FOUND"), { status: 404 });
+    if (adminRow.scope === "super_admin") throw Object.assign(new Error("CANNOT_REMOVE_SUPER_ADMIN"), { status: 403 });
+
+    await adminRepo.removeSubAdmin(userId);
 };
