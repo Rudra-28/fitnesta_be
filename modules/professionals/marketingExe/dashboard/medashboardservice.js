@@ -168,3 +168,31 @@ exports.getStudentsBySociety = async (societyId, meUserId) => {
     }
     return data;
 };
+
+// ── Visiting Form ──────────────────────────────────────────────────────────────
+
+exports.getMeReferralCodes = async () => {
+    return await repo.getAllMeReferralCodes();
+};
+
+exports.submitVisitingForm = async (data, meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const formId = await repo.insertVisitingForm(data, professional.id);
+    return { success: true, formId, message: "Visiting form submitted successfully." };
+};
+
+exports.getMyVisitingForms = async (meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    return await repo.getVisitingFormsByMe(professional.id);
+};
+
+exports.getVisitingFormById = async (formId, meUserId) => {
+    const professional = await getMeProfessional(meUserId);
+    const form = await repo.getVisitingFormById(formId, professional.id);
+    if (!form) {
+        const err = new Error("Visiting form not found.");
+        err.statusCode = 404;
+        throw err;
+    }
+    return form;
+};

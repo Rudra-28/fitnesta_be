@@ -155,4 +155,21 @@ router.get("/settlement/preview", controller.getSettlementPreview);             
 router.post("/settlement/confirm", controller.confirmSettlement);                          // POST /api/v1/admin/settlement/confirm  { assignment_ids: [1,2,3] } (optional — omit to settle all)
 router.get("/settlement/unsettled-count", controller.getUnsettledCount);                   // GET  /api/v1/admin/settlement/unsettled-count  (dashboard badge)
 
+// ── Visiting Forms ────────────────────────────────────────────────────────────
+// GET /api/v1/admin/visiting-forms?meId=&placeType=society|school|organisation&permissionStatus=granted|not_granted|follow_up&from=&to=&page=&limit=
+router.get("/visiting-forms", controller.listVisitingForms);
+router.get("/visiting-forms/:id", controller.getVisitingFormByIdAdmin);
+
+// ── User management (super_admin only) ───────────────────────────────────
+// GET    /api/v1/admin/users?role=&subrole=&search=&limit=&offset=
+// GET    /api/v1/admin/users/:userId
+// PATCH  /api/v1/admin/users/:userId          { full_name, email, address, photo, mobile }
+// PATCH  /api/v1/admin/users/:userId/suspend  { note? }
+// PATCH  /api/v1/admin/users/:userId/unsuspend
+router.get("/users",                        superAdminGuard, controller.listUsers);
+router.get("/users/:userId",                superAdminGuard, controller.getUser);
+router.patch("/users/:userId",              superAdminGuard, controller.editUser);
+router.patch("/users/:userId/suspend",      superAdminGuard, controller.suspendUser);
+router.patch("/users/:userId/unsuspend",    superAdminGuard, controller.unsuspendUser);
+
 module.exports = router;

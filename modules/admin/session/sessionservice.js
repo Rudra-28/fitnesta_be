@@ -456,6 +456,98 @@ async function getStudentSessionBatches(studentId) {
   return repo.getStudentSessionBatches(studentId);
 }
 
+/**
+ * Preview session generation: given the same inputs as generateIndividualSessions,
+ * return a month-by-month breakdown of how many sessions would be created —
+ * without writing anything to the database.
+ *
+ * Response: { term_months, session_cap, total_sessions, months: [{ month_label, month_number, start, end, sessions_count }] }
+ */
+async function previewSessionGeneration({
+  session_type,
+  student_id,
+  start_date,
+  days_of_week,
+}) {
+  if (!["personal_tutor", "individual_coaching"].includes(session_type)) {
+    throw Object.assign(new Error("session_type must be personal_tutor or individual_coaching"), { code: "INVALID_SESSION_TYPE" });
+  }
+  if (!student_id || !start_date || !days_of_week?.length) {
+    throw Object.assign(new Error("student_id, start_date, days_of_week are required"), { code: "MISSING_FIELDS" });
+  }
+
+  // Load term_months from the student record
+  let term_months;
+  if (session_type === "personal_tutor") {
+    const pt = await adminRepo.findPersonalTutorByStudentId(student_id);
+    if (!pt) throw Object.assign(new Error("Student personal tutor record not found"), { code: "STUDENT_NOT_FOUND" });
+    const full = await prisma.personal_tutors.findUnique({ where: { id: pt.id }, select: { term_months: true } });
+    term_months = full?.term_months ?? 1;
+  } else {
+    const ip = await adminRepo.findIndividualParticipantByStudentId(student_id);
+    if (!ip) throw Object.assign(new Error("Student individual participant record not found"), { code: "STUDENT_NOT_FOUND" });
+    const full = await prisma.individual_participants.findUnique({ where: { id: ip.id }, select: { term_months: true } });
+    term_months = full?.term_months ?? 1;
+  }
+
+  // Load session cap from commission_rules
+  const capRuleKey = session_type === "personal_tutor"
+    ? "personal_tutor_sessions_cap"
+    : "individual_coaching_sessions_cap";
+  const capRule = await prisma.commission_rules.findUnique({ where: { rule_key: capRuleKey } });
+  const session_cap = capRule ? parseInt(capRule.value) : 18;
+
+  const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const startDt   = new Date(start_date);
+  startDt.setHours(0, 0, 0, 0);
+
+  // Build per-month breakdown
+  const months = [];
+  let totalSessions = 0;
+  let remaining = session_cap;
+
+  for (let m = 0; m < term_months; m++) {
+    const monthStart = new Date(startDt);
+    monthStart.setMonth(monthStart.getMonth() + m);
+
+    const monthEnd = new Date(monthStart);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
+    // Last day of that month window (exclusive)
+    const windowEnd = m === term_months - 1 ? monthEnd : monthEnd;
+
+    let count = 0;
+    const cur = new Date(monthStart);
+    while (cur < windowEnd && remaining > 0) {
+      if (days_of_week.includes(DAY_NAMES[cur.getDay()])) {
+        count++;
+        remaining--;
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+
+    const label = monthStart.toLocaleString("en-IN", { month: "long", year: "numeric" });
+    months.push({
+      month_number:   m + 1,
+      month_label:    label,
+      start:          monthStart.toISOString().slice(0, 10),
+      end:            new Date(monthEnd.getTime() - 86400000).toISOString().slice(0, 10),
+      sessions_count: count,
+    });
+    totalSessions += count;
+    if (remaining <= 0) break;
+  }
+
+  return {
+    session_type,
+    term_months,
+    session_cap,
+    total_sessions: totalSessions,
+    membership_start: startDt.toISOString().slice(0, 10),
+    membership_end:   (() => { const e = new Date(startDt); e.setMonth(e.getMonth() + term_months); return e.toISOString().slice(0, 10); })(),
+    months,
+  };
+}
+
 async function getSessionFeedback(sessionId) {
   return repo.getSessionFeedback(sessionId);
 }
@@ -471,4 +563,5 @@ module.exports = {
   rescheduleSession,
   getStudentSessionBatches,
   getSessionFeedback,
+  previewSessionGeneration,
 };

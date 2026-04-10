@@ -1,5 +1,8 @@
 const service = require("./medashboardservice");
-const { validateMeSociety, validateMeSchool } = require("./medashboardvalidate");
+const { validateMeSociety, validateMeSchool, validateVisitingForm } = require("./medashboardvalidate");
+const cloudinary = require("../../../../config/cloudinary");
+const prisma = require("../../../../config/prisma");
+const fs = require("fs");
 
 const handleErr = (err, res) => {
     res.status(err.statusCode || 500).json({
@@ -72,8 +75,11 @@ exports.registerSociety = async (req, res) => {
         console.log(`[ME] registerSociety called — userId: ${req.me.userId}`);
         const data = { ...req.body };
 
+        let localFilePath = null;
         if (req.files?.activityAgreementPdf?.[0]) {
-            data.activityAgreementPdf = req.files.activityAgreementPdf[0].path;
+            localFilePath = req.files.activityAgreementPdf[0].path;
+            // Temporarily set to null; will be updated in background
+            data.activityAgreementPdf = null;
         }
 
         data.playgroundAvailable       = data.playgroundAvailable       === 'true' || data.playgroundAvailable       === true;
@@ -87,7 +93,32 @@ exports.registerSociety = async (req, res) => {
 
         const result = await service.registerSociety(data, req.me.userId);
         console.log(`[ME] Society registered — userId: ${req.me.userId}, society: ${data.societyName || data.name}`);
-        return res.status(201).json(result);
+        
+        // Respond to user right away to prevent timeout
+        res.status(201).json(result);
+
+        // Upload to Cloudinary in background
+        if (localFilePath) {
+            (async () => {
+                try {
+                    console.log(`[ME] Uploading society document to Cloudinary in background for societyId: ${result.societyId}`);
+                    const uploadResult = await cloudinary.uploader.upload(localFilePath, {
+                        folder: "fitnesta/documents",
+                        resource_type: "auto",
+                    });
+                    await prisma.societies.update({
+                        where: { id: result.societyId },
+                        data: { activity_agreement_pdf: uploadResult.secure_url }
+                    });
+                    console.log(`[ME] Cloudinary upload successful for societyId: ${result.societyId}`);
+                    if (fs.existsSync(localFilePath)) {
+                        fs.unlinkSync(localFilePath);
+                    }
+                } catch (bgErr) {
+                    console.error(`[ME] Background upload error for societyId: ${result.societyId}:`, bgErr.message);
+                }
+            })();
+        }
 
     } catch (err) {
         console.error(`[ME] registerSociety error — userId: ${req.me.userId}: ${err.message}`);
@@ -124,8 +155,11 @@ exports.registerSchool = async (req, res) => {
         console.log(`[ME] registerSchool called — userId: ${req.me.userId}`);
         const data = { ...req.body };
 
+        let localFilePath = null;
         if (req.files?.activityAgreementPdf?.[0]) {
-            data.activityAgreementPdf = req.files.activityAgreementPdf[0].path;
+            localFilePath = req.files.activityAgreementPdf[0].path;
+            // Temporarily set to null; will be updated in background
+            data.activityAgreementPdf = null;
         }
 
         data.agreementSignedByAuthority = data.agreementSignedByAuthority === 'true' || data.agreementSignedByAuthority === true;
@@ -138,7 +172,30 @@ exports.registerSchool = async (req, res) => {
 
         const result = await service.registerSchool(data, req.me.userId);
         console.log(`[ME] School registered — userId: ${req.me.userId}, school: ${data.schoolName || data.name}`);
-        return res.status(201).json(result);
+        res.status(201).json(result);
+
+        // Upload to Cloudinary in background
+        if (localFilePath) {
+            (async () => {
+                try {
+                    console.log(`[ME] Uploading school document to Cloudinary in background for schoolId: ${result.schoolId}`);
+                    const uploadResult = await cloudinary.uploader.upload(localFilePath, {
+                        folder: "fitnesta/documents",
+                        resource_type: "auto",
+                    });
+                    await prisma.schools.update({
+                        where: { id: result.schoolId },
+                        data: { activity_agreement_pdf: uploadResult.secure_url }
+                    });
+                    console.log(`[ME] Cloudinary upload successful for schoolId: ${result.schoolId}`);
+                    if (fs.existsSync(localFilePath)) {
+                        fs.unlinkSync(localFilePath);
+                    }
+                } catch (bgErr) {
+                    console.error(`[ME] Background upload error for schoolId: ${result.schoolId}:`, bgErr.message);
+                }
+            })();
+        }
 
     } catch (err) {
         console.error(`[ME] registerSchool error — userId: ${req.me.userId}: ${err.message}`);
@@ -232,6 +289,59 @@ exports.getSchoolById = async (req, res) => {
         res.json({ success: true, data });
     } catch (err) {
         console.error(`[ME] getSchoolById error — userId: ${req.me.userId}, schoolId: ${req.params.id}: ${err.message}`);
+        handleErr(err, res);
+    }
+};
+
+// ── Visiting Form ─────────────────────────────────────────────────────────────
+
+exports.getMeReferralCodes = async (req, res) => {
+    try {
+        const data = await service.getMeReferralCodes();
+        res.json({ success: true, data });
+    } catch (err) {
+        handleErr(err, res);
+    }
+};
+
+exports.submitVisitingForm = async (req, res) => {
+    try {
+        console.log(`[ME] submitVisitingForm — userId: ${req.me.userId}`);
+        const data = { ...req.body };
+
+        const errors = validateVisitingForm(data);
+        if (errors.length > 0) {
+            console.warn(`[ME] submitVisitingForm validation failed — userId: ${req.me.userId}:`, errors);
+            return res.status(400).json({ success: false, errors });
+        }
+
+        const result = await service.submitVisitingForm(data, req.me.userId);
+        console.log(`[ME] Visiting form submitted — userId: ${req.me.userId}, formId: ${result.formId}`);
+        res.status(201).json(result);
+    } catch (err) {
+        console.error(`[ME] submitVisitingForm error — userId: ${req.me.userId}: ${err.message}`);
+        handleErr(err, res);
+    }
+};
+
+exports.getMyVisitingForms = async (req, res) => {
+    try {
+        console.log(`[ME] getMyVisitingForms — userId: ${req.me.userId}`);
+        const data = await service.getMyVisitingForms(req.me.userId);
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        console.error(`[ME] getMyVisitingForms error — userId: ${req.me.userId}: ${err.message}`);
+        handleErr(err, res);
+    }
+};
+
+exports.getVisitingFormById = async (req, res) => {
+    try {
+        console.log(`[ME] getVisitingFormById — userId: ${req.me.userId}, formId: ${req.params.id}`);
+        const data = await service.getVisitingFormById(Number(req.params.id), req.me.userId);
+        res.json({ success: true, data });
+    } catch (err) {
+        console.error(`[ME] getVisitingFormById error — userId: ${req.me.userId}, formId: ${req.params.id}: ${err.message}`);
         handleErr(err, res);
     }
 };

@@ -517,3 +517,61 @@ exports.getSchoolsWithEnrollmentByMe = async (meProfessionalId) => {
 
     return { total_students, schools, societies };
 };
+
+// ── Visiting Form ──────────────────────────────────────────────────────────────
+
+exports.getAllMeReferralCodes = async () => {
+    const rows = await prisma.professionals.findMany({
+        where: { profession_type: "marketing_executive", referral_code: { not: null } },
+        select: {
+            id:            true,
+            referral_code: true,
+            users: { select: { full_name: true } },
+        },
+        orderBy: { id: "asc" },
+    });
+    return rows.map(r => ({
+        professional_id: r.id,
+        referral_code:   r.referral_code,
+        name:            r.users?.full_name ?? null,
+    }));
+};
+
+exports.insertVisitingForm = async (data, meProfessionalId) => {
+    const form = await prisma.visiting_forms.create({
+        data: {
+            me_professional_id: meProfessionalId,
+            visit_date:         new Date(data.visitDate),
+            visited_place:      data.visitedPlace,
+            place_type:         data.placeType,
+            place_name:         data.placeName,
+            address:            data.address,
+            contact_person:     data.contactPerson,
+            mobile_no:          data.mobileNo,
+            secretary_name:     data.secretaryName   || null,
+            secretary_mobile:   data.secretaryMobile || null,
+            principal_name:     data.principalName   || null,
+            principal_mobile:   data.principalMobile || null,
+            chairman_name:      data.chairmanName    || null,
+            chairman_mobile:    data.chairmanMobile  || null,
+            remark:             data.remark          || null,
+            permission_status:  data.permissionStatus,
+            next_visit_date:    data.nextVisitDate ? new Date(data.nextVisitDate) : null,
+        },
+    });
+    return form.id;
+};
+
+exports.getVisitingFormsByMe = async (meProfessionalId) => {
+    return await prisma.visiting_forms.findMany({
+        where:   { me_professional_id: meProfessionalId },
+        orderBy: { visit_date: "desc" },
+    });
+};
+
+exports.getVisitingFormById = async (formId, meProfessionalId) => {
+    return await prisma.visiting_forms.findFirst({
+        where: { id: formId, me_professional_id: meProfessionalId },
+    });
+};
+

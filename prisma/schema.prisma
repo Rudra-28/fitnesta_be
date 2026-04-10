@@ -224,6 +224,7 @@ model professionals {
   batches                  batches[]
   sessions                 sessions[]
   trainer_assignments      trainer_assignments[]
+  visiting_forms           visiting_forms[]
 
   @@index([user_id], map: "user_id")
 }
@@ -443,6 +444,10 @@ model users {
   approved_by     Int?
   approval_note   String?               @db.Text
   fcm_token       String?               @db.VarChar(255)
+  is_suspended    Boolean?              @default(false)
+  suspended_at    DateTime?             @db.Timestamp(0)
+  suspended_by    Int?
+  suspension_note String?               @db.Text
   admins          admins[]
   professionals   professionals[]
   societies       societies[]
@@ -934,6 +939,49 @@ model legal_content {
   created_at     DateTime                       @default(now()) @db.Timestamp(0)
 
   @@unique([dashboard_type, content_type], map: "uq_legal_dashboard_content")
+}
+
+// ─── ME Visiting Form ─────────────────────────────────────────────────────────
+
+enum visiting_forms_place_type {
+  society
+  school
+  organisation
+}
+
+enum visiting_forms_permission_status {
+  granted
+  not_granted
+  follow_up
+}
+
+model visiting_forms {
+  id                   Int                               @id @default(autoincrement())
+  me_professional_id   Int
+  visit_date           DateTime                          @db.Date
+  visited_place        String                            @db.VarChar(150)
+  place_type           visiting_forms_place_type
+  place_name           String                            @db.VarChar(150)
+  address              String                            @db.Text
+  contact_person       String                            @db.VarChar(100)
+  mobile_no            String                            @db.VarChar(15)
+  // Society-specific
+  secretary_name       String?                           @db.VarChar(100)
+  secretary_mobile     String?                           @db.VarChar(15)
+  // School-specific
+  principal_name       String?                           @db.VarChar(100)
+  principal_mobile     String?                           @db.VarChar(15)
+  // Organisation-specific
+  chairman_name        String?                           @db.VarChar(100)
+  chairman_mobile      String?                           @db.VarChar(15)
+  remark               String?                           @db.Text
+  permission_status    visiting_forms_permission_status
+  next_visit_date      DateTime?                         @db.Date
+  created_at           DateTime                          @default(now()) @db.Timestamp(0)
+  professionals        professionals                     @relation(fields: [me_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([me_professional_id])
+  @@index([visit_date])
 }
 
 // ─── Admin Audit Log ──────────────────────────────────────────────────────────

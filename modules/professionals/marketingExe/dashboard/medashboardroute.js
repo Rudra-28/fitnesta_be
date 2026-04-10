@@ -2,9 +2,9 @@ const express = require("express");
 const router = express.Router();
 const controller = require("./medashboardcontroller");
 const meGuard = require("./memiddleware");
-const upload = require("../../../../utils/fileupload");
+const localUpload = require("../../../../utils/localUpload");
 
-const docUpload = upload.fields([
+const docUpload = localUpload.fields([
     { name: 'activityAgreementPdf', maxCount: 1 }
 ]);
 
@@ -14,6 +14,12 @@ const handleUpload = (req, res, next) => {
             return res.status(400).json({
                 success: false,
                 message: `Unexpected file field "${err.field}". Expected field name: activityAgreementPdf`
+            });
+        }
+        if (err && err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({
+                success: false,
+                message: "File is too large. Maximum file size allowed is 2MB."
             });
         }
         if (err) return res.status(400).json({ success: false, message: err.message });
@@ -48,5 +54,11 @@ router.get("/students/societies", meGuard, controller.getSocietyStudents);
 router.get("/students/school/:schoolId", meGuard, controller.getStudentsBySchool);
 router.get("/students/school-student/:id", meGuard, controller.getSchoolStudentById);
 router.get("/students/society/:societyId", meGuard, controller.getStudentsBySociety);
+
+// ── Visiting Form ──────────────────────────────────────────────────────────
+router.get("/me-list", meGuard, controller.getMeReferralCodes);           // GET  dropdown of ME referral codes
+router.post("/visiting-form", meGuard, controller.submitVisitingForm);    // POST submit a visiting form
+router.get("/visiting-forms", meGuard, controller.getMyVisitingForms);    // GET  list all my visiting forms
+router.get("/visiting-form/:id", meGuard, controller.getVisitingFormById); // GET  single visiting form
 
 module.exports = router;

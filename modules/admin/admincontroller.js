@@ -970,3 +970,98 @@ exports.resolveSupportTicket = async (req, res) => {
         res.status(status).json({ success: false, error: err.message });
     }
 };
+
+// ── User management (super_admin) ─────────────────────────────────────────
+
+exports.listUsers = async (req, res) => {
+    try {
+        const { role, subrole, search, limit, offset } = req.query;
+        const data = await service.listUsers({ role, subrole, search, limit, offset });
+        res.json({ success: true, total: data.total, count: data.rows.length, data: data.rows });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getUser = async (req, res) => {
+    try {
+        const data = await service.getUserById(req.params.userId);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.editUser = async (req, res) => {
+    try {
+        const data = await service.editUser(req.params.userId, req.body, req.admin.userId);
+
+        auditLog(req, "edit_user", {
+            entity_type: "user",
+            entity_id:   Number(req.params.userId),
+            details:     { updated_fields: Object.keys(req.body) },
+        });
+
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.suspendUser = async (req, res) => {
+    try {
+        const result = await service.suspendUser(req.params.userId, req.admin.userId, req.body?.note);
+
+        auditLog(req, "suspend_user", {
+            entity_type: "user",
+            entity_id:   Number(req.params.userId),
+            details:     { note: req.body?.note ?? null },
+        });
+
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.unsuspendUser = async (req, res) => {
+    try {
+        const result = await service.unsuspendUser(req.params.userId);
+
+        auditLog(req, "unsuspend_user", {
+            entity_type: "user",
+            entity_id:   Number(req.params.userId),
+        });
+
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Visiting Forms ────────────────────────────────────────────────────────────
+
+exports.listVisitingForms = async (req, res) => {
+    try {
+        const { meId, placeType, permissionStatus, from, to, page, limit } = req.query;
+        const result = await service.listVisitingForms({ meId, placeType, permissionStatus, from, to, page, limit });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getVisitingFormByIdAdmin = async (req, res) => {
+    try {
+        const data = await service.getVisitingFormByIdAdmin(req.params.id);
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};

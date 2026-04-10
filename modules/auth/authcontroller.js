@@ -45,6 +45,9 @@ exports.login = async (req, res) => {
     } else if (error.message === "REGISTRATION_REJECTED") {
       statusCode = 403;
       message = "Your registration was rejected. Please contact support.";
+    } else if (error.message === "ACCOUNT_SUSPENDED") {
+      statusCode = 403;
+      message = "Your account has been suspended. Please contact support.";
     }
 
     res.status(statusCode).json({

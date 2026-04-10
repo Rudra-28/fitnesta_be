@@ -962,7 +962,7 @@ exports.getProfessionalsForSession = async (type, filters) => {
 exports.getStudentSubjects = async (studentId) => {
     const tutor = await prisma.personal_tutors.findFirst({
         where: { student_id: Number(studentId) },
-        select: { teacher_for: true, standard: true },
+        select: { teacher_for: true, standard: true, term_months: true },
     });
     if (!tutor) throw new Error("NOT_FOUND");
 
@@ -977,6 +977,10 @@ exports.getStudentSubjects = async (studentId) => {
         select: { id: true, name: true },
     });
 
+    // Fetch session cap from commission_rules
+    const capRule = await prisma.commission_rules.findUnique({ where: { rule_key: "personal_tutor_sessions_cap" } });
+    const session_cap_per_month = capRule ? parseInt(capRule.value) : 18;
+
     // If "All Subjects" — expand to all activities with a personal_tutor fee for this standard
     const hasAllSubjects = subjectNames.includes("All Subjects");
     if (hasAllSubjects) {
@@ -989,15 +993,19 @@ exports.getStudentSubjects = async (studentId) => {
             distinct: ["activity_id"],
         });
         return {
-            student_id: Number(studentId),
+            student_id:           Number(studentId),
             standard,
+            term_months:          tutor.term_months,
+            session_cap_per_month,
             subjects: feeRows.map((f) => ({ activity_id: f.activity_id, activity_name: f.activities.name })),
         };
     }
 
     return {
-        student_id: Number(studentId),
+        student_id:           Number(studentId),
         standard,
+        term_months:          tutor.term_months,
+        session_cap_per_month,
         subjects: activities.map((a) => ({ activity_id: a.id, activity_name: a.name })),
     };
 };
@@ -1007,7 +1015,7 @@ exports.getStudentSubjects = async (studentId) => {
 exports.getStudentActivities = async (studentId) => {
     const participant = await prisma.individual_participants.findFirst({
         where: { student_id: Number(studentId) },
-        select: { activity: true },
+        select: { activity: true, term_months: true },
     });
     if (!participant) throw new Error("NOT_FOUND");
 
@@ -1015,14 +1023,18 @@ exports.getStudentActivities = async (studentId) => {
     const activityNames = (participant.activity || "")
         .split(",").map((s) => s.trim()).filter(Boolean);
 
-    if (!activityNames.length) return { student_id: Number(studentId), activities: [] };
+    // Fetch session cap from commission_rules
+    const capRule = await prisma.commission_rules.findUnique({ where: { rule_key: "individual_coaching_sessions_cap" } });
+    const session_cap_per_month = capRule ? parseInt(capRule.value) : 18;
+
+    if (!activityNames.length) return { student_id: Number(studentId), term_months: participant.term_months, session_cap_per_month, activities: [] };
 
     const activities = await prisma.activities.findMany({
         where: { name: { in: activityNames } },
         select: { id: true, name: true },
     });
 
-    return { student_id: Number(studentId), activities };
+    return { student_id: Number(studentId), term_months: participant.term_months, session_cap_per_month, activities };
 };
 
 // Returns trainers for a given activity, with availability for an optional slot
@@ -1252,4 +1264,182 @@ exports.removeSubAdmin = async (userId) => {
     if (adminRow.scope === "super_admin") throw Object.assign(new Error("CANNOT_REMOVE_SUPER_ADMIN"), { status: 403 });
 
     await adminRepo.removeSubAdmin(userId);
+};
+
+// ── User management (super_admin) ─────────────────────────────────────────
+
+const { sendNotification } = require("../../utils/fcm");
+
+exports.listUsers = async ({ role, subrole, search, limit, offset }) => {
+    return adminRepo.listUsers({ role, subrole, search, limit, offset });
+};
+
+exports.getUserById = async (userId) => {
+    const user = await adminRepo.getUserById(userId);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { status: 404 });
+    return user;
+};
+
+exports.editUser = async (userId, updates, adminId) => {
+    const user = await adminRepo.getUserById(userId);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { status: 404 });
+    if (user.role === "admin") throw Object.assign(new Error("CANNOT_EDIT_ADMIN_USER"), { status: 403 });
+
+    const data = {};
+    const allowedFields = ["full_name", "email", "address", "photo"];
+    for (const field of allowedFields) {
+        if (updates[field] !== undefined) data[field] = updates[field];
+    }
+
+    // Mobile change — notify user
+    const mobileChanged = updates.mobile && updates.mobile !== user.mobile;
+    if (mobileChanged) {
+        const cleanMobile = String(updates.mobile).replace("+91", "");
+        // Check uniqueness
+        const existing = await adminRepo.findUserByMobile(cleanMobile);
+        if (existing && existing.id !== user.id) {
+            throw Object.assign(new Error("MOBILE_ALREADY_IN_USE"), { status: 409 });
+        }
+        data.mobile = cleanMobile;
+    }
+
+    const updated = await adminRepo.updateUser(userId, data);
+
+    // Send push notification AFTER successful update
+    if (mobileChanged) {
+        sendNotification(
+            user.id,
+            "Mobile Number Updated",
+            `Your mobile number has been changed by admin. Please log in using your new number: ${data.mobile}`,
+            { type: "mobile_changed", new_mobile: data.mobile }
+        );
+    }
+
+    return updated;
+};
+
+exports.suspendUser = async (userId, adminId, note) => {
+    const user = await adminRepo.getUserById(userId);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { status: 404 });
+    if (user.role === "admin") throw Object.assign(new Error("CANNOT_SUSPEND_ADMIN"), { status: 403 });
+    if (user.is_suspended) throw Object.assign(new Error("USER_ALREADY_SUSPENDED"), { status: 409 });
+
+    await adminRepo.suspendUser(userId, adminId, note);
+
+    sendNotification(
+        user.id,
+        "Account Suspended",
+        note ? `Your account has been suspended. Reason: ${note}` : "Your account has been suspended by admin. Please contact support.",
+        { type: "account_suspended" }
+    );
+
+    return { message: "User suspended." };
+};
+
+exports.unsuspendUser = async (userId) => {
+    const user = await adminRepo.getUserById(userId);
+    if (!user) throw Object.assign(new Error("USER_NOT_FOUND"), { status: 404 });
+    if (!user.is_suspended) throw Object.assign(new Error("USER_NOT_SUSPENDED"), { status: 409 });
+
+    await adminRepo.unsuspendUser(userId);
+
+    sendNotification(
+        user.id,
+        "Account Reinstated",
+        "Your account suspension has been lifted. You can now log in again.",
+        { type: "account_unsuspended" }
+    );
+
+    return { message: "User unsuspended." };
+};
+
+// ── Visiting Forms ────────────────────────────────────────────────────────────
+
+const VALID_PLACE_TYPES        = ["society", "school", "organisation"];
+const VALID_PERMISSION_STATUSES = ["granted", "not_granted", "follow_up"];
+
+exports.listVisitingForms = async (filters) => {
+    const page  = filters.page  ? Number(filters.page)  : 1;
+    const limit = filters.limit ? Number(filters.limit) : 20;
+
+    if (filters.placeType && !VALID_PLACE_TYPES.includes(filters.placeType)) {
+        const err = new Error(`Invalid placeType. Allowed: ${VALID_PLACE_TYPES.join(", ")}`);
+        err.status = 400;
+        throw err;
+    }
+    if (filters.permissionStatus && !VALID_PERMISSION_STATUSES.includes(filters.permissionStatus)) {
+        const err = new Error(`Invalid permissionStatus. Allowed: ${VALID_PERMISSION_STATUSES.join(", ")}`);
+        err.status = 400;
+        throw err;
+    }
+
+    const { total, rows } = await adminRepo.getAllVisitingForms({ ...filters, page, limit });
+
+    const data = rows.map(r => ({
+        id:                r.id,
+        visit_date:        r.visit_date,
+        visited_place:     r.visited_place,
+        place_type:        r.place_type,
+        place_name:        r.place_name,
+        address:           r.address,
+        contact_person:    r.contact_person,
+        mobile_no:         r.mobile_no,
+        secretary_name:    r.secretary_name,
+        secretary_mobile:  r.secretary_mobile,
+        principal_name:    r.principal_name,
+        principal_mobile:  r.principal_mobile,
+        chairman_name:     r.chairman_name,
+        chairman_mobile:   r.chairman_mobile,
+        remark:            r.remark,
+        permission_status: r.permission_status,
+        next_visit_date:   r.next_visit_date,
+        created_at:        r.created_at,
+        me: {
+            professional_id: r.professionals?.id                 ?? null,
+            user_id:         r.professionals?.users?.id          ?? null,
+            name:            r.professionals?.users?.full_name   ?? null,
+            mobile:          r.professionals?.users?.mobile      ?? null,
+            email:           r.professionals?.users?.email       ?? null,
+            photo:           r.professionals?.users?.photo       ?? null,
+        },
+    }));
+
+    return { total, page, limit, data };
+};
+
+exports.getVisitingFormByIdAdmin = async (formId) => {
+    const r = await adminRepo.getVisitingFormByIdAdmin(Number(formId));
+    if (!r) {
+        const err = new Error("Visiting form not found.");
+        err.status = 404;
+        throw err;
+    }
+    return {
+        id:                r.id,
+        visit_date:        r.visit_date,
+        visited_place:     r.visited_place,
+        place_type:        r.place_type,
+        place_name:        r.place_name,
+        address:           r.address,
+        contact_person:    r.contact_person,
+        mobile_no:         r.mobile_no,
+        secretary_name:    r.secretary_name,
+        secretary_mobile:  r.secretary_mobile,
+        principal_name:    r.principal_name,
+        principal_mobile:  r.principal_mobile,
+        chairman_name:     r.chairman_name,
+        chairman_mobile:   r.chairman_mobile,
+        remark:            r.remark,
+        permission_status: r.permission_status,
+        next_visit_date:   r.next_visit_date,
+        created_at:        r.created_at,
+        me: {
+            professional_id: r.professionals?.id                 ?? null,
+            user_id:         r.professionals?.users?.id          ?? null,
+            name:            r.professionals?.users?.full_name   ?? null,
+            mobile:          r.professionals?.users?.mobile      ?? null,
+            email:           r.professionals?.users?.email       ?? null,
+            photo:           r.professionals?.users?.photo       ?? null,
+        },
+    };
 };

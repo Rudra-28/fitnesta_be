@@ -112,6 +112,19 @@ async function getSessionFeedback(req, res) {
   }
 }
 
+async function previewSessionGeneration(req, res) {
+  try {
+    const { session_type, student_id, start_date, days_of_week } = req.query;
+    const parsedDays = days_of_week
+      ? (Array.isArray(days_of_week) ? days_of_week : days_of_week.split(","))
+      : [];
+    const result = await service.previewSessionGeneration({ session_type, student_id, start_date, days_of_week: parsedDays });
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 module.exports = {
   createSession,
   generateIndividualSessions,
@@ -123,4 +136,5 @@ module.exports = {
   rescheduleSession,
   getStudentSessionBatches,
   getSessionFeedback,
+  previewSessionGeneration,
 };

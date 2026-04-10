@@ -1399,3 +1399,151 @@ exports.removeSubAdmin = async (userId) => {
         });
     });
 };
+
+// ── User management (super_admin) ─────────────────────────────────────────
+
+exports.listUsers = async ({ role, subrole, search, limit = 50, offset = 0 }) => {
+    const where = { role: { not: "removed" } };
+    if (role)    where.role    = role;
+    if (subrole) where.subrole = subrole;
+    if (search) {
+        where.OR = [
+            { full_name: { contains: search } },
+            { mobile:    { contains: search } },
+            { email:     { contains: search } },
+        ];
+    }
+    const [rows, total] = await Promise.all([
+        prisma.users.findMany({
+            where,
+            select: {
+                id:              true,
+                uuid:            true,
+                role:            true,
+                subrole:         true,
+                full_name:       true,
+                mobile:          true,
+                email:           true,
+                address:         true,
+                photo:           true,
+                created_at:      true,
+                is_verified:     true,
+                approval_status: true,
+                is_suspended:    true,
+                suspended_at:    true,
+                suspension_note: true,
+            },
+            orderBy: { created_at: "desc" },
+            take:    Number(limit),
+            skip:    Number(offset),
+        }),
+        prisma.users.count({ where }),
+    ]);
+    return { rows, total };
+};
+
+exports.getUserById = async (userId) => {
+    return prisma.users.findUnique({
+        where:  { id: Number(userId) },
+        select: {
+            id:              true,
+            uuid:            true,
+            role:            true,
+            subrole:         true,
+            full_name:       true,
+            mobile:          true,
+            email:           true,
+            address:         true,
+            photo:           true,
+            created_at:      true,
+            is_verified:     true,
+            approval_status: true,
+            is_suspended:    true,
+            suspended_at:    true,
+            suspension_note: true,
+        },
+    });
+};
+
+exports.updateUser = async (userId, data) => {
+    return prisma.users.update({
+        where: { id: Number(userId) },
+        data,
+    });
+};
+
+exports.suspendUser = async (userId, adminId, note) => {
+    return prisma.users.update({
+        where: { id: Number(userId) },
+        data: {
+            is_suspended:    true,
+            suspended_at:    new Date(),
+            suspended_by:    adminId,
+            suspension_note: note ?? null,
+        },
+    });
+};
+
+exports.unsuspendUser = async (userId) => {
+    return prisma.users.update({
+        where: { id: Number(userId) },
+        data: {
+            is_suspended:    false,
+            suspended_at:    null,
+            suspended_by:    null,
+            suspension_note: null,
+        },
+    });
+};
+
+// ── Visiting Forms ────────────────────────────────────────────────────────────
+
+exports.getAllVisitingForms = async ({ meId, placeType, permissionStatus, from, to, page, limit }) => {
+    const where = {};
+
+    if (meId)             where.me_professional_id = Number(meId);
+    if (placeType)        where.place_type         = placeType;
+    if (permissionStatus) where.permission_status  = permissionStatus;
+    if (from || to) {
+        where.visit_date = {};
+        if (from) where.visit_date.gte = new Date(from);
+        if (to)   where.visit_date.lte = new Date(to);
+    }
+
+    const skip  = (page - 1) * limit;
+    const [total, rows] = await Promise.all([
+        prisma.visiting_forms.count({ where }),
+        prisma.visiting_forms.findMany({
+            where,
+            orderBy: { visit_date: "desc" },
+            skip,
+            take: limit,
+            include: {
+                professionals: {
+                    select: {
+                        id:      true,
+                        user_id: true,
+                        users:   { select: { id: true, full_name: true, mobile: true, email: true, photo: true } },
+                    },
+                },
+            },
+        }),
+    ]);
+
+    return { total, rows };
+};
+
+exports.getVisitingFormByIdAdmin = async (formId) => {
+    return await prisma.visiting_forms.findFirst({
+        where: { id: formId },
+        include: {
+            professionals: {
+                select: {
+                    id:      true,
+                    user_id: true,
+                    users:   { select: { id: true, full_name: true, mobile: true, email: true, photo: true } },
+                },
+            },
+        },
+    });
+};

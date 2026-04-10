@@ -167,7 +167,7 @@ async function getStudentSessionBatches(studentId) {
       where: { student_id: sid },
       select: {
         trainer_professional_id: true,
-        activity_id: true,
+        activity: true,
         membership_start_date: true,
         membership_end_date: true,
         session_cap: true,

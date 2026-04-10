@@ -10,6 +10,7 @@ router.post("/generate", controller.generateIndividualSessions);               /
 router.post("/extend",   controller.extendMembership);                         // POST   /api/v1/admin/sessions/extend    — extend membership + append sessions
 router.get("/", controller.listSessions);                                      // GET    /api/v1/admin/sessions?student_id=&professional_id=&from=&to=&status=&session_type=
 router.get("/students/:studentId/batches", controller.getStudentSessionBatches); // GET    /api/v1/admin/sessions/students/:studentId/batches
+router.get("/preview", controller.previewSessionGeneration);                    // GET    /api/v1/admin/sessions/preview?session_type=&student_id=&start_date=&days_of_week=Mon,Wed,Fri
 router.get("/:sessionId", controller.getSession);                              // GET    /api/v1/admin/sessions/:sessionId
 router.patch("/:sessionId/reschedule", controller.rescheduleSession);          // PATCH  /api/v1/admin/sessions/:sessionId/reschedule
 router.put("/:sessionId/status", controller.updateSessionStatus);              // PUT    /api/v1/admin/sessions/:sessionId/status

@@ -26,6 +26,11 @@ exports.loginUser = async (mobile, role) => {
     throw new Error("REGISTRATION_REJECTED");
   }
 
+  // 3a. Block if suspended
+  if (user.is_suspended) {
+    throw new Error("ACCOUNT_SUSPENDED");
+  }
+
   // 4. Validate role
   if (user.role !== role) {
     throw new Error(`ROLE_MISMATCH`);
