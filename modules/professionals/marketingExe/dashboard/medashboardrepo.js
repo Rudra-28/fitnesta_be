@@ -38,6 +38,7 @@ exports.insertSociety = async (data, meUserId, meProfessionalId) => {
             me_professional_id: meProfessionalId,
             society_name: data.societyName,
             society_category: data.societyCategory === "A+" ? "A_" : (data.societyCategory ?? null),
+            custom_category_name: data.societyCategory === "custom" ? (data.customCategoryName?.trim() ?? null) : null,
             address: data.address,
             pin_code: data.pinCode,
             total_participants: Number(data.totalParticipants),

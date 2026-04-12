@@ -378,11 +378,13 @@ CREATE TABLE commissions (
 -- group_coaching and individual_coaching via fee_structures.
 -- ---------------------------------------------------------------
 CREATE TABLE activities (
-    id          INT PRIMARY KEY AUTO_INCREMENT,
-    name        VARCHAR(150) NOT NULL,
-    notes       VARCHAR(255) DEFAULT NULL,                        -- 'Age 2–7 only', 'Course-based', etc.
-    is_active   TINYINT(1)   DEFAULT 1,
-    created_at  TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
+    id                INT PRIMARY KEY AUTO_INCREMENT,
+    name              VARCHAR(150) NOT NULL,
+    notes             VARCHAR(255) DEFAULT NULL,                        -- 'Age 2–7 only', 'Course-based', etc.
+    is_active         TINYINT(1)   DEFAULT 1,
+    activity_category ENUM('sports','non_sports') NOT NULL DEFAULT 'sports',
+    image_url         VARCHAR(255) DEFAULT NULL,
+    created_at        TIMESTAMP    DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ---------------------------------------------------------------
@@ -397,57 +399,63 @@ CREATE TABLE activities (
 --                     NULL for 1M rows (total_fee IS the monthly fee)
 -- ---------------------------------------------------------------
 CREATE TABLE fee_structures (
-    id                INT PRIMARY KEY AUTO_INCREMENT,
-    activity_id       INT NOT NULL,
-    coaching_type     ENUM(
-                          'group_coaching',
-                          'individual_coaching',
-                          'personal_tutor',
-                          'school_student'
-                      ) NOT NULL,
-    society_category  ENUM('A+','A','B') DEFAULT NULL,
-    standard          VARCHAR(20)        DEFAULT NULL,            -- '1ST-2ND' | '3RD-4TH' | '5TH-6TH' | '7TH-8TH' | '8TH-10TH' | 'ANY'
-    term_months       TINYINT            NOT NULL,                -- 1 | 3 | 6
-    total_fee         DECIMAL(10,2)      NOT NULL,
-    effective_monthly DECIMAL(10,2)      DEFAULT NULL,
-    UNIQUE KEY uq_fee (activity_id, coaching_type, society_category, standard, term_months),
+    id                   INT PRIMARY KEY AUTO_INCREMENT,
+    activity_id          INT NOT NULL,
+    coaching_type        ENUM(
+                             'group_coaching',
+                             'individual_coaching',
+                             'personal_tutor',
+                             'school_student'
+                         ) NOT NULL,
+    society_category     ENUM('A+','A','B') DEFAULT NULL,
+    custom_category_name VARCHAR(100)       DEFAULT NULL,
+    standard             VARCHAR(20)        DEFAULT NULL,            -- '1ST-2ND' | '3RD-4TH' | '5TH-6TH' | '7TH-8TH' | '8TH-10TH' | 'ANY'
+    term_months          TINYINT            NOT NULL,                -- 1 | 3 | 6
+    total_fee            DECIMAL(10,2)      NOT NULL,
+    effective_monthly    DECIMAL(10,2)      DEFAULT NULL,
+    last_edited_by       INT                DEFAULT NULL,
+    last_edited_at       TIMESTAMP          DEFAULT NULL,
+    UNIQUE KEY uq_fee (activity_id, coaching_type, society_category, custom_category_name, standard, term_months),
     FOREIGN KEY (activity_id) REFERENCES activities(id)
 );
 
 -- ---------------------------------------------------------------
 -- SEED: Activities
 -- ---------------------------------------------------------------
-INSERT INTO activities (id, name, notes) VALUES
--- Group Coaching
-(1,  'Fun Games / Play Ground',                    'Age 2-7 only'),
-(2,  'Fitness + Kho-Kho + Kabaddi + Volleyball',   NULL),
-(3,  'Cricket + Fitness',                          NULL),
-(4,  'Karate + Fitness',                           NULL),
-(5,  'Yoga + Fitness',                             NULL),
-(6,  'Dance (Western)',                            NULL),         -- shared with individual_coaching
-(7,  'Dance (Classical)',                          NULL),         -- shared with individual_coaching
-(8,  'Make Up Artist Diploma',                     'Course-based, 3M only'),
-(9,  'Psychometric Test',                          'Assessment, monthly only'),
--- Individual / Personal Game Coaching
-(10, 'Cricket',                                    NULL),
-(11, 'Karate (Martial Arts)',                      NULL),
-(12, 'Boxing',                                     NULL),
-(13, 'Football',                                   NULL),
-(14, 'Volleyball',                                 NULL),
-(15, 'Skating',                                    NULL),
-(16, 'Personal Fitness',                           NULL),
-(17, 'Yoga (Personal/Family)',                     NULL),
--- Personal Tutor subjects
-(18, 'All Subjects',                               NULL),
-(19, 'Maths',                                      NULL),
-(20, 'Science',                                    NULL),
-(21, 'English',                                    NULL),
-(22, 'German',                                     NULL),
--- School Student specific activities
-(23, 'Kho-Kho',                                    NULL),
-(24, 'Kabaddi',                                    NULL),
-(25, 'Bollywood Dance',                            NULL),
-(26, 'Foreign Languages [German/French]',          NULL);
+INSERT INTO activities (id, name, notes, activity_category) VALUES
+-- Group Coaching — Sports
+(1,  'Fun Games / Play Ground',                    'Age 2-7 only',              'sports'),
+(2,  'Fitness + Kho-Kho + Kabaddi + Volleyball',   NULL,                        'sports'),
+(3,  'Cricket + Fitness',                          NULL,                        'sports'),
+(4,  'Karate + Fitness',                           NULL,                        'sports'),
+(5,  'Yoga + Fitness',                             NULL,                        'sports'),
+-- Group Coaching — Non-Sports
+(6,  'Dance (Western)',                            NULL,                        'non_sports'),  -- shared with individual_coaching
+(7,  'Dance (Classical)',                          NULL,                        'non_sports'),  -- shared with individual_coaching
+(8,  'Make Up Artist Diploma',                     'Course-based, 3M only',     'non_sports'),
+(9,  'Psychometric Test',                          'Assessment, monthly only',  'non_sports'),
+-- Individual / Personal Game Coaching — Sports
+(10, 'Cricket',                                    NULL,                        'sports'),
+(11, 'Karate (Martial Arts)',                      NULL,                        'sports'),
+(12, 'Boxing',                                     NULL,                        'sports'),
+(13, 'Football',                                   NULL,                        'sports'),
+(14, 'Volleyball',                                 NULL,                        'sports'),
+(15, 'Skating',                                    NULL,                        'sports'),
+-- Individual / Personal Game Coaching — Non-Sports
+(16, 'Personal Fitness',                           NULL,                        'non_sports'),
+(17, 'Yoga (Personal/Family)',                     NULL,                        'non_sports'),
+-- Personal Tutor subjects — Non-Sports
+(18, 'All Subjects',                               NULL,                        'non_sports'),
+(19, 'Maths',                                      NULL,                        'non_sports'),
+(20, 'Science',                                    NULL,                        'non_sports'),
+(21, 'English',                                    NULL,                        'non_sports'),
+(22, 'German',                                     NULL,                        'non_sports'),
+-- School Student specific — Sports
+(23, 'Kho-Kho',                                    NULL,                        'sports'),
+(24, 'Kabaddi',                                    NULL,                        'sports'),
+-- School Student specific — Non-Sports
+(25, 'Bollywood Dance',                            NULL,                        'non_sports'),
+(26, 'Foreign Languages [German/French]',          NULL,                        'non_sports');
 
 -- ---------------------------------------------------------------
 -- SEED: Fee Structures — Group Coaching (A+ / A / B × 1M / 3M / 6M)

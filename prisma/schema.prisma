@@ -14,6 +14,7 @@ model activities {
   notes               String?                     @db.VarChar(255)
   is_active           Boolean?                    @default(true)
   activity_category   activities_activity_category @default(sports)
+  image_url           String?                     @db.VarChar(255)
   created_at          DateTime?                   @default(now()) @db.Timestamp(0)
   fee_structures      fee_structures[]
   trainer_batches     trainer_batches[]
@@ -298,6 +299,7 @@ model societies {
   registered_by_user_id         Int?
   society_name                  String?                    @db.VarChar(150)
   society_category              societies_society_category
+  custom_category_name          String?                    @db.VarChar(100)
   address                       String?                    @db.Text
   pin_code                      String?                    @db.VarChar(10)
   total_participants            Int?

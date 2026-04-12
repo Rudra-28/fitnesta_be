@@ -262,6 +262,32 @@ async function getSessionFeedback(sessionId) {
   });
 }
 
+/**
+ * Hard-delete a single session by ID.
+ * Cascades to session_participants and session_feedback automatically.
+ */
+async function deleteSession(id) {
+  return prisma.sessions.delete({ where: { id: Number(id) } });
+}
+
+/**
+ * Bulk hard-delete all SCHEDULED (upcoming) sessions for a student
+ * of the given session_type, optionally only those on or after `from_date`.
+ * Returns the count of deleted rows.
+ */
+async function bulkDeleteFutureSessions({ student_id, session_type, from_date }) {
+  const where = {
+    student_id:   Number(student_id),
+    session_type,
+    status:       "scheduled",
+  };
+  if (from_date) {
+    where.scheduled_date = { gte: new Date(from_date) };
+  }
+  const { count } = await prisma.sessions.deleteMany({ where });
+  return count;
+}
+
 module.exports = {
   checkProfessionalConflict,
   checkStudentConflict,
@@ -273,4 +299,6 @@ module.exports = {
   rescheduleSession,
   getStudentSessionBatches,
   getSessionFeedback,
+  deleteSession,
+  bulkDeleteFutureSessions,
 };

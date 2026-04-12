@@ -84,7 +84,7 @@ exports.verifyPayment = async (req, res) => {
             receipt = await paymentsService.getReceipt(temp_uuid, userId);
         } catch (_) { /* non-fatal — Flutter can fetch via GET /receipt/:temp_uuid */ }
 
-        sendNotification(userId, "Payment Successful", "Your registration is confirmed.", { type: "payment_confirmed", temp_uuid });
+        if (userId) sendNotification(userId, "Payment Successful", "Your registration is confirmed.", { type: "payment_confirmed", temp_uuid });
 
         return res.status(200).json({ success: true, message: "Payment verified and registration finalized", receipt });
     } catch (error) {

@@ -413,7 +413,11 @@ exports.getAvailableProfessionals = async (type, { date, startTime, endTime } = 
 };
 
 exports.getApprovedSocieties = async () => {
-    return await adminRepo.getApprovedSocieties();
+    const rows = await adminRepo.getApprovedSocieties();
+    return rows.map((r) => ({
+        ...r,
+        society_category: r.society_category ? (SOCIETY_CATEGORY_DISPLAY[r.society_category] ?? r.society_category) : null,
+    }));
 };
 
 exports.getApprovedSchools = async () => {
@@ -587,6 +591,102 @@ exports.assignTrainer = async (individualParticipantId, trainerProfessionalId) =
 
 // ── Settlement ─────────────────────────────────────────────────────────────
 
+/**
+ * GET /admin/professionals/:professionalId/settlement-preview
+ *
+ * Returns the "Sessions & Settle" tab data for a single professional.
+ * Produces one card per active group-coaching batch and one card per
+ * individual-coaching / personal-tutor student, along with the
+ * calculated trainer_earns amount ready to settle.
+ *
+ * Formula:
+ *   per_session_rate  = (effective_monthly_fee_sum × commission_rate) / session_cap
+ *   trainer_earns     = completed_sessions_since_last_settlement × per_session_rate
+ *
+ * session_cap = the commission-rules cap (e.g. 20 for group_society_sports).
+ *              It is the denominator — never the number of sessions created.
+ */
+exports.getSessionsAndSettlePreview = async (professionalId) => {
+    const items = await commissionService.previewSettlement(Number(professionalId));
+
+    // Enrich each item with UI-friendly fields
+    return items.map((item) => {
+
+        // Build a session cycle label from last_settled_at → now
+        const cycleStart = item.last_settled_at
+            ? new Date(item.last_settled_at)
+            : new Date(item.assigned_from);
+        const cycleEnd   = new Date();
+
+        const formatDate = (d) =>
+            d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+        return {
+            assignment_id:         item.assignment_id,
+            assignment_type:       item.assignment_type,
+            professional_id:       item.professional_id,
+            professional_name:     item.professional_name,
+            professional_type:     item.professional_type,
+            entity_name:           item.entity_name,
+            activity_name:         item.activity_name,
+            session_cycle:         `${formatDate(cycleStart)} – ${formatDate(cycleEnd)}`,
+            sessions_allocated:    item.sessions_allocated,
+            total_sessions_allocated: item.standard_sessions_cap,  // the cap used as denominator
+            sessions_completed:    item.sessions_attended,          // only completed (marked present)
+            session_cap:           item.standard_sessions_cap,
+            effective_sessions_cap: item.effective_sessions_cap,
+            commission_rate:       item.commission_rate,
+            is_flat_rate:          item.is_flat_rate,
+            flat_amount_per_session: item.flat_amount_per_session,
+            commission_per_session: item.commission_per_session,
+            trainer_earns:         item.commission_amount,          // ₹ the trainer earns
+            already_settled:       false,                           // still pending
+            last_settled_at:       item.last_settled_at ?? null,
+        };
+    });
+};
+
+/**
+ * POST /admin/professionals/:professionalId/settle
+ *
+ * "Settle Amount" button handler.
+ *
+ * Settles all unsettled (or the specified) assignments for one professional,
+ * creating a commissions record per assignment at status = "pending".
+ * Once created the amount appears in the trainer's Payouts tab immediately.
+ *
+ * Body (optional):
+ *   { assignment_ids: [1, 2, 3], cap_overrides: { "5": 15 } }
+ *
+ * If assignment_ids is omitted, ALL active assignments for this professional
+ * are settled.
+ */
+exports.settleAmountForProfessional = async (professionalId, assignmentIds = null, capOverrides = {}) => {
+    const pid = Number(professionalId);
+
+    // Validate professional exists
+    const professional = await prisma.professionals.findUnique({
+        where:  { id: pid },
+        select: { id: true, profession_type: true, users: { select: { full_name: true } } },
+    });
+    if (!professional) throw Object.assign(new Error("PROFESSIONAL_NOT_FOUND"), { status: 404 });
+
+    // Scope to this professional only
+    const settled = await commissionService.confirmSettlement(
+        assignmentIds ? assignmentIds.map(Number) : null,
+        capOverrides,
+        pid          // professional filter (see updated confirmSettlement below)
+    );
+
+    return {
+        professional_id:   pid,
+        professional_name: professional.users?.full_name ?? null,
+        settled_count:     settled.filter((s) => !s.skipped && !s.error).length,
+        skipped_count:     settled.filter((s) => s.skipped).length,
+        items:             settled,
+    };
+};
+
 exports.getSettlementPreview = async (professionalId) => {
     return await commissionService.previewSettlement(professionalId ?? null);
 };
@@ -734,6 +834,61 @@ async function approveSocietyEnrollment(tx, data) {
 exports.listActivities = async (coachingType) => {
     if (!coachingType) return activitiesRepo.getAllActiveActivities();
     return activitiesRepo.getActivitiesByCoachingType(coachingType);
+};
+
+const cloudinary = require("../../config/cloudinary");
+
+const extractPublicId = (url) => {
+    // e.g. https://res.cloudinary.com/.../fitnesta/activities/activity-123.jpg
+    const match = url.match(/fitnesta\/activities\/[^/.]+/);
+    return match ? match[0] : null;
+};
+
+exports.createActivity = async ({ name, notes, activity_category, image_url, fee_structures, adminUserId }) => {
+    if (!name)              throw new Error("ACTIVITY_NAME_REQUIRED");
+    if (!activity_category) throw new Error("ACTIVITY_CATEGORY_REQUIRED");
+
+    // Validate fee_structures if provided
+    const fees = Array.isArray(fee_structures) ? fee_structures : [];
+    for (const f of fees) {
+        if (!f.coaching_type || !f.term_months || f.total_fee == null) {
+            throw new Error("INVALID_FEE_STRUCTURE");
+        }
+        if (!VALID_COACHING_TYPES.includes(f.coaching_type)) throw new Error("INVALID_COACHING_TYPE");
+    }
+
+    return await adminRepo.createActivityWithFees({ name, notes, activity_category, image_url }, fees, adminUserId);
+};
+
+exports.updateActivity = async (id, body) => {
+    const existing = await adminRepo.getActivityById(id);
+    if (!existing) throw new Error("ACTIVITY_NOT_FOUND");
+
+    // If a new image was uploaded and there was an old one, delete old from Cloudinary
+    if (body.image_url && existing.image_url && body.image_url !== existing.image_url) {
+        const publicId = extractPublicId(existing.image_url);
+        if (publicId) cloudinary.uploader.destroy(publicId).catch(() => {});
+    }
+
+    return await adminRepo.updateActivity(id, body);
+};
+
+exports.deleteActivity = async (id, force = false) => {
+    const existing = await adminRepo.getActivityById(id);
+    if (!existing) throw new Error("ACTIVITY_NOT_FOUND");
+
+    if (force) {
+        const hasHistory = await adminRepo.activityHasHistory(id);
+        if (hasHistory) throw new Error("ACTIVITY_HAS_HISTORY");
+        if (existing.image_url) {
+            const publicId = extractPublicId(existing.image_url);
+            if (publicId) cloudinary.uploader.destroy(publicId).catch(() => {});
+        }
+        return await adminRepo.hardDeleteActivity(id);
+    }
+
+    // Default: soft delete
+    return await adminRepo.updateActivity(id, { is_active: false });
 };
 
 // ── Payments ──────────────────────────────────────────────────────────────
@@ -1405,6 +1560,225 @@ exports.listVisitingForms = async (filters) => {
     }));
 
     return { total, page, limit, data };
+};
+
+// ── Enriched Trainer/Teacher settlement preview ───────────────────────────
+
+/**
+ * GET /professionals/:id/sessions-settle
+ *
+ * Returns trainer/teacher assignments enriched with:
+ *   - batch info (name, days, time, entity)
+ *   - session counts: completed, upcoming, absent, attendance_pct
+ *   - commission rate, per-session rate, trainer_earns
+ *   - session_cycle string
+ */
+exports.getEnrichedSettlementPreview = async (professionalId) => {
+    const pid   = Number(professionalId);
+    const items = await commissionService.previewSettlement(pid);
+
+    const formatDate = (d) =>
+        new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+    const results = [];
+    for (const item of items) {
+        const assignment = {
+            id:              item.assignment_id,
+            professional_id: item.professional_id,
+            assignment_type: item.assignment_type,
+            society_id:      item.society_id  ?? null,
+            school_id:       item.school_id   ?? null,
+            activity_id:     item.activity_id ?? null,
+            assigned_from:   item.assigned_from,
+            last_settled_at: item.last_settled_at,
+        };
+
+        const extras = await adminRepo.getAssignmentSessionExtras(assignment);
+
+        const cycleStart = item.last_settled_at ? new Date(item.last_settled_at) : new Date(item.assigned_from);
+        const cycleEnd   = new Date();
+
+        results.push({
+            assignment_id:          item.assignment_id,
+            assignment_type:        item.assignment_type,
+            entity_name:            extras.batch_info?.entity_name ?? item.entity_name,
+            activity_name:          extras.batch_info?.activity_name ?? item.activity_name,
+            batch_info:             extras.batch_info,
+            session_cycle:          `${formatDate(cycleStart)} – ${formatDate(cycleEnd)}`,
+            total_sessions_allocated: item.standard_sessions_cap,
+            sessions_completed:     item.sessions_attended,
+            upcoming_sessions:      extras.upcoming_sessions,
+            absent_sessions:        extras.absent_sessions,
+            attendance_pct:         extras.attendance_pct,
+            commission_rate:        item.commission_rate,
+            is_flat_rate:           item.is_flat_rate,
+            flat_amount_per_session: item.flat_amount_per_session,
+            commission_per_session: item.commission_per_session,
+            trainer_earns:          item.commission_amount,
+            last_settled_at:        item.last_settled_at ?? null,
+        });
+    }
+
+    return results;
+};
+
+/**
+ * GET /professionals/:id/payouts
+ * Returns commissions list for a professional (their Payouts tab).
+ */
+exports.getProfessionalPayouts = async (professionalId) => {
+    const pid = Number(professionalId);
+    const rows = await adminRepo.getProfessionalCommissions(pid);
+
+    return rows.map((c, idx) => ({
+        id:               c.id,
+        serial:           idx + 1,
+        source_type:      c.source_type,
+        description:      c.description ?? null,
+        base_amount:      c.base_amount      ? parseFloat(c.base_amount)      : null,
+        commission_rate:  c.commission_rate  ? parseFloat(c.commission_rate)  : null,
+        commission_amount: parseFloat(c.commission_amount),
+        status:           c.status,
+        created_at:       c.created_at,
+    }));
+};
+
+// ── ME settlement preview ─────────────────────────────────────────────────
+
+/**
+ * GET /professionals/:id/me-settlement-preview
+ *
+ * For each society the ME manages: activities, student count.
+ * Admin uses this to see what the ME is owed and to settle per society.
+ */
+exports.getMESettlementPreview = async (professionalId) => {
+    const pid  = Number(professionalId);
+    const rows = await adminRepo.getMESocietySummary(pid);
+    return rows;
+};
+
+/**
+ * GET /professionals/:id/me-societies/:societyId/describe
+ *
+ * Returns student-level breakdown for the "Describe Settlement" modal.
+ * Includes upfront fee paid and 5% ME earns per student.
+ */
+exports.getMESettlementDescribe = async (professionalId, societyId) => {
+    const pid = Number(professionalId);
+    const sid = Number(societyId);
+
+    const rules = await prisma.commission_rules.findMany();
+    const ruleMap = Object.fromEntries(rules.map((r) => [r.rule_key, parseFloat(r.value)]));
+    const meRate  = ruleMap["me_group_admission_rate"] ?? 5;
+
+    const data = await adminRepo.getMESocietySettlementDescribe(sid, pid, meRate);
+    if (!data) throw Object.assign(new Error("SOCIETY_NOT_FOUND"), { status: 404 });
+    return data;
+};
+
+/**
+ * POST /professionals/:id/me-societies/:societyId/settle
+ *
+ * Settle ME commission for a society.
+ * Rules:
+ *  - Minimum 20 students must be enrolled in the society.
+ *  - Commission must not already be in pending/approved/paid state.
+ *  - Releases all on_hold commissions for that society to pending.
+ */
+exports.settleMECommission = async (professionalId, societyId) => {
+    const pid = Number(professionalId);
+    const sid = Number(societyId);
+
+    // Verify professional exists and is ME
+    const professional = await prisma.professionals.findUnique({
+        where:  { id: pid },
+        select: { id: true, profession_type: true, users: { select: { full_name: true } } },
+    });
+    if (!professional) throw Object.assign(new Error("PROFESSIONAL_NOT_FOUND"), { status: 404 });
+    if (professional.profession_type !== "marketing_executive")
+        throw Object.assign(new Error("NOT_A_MARKETING_EXECUTIVE"), { status: 400 });
+
+    // 20-student threshold check
+    const rules = await prisma.commission_rules.findMany();
+    const ruleMap = Object.fromEntries(rules.map((r) => [r.rule_key, parseFloat(r.value)]));
+    const minStudents = ruleMap["me_group_admission_min_students"] ?? 20;
+
+    const studentCount = await adminRepo.countSocietyStudents(sid);
+    if (studentCount < minStudents) {
+        throw Object.assign(
+            new Error(`THRESHOLD_NOT_MET: ${studentCount} of ${minStudents} students enrolled`),
+            { status: 400 }
+        );
+    }
+
+    // Check not already settled
+    const existing = await adminRepo.getMECommissionForSociety(pid, sid);
+    if (existing) throw Object.assign(new Error("ALREADY_SETTLED"), { status: 409 });
+
+    // Release all on_hold commissions for this society → pending
+    const updated = await prisma.commissions.updateMany({
+        where: {
+            professional_id:   pid,
+            professional_type: "marketing_executive",
+            entity_id:         sid,
+            status:            "on_hold",
+        },
+        data: { status: "pending" },
+    });
+
+    return {
+        professional_id:   pid,
+        society_id:        sid,
+        commissions_released: updated.count,
+        message: `${updated.count} commission(s) moved to pending.`,
+    };
+};
+
+// ── Vendor panel ──────────────────────────────────────────────────────────
+
+/**
+ * GET /professionals/:id/vendor-panel
+ *
+ * Returns vendor's listed products and recent orders with breakup:
+ *   base_price, transport, profit_share (90%), settlement amount.
+ */
+exports.getVendorPanel = async (professionalId) => {
+    const pid  = Number(professionalId);
+    const data = await adminRepo.getVendorPanelData(pid);
+    if (!data) throw Object.assign(new Error("VENDOR_NOT_FOUND"), { status: 404 });
+    return data;
+};
+
+/**
+ * POST /professionals/:id/vendor-orders/:orderId/settle
+ *
+ * Settle a vendor's kit order commission: move from pending → pending in payouts
+ * (commission was created at in_progress; this confirms it for payout processing).
+ * Actually the commission is already at "pending" — this endpoint approves it
+ * so it's visible as approved and ready for payment.
+ */
+exports.settleVendorOrder = async (professionalId, orderId) => {
+    const pid = Number(professionalId);
+    const oid = Number(orderId);
+
+    const commission = await adminRepo.getVendorOrderCommission(pid, oid);
+    if (!commission) throw Object.assign(new Error("COMMISSION_NOT_FOUND"), { status: 404 });
+    if (commission.status === "approved" || commission.status === "paid")
+        throw Object.assign(new Error("ALREADY_SETTLED"), { status: 409 });
+
+    await prisma.commissions.update({
+        where: { id: commission.id },
+        data:  { status: "pending" },
+    });
+
+    return {
+        commission_id:    commission.id,
+        professional_id:  pid,
+        order_id:         oid,
+        commission_amount: parseFloat(commission.commission_amount),
+        status:           "pending",
+        message:          "Order settlement moved to pending payout.",
+    };
 };
 
 exports.getVisitingFormByIdAdmin = async (formId) => {

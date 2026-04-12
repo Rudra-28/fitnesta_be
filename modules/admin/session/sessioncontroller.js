@@ -1,14 +1,19 @@
 const service = require("./sessionservice");
 
 const ERROR_MAP = {
-  SESSION_NOT_FOUND: 404,
-  STUDENT_NOT_FOUND: 404,
-  PROFESSIONAL_NOT_FOUND: 404,
-  PROFESSIONAL_CONFLICT: 409,
-  STUDENT_CONFLICT: 409,
-  SESSION_ALREADY_FINAL: 409,
-  INVALID_SESSION_TYPE: 400,
-  MISSING_FIELDS: 400,
+  SESSION_NOT_FOUND:        404,
+  STUDENT_NOT_FOUND:        404,
+  PROFESSIONAL_NOT_FOUND:   404,
+  PROFESSIONAL_CONFLICT:    409,
+  STUDENT_CONFLICT:         409,
+  SESSION_ALREADY_FINAL:    409,
+  INVALID_SESSION_TYPE:     400,
+  MISSING_FIELDS:           400,
+  NO_DAYS_IN_RANGE:         400,
+  NO_PROFESSIONAL:          400,
+  NO_MEMBERSHIP:            400,
+  NO_SESSION_CONFIG:        400,
+  INVALID_DATE:             400,
 };
 
 function handleError(res, err) {
@@ -125,6 +130,37 @@ async function previewSessionGeneration(req, res) {
   }
 }
 
+/**
+ * DELETE /api/v1/admin/sessions/:sessionId
+ * Hard-delete a single session. Blocks deletion of completed sessions.
+ */
+async function deleteSession(req, res) {
+  try {
+    await service.deleteSession(req.params.sessionId);
+    return res.json({ success: true, message: "Session deleted successfully" });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+/**
+ * DELETE /api/v1/admin/sessions/bulk-future
+ * Bulk-delete all upcoming (scheduled) sessions for a student.
+ * Body: { student_id, session_type, from_date? }
+ */
+async function bulkDeleteFutureSessions(req, res) {
+  try {
+    const { student_id, session_type, from_date } = req.body;
+    if (!student_id || !session_type) {
+      return res.status(400).json({ success: false, message: "student_id and session_type are required" });
+    }
+    const result = await service.bulkDeleteFutureSessions({ student_id, session_type, from_date });
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 module.exports = {
   createSession,
   generateIndividualSessions,
@@ -137,4 +173,6 @@ module.exports = {
   getStudentSessionBatches,
   getSessionFeedback,
   previewSessionGeneration,
+  deleteSession,
+  bulkDeleteFutureSessions,
 };

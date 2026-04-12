@@ -396,13 +396,14 @@ exports.previewSettlement = async (professionalId = null) => {
  * @param {Object}        capOverrides    — map of { [assignmentId]: overrideCap } for IC/PT assignments
  *                                          e.g. { 5: 15 } means use 15 as denominator for assignment 5
  */
-exports.confirmSettlement = async (assignmentIds = null, capOverrides = {}) => {
+exports.confirmSettlement = async (assignmentIds = null, capOverrides = {}, professionalId = null) => {
     const rules = await repo.getAllRules();
 
     const assignments = await prisma.trainer_assignments.findMany({
         where: {
             is_active: true,
-            ...(assignmentIds ? { id: { in: assignmentIds } } : {}),
+            ...(professionalId  ? { professional_id: professionalId }   : {}),
+            ...(assignmentIds   ? { id: { in: assignmentIds } }         : {}),
         },
         include: {
             professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },

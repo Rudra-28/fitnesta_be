@@ -186,9 +186,7 @@ exports.getFeeStructures = async (coachingType) => {
     return await prisma.activities.findMany({
         where: {
             is_active: true,
-            fee_structures: {
-                some: coachingType ? { coaching_type: coachingType } : {},
-            },
+            ...(coachingType ? { fee_structures: { some: { coaching_type: coachingType } } } : {}),
         },
         select: {
             id: true,
@@ -223,7 +221,7 @@ exports.getFeeStructures = async (coachingType) => {
 exports.getApprovedSocieties = async () => {
     return await prisma.societies.findMany({
         where: { approval_status: "approved" },
-        select: { id: true, society_name: true, society_category: true, address: true },
+        select: { id: true, society_name: true, society_category: true, custom_category_name: true, address: true },
         orderBy: { society_name: "asc" },
     });
 };
@@ -482,17 +480,33 @@ exports.markTravellingAllowancePaid = async (id) => {
 // ── Fee structure upsert ───────────────────────────────────────────────────
 
 exports.getCustomFeeCategories = async (coachingType) => {
-    const rows = await prisma.fee_structures.findMany({
+    // Names already in fee_structures
+    const feeRows = await prisma.fee_structures.findMany({
         where: {
-            coaching_type:    coachingType,
-            society_category: "custom",
+            coaching_type:        coachingType,
+            society_category:     "custom",
             custom_category_name: { not: null },
         },
-        select: { custom_category_name: true },
+        select:   { custom_category_name: true },
         distinct: ["custom_category_name"],
-        orderBy: { custom_category_name: "asc" },
     });
-    return rows.map((r) => r.custom_category_name);
+
+    // Names from societies registered by ME (may not have fees yet)
+    // Only relevant for group_coaching societies — school custom categories
+    // come from school fee structures only, not society rows.
+    const societyRows = coachingType === "group_coaching"
+        ? await prisma.societies.findMany({
+              where:    { society_category: "custom", custom_category_name: { not: null } },
+              select:   { custom_category_name: true },
+              distinct: ["custom_category_name"],
+          })
+        : [];
+
+    const merged = [
+        ...feeRows.map((r) => r.custom_category_name),
+        ...societyRows.map((r) => r.custom_category_name),
+    ];
+    return [...new Set(merged)].sort();
 };
 
 exports.getFeeStructureById = async (id) => {
@@ -549,6 +563,103 @@ exports.createFeeStructure = async (data) => {
     });
 };
 
+// ── Activity CRUD ─────────────────────────────────────────────────────────
+
+/**
+ * Create an activity and optionally insert fee rows in one transaction.
+ * @param {object}   activityData  - { name, notes, activity_category, image_url }
+ * @param {object[]} fees          - array of fee rows (may be empty)
+ * @param {number}   adminUserId
+ */
+exports.createActivityWithFees = async (activityData, fees = [], adminUserId = null) => {
+    return await prisma.$transaction(async (tx) => {
+        const activity = await tx.activities.create({
+            data: {
+                name:              activityData.name,
+                notes:             activityData.notes             ?? null,
+                activity_category: activityData.activity_category,
+                image_url:         activityData.image_url         ?? null,
+            },
+        });
+
+        for (const f of fees) {
+            const societyCategory = f.society_category === "A+" ? "A_" : (f.society_category ?? null);
+            const standardKey     = f.standard ?? "";
+            await tx.fee_structures.upsert({
+                where: {
+                    activity_id_coaching_type_society_category_custom_category_name_standard_term_months: {
+                        activity_id:          activity.id,
+                        coaching_type:        f.coaching_type,
+                        society_category:     societyCategory     ?? null,
+                        custom_category_name: f.custom_category_name ?? null,
+                        standard:             standardKey,
+                        term_months:          Number(f.term_months),
+                    },
+                },
+                create: {
+                    activity_id:          activity.id,
+                    coaching_type:        f.coaching_type,
+                    society_category:     societyCategory         ?? null,
+                    custom_category_name: f.custom_category_name  ?? null,
+                    standard:             standardKey || null,
+                    term_months:          Number(f.term_months),
+                    total_fee:            f.total_fee,
+                    effective_monthly:    f.effective_monthly      ?? null,
+                    last_edited_by:       adminUserId,
+                    last_edited_at:       new Date(),
+                },
+                update: {
+                    total_fee:            f.total_fee,
+                    effective_monthly:    f.effective_monthly      ?? null,
+                    last_edited_by:       adminUserId,
+                    last_edited_at:       new Date(),
+                },
+            });
+        }
+
+        return activity;
+    });
+};
+
+exports.createActivity = async ({ name, notes, activity_category, image_url }) => {
+    return await prisma.activities.create({
+        data: { name, notes: notes ?? null, activity_category, image_url: image_url ?? null },
+    });
+};
+
+exports.updateActivity = async (id, { name, notes, activity_category, image_url, is_active }) => {
+    return await prisma.activities.update({
+        where: { id },
+        data: {
+            ...(name              !== undefined && { name }),
+            ...(notes             !== undefined && { notes: notes ?? null }),
+            ...(activity_category !== undefined && { activity_category }),
+            ...(image_url         !== undefined && { image_url: image_url ?? null }),
+            ...(is_active         !== undefined && { is_active }),
+        },
+    });
+};
+
+exports.getActivityById = async (id) => {
+    return await prisma.activities.findUnique({
+        where: { id },
+        select: { id: true, name: true, notes: true, activity_category: true, image_url: true, is_active: true },
+    });
+};
+
+exports.activityHasHistory = async (id) => {
+    const [fees, batches, sessions] = await Promise.all([
+        prisma.fee_structures.count({ where: { activity_id: id } }),
+        prisma.batches.count({ where: { activity_id: id } }),
+        prisma.sessions.count({ where: { activity_id: id } }),
+    ]);
+    return fees + batches + sessions > 0;
+};
+
+exports.hardDeleteActivity = async (id) => {
+    return await prisma.activities.delete({ where: { id } });
+};
+
 // ── Admin societies ────────────────────────────────────────────────────────
 
 exports.getAllSocietiesAdmin = async () => {
@@ -558,6 +669,7 @@ exports.getAllSocietiesAdmin = async () => {
             society_unique_id: true,
             society_name: true,
             society_category: true,
+            custom_category_name: true,
             address: true,
             pin_code: true,
             no_of_flats: true,
@@ -593,6 +705,7 @@ exports.getSocietyAdminById = async (id) => {
             society_unique_id: true,
             society_name: true,
             society_category: true,
+            custom_category_name: true,
             address: true,
             pin_code: true,
             no_of_flats: true,
@@ -1544,6 +1657,358 @@ exports.getVisitingFormByIdAdmin = async (formId) => {
                     users:   { select: { id: true, full_name: true, mobile: true, email: true, photo: true } },
                 },
             },
+        },
+    });
+};
+
+// ── Trainer/Teacher enriched settlement preview ───────────────────────────
+
+/**
+ * For each assignment, return extra session counts:
+ *   upcoming_sessions, absent_sessions, attendance_pct
+ * as well as batch details for group coaching.
+ */
+exports.getAssignmentSessionExtras = async (assignment) => {
+    const now = new Date();
+    const {
+        id, professional_id, assignment_type,
+        society_id, school_id, activity_id,
+        assigned_from, last_settled_at,
+    } = assignment;
+
+    const windowStart = last_settled_at ? new Date(last_settled_at) : new Date(assigned_from);
+
+    if (assignment_type === "individual_coaching" || assignment_type === "personal_tutor") {
+        const sessionType = assignment_type === "individual_coaching" ? "individual_coaching" : "personal_tutor";
+        const [completed, upcoming, absent] = await Promise.all([
+            prisma.sessions.count({
+                where: { professional_id, session_type: sessionType, status: "completed",
+                         scheduled_date: { gte: windowStart, lte: now } },
+            }),
+            prisma.sessions.count({
+                where: { professional_id, session_type: sessionType,
+                         status: { in: ["scheduled", "ongoing"] }, scheduled_date: { gte: now } },
+            }),
+            prisma.sessions.count({
+                where: { professional_id, session_type: sessionType, status: "absent",
+                         scheduled_date: { gte: windowStart, lte: now } },
+            }),
+        ]);
+        const total = completed + absent;
+        return { upcoming_sessions: upcoming, absent_sessions: absent,
+                 attendance_pct: total > 0 ? Math.round((completed / total) * 100) : 0, batch_info: null };
+    }
+
+    // Group coaching — look up batch info
+    const batch = await prisma.batches.findFirst({
+        where: {
+            professional_id,
+            ...(society_id  ? { society_id }  : {}),
+            ...(school_id   ? { school_id }   : {}),
+            ...(activity_id ? { activity_id } : {}),
+            is_active: true,
+        },
+        select: {
+            id: true, batch_name: true, days_of_week: true, start_time: true, end_time: true,
+            start_date: true, end_date: true,
+            activities: { select: { name: true } },
+            societies:  { select: { society_name: true } },
+            schools:    { select: { school_name: true } },
+            _count:     { select: { batch_students: true } },
+        },
+    });
+
+    const batchId = batch?.id ?? null;
+
+    const [completed, upcoming, absent] = await Promise.all([
+        prisma.sessions.count({
+            where: {
+                professional_id,
+                ...(batchId ? { batch_id: batchId } : {}),
+                status:         "completed",
+                scheduled_date: { gte: windowStart, lte: now },
+            },
+        }),
+        prisma.sessions.count({
+            where: {
+                professional_id,
+                ...(batchId ? { batch_id: batchId } : {}),
+                status:         { in: ["scheduled", "ongoing"] },
+                scheduled_date: { gte: now },
+            },
+        }),
+        prisma.sessions.count({
+            where: {
+                professional_id,
+                ...(batchId ? { batch_id: batchId } : {}),
+                status:         "absent",
+                scheduled_date: { gte: windowStart, lte: now },
+            },
+        }),
+    ]);
+
+    const total = completed + absent;
+    return {
+        upcoming_sessions: upcoming,
+        absent_sessions:   absent,
+        attendance_pct:    total > 0 ? Math.round((completed / total) * 100) : 0,
+        batch_info: batch ? {
+            batch_id:    batch.id,
+            batch_name:  batch.batch_name,
+            days_of_week: batch.days_of_week,
+            start_time:  batch.start_time,
+            end_time:    batch.end_time,
+            start_date:  batch.start_date,
+            end_date:    batch.end_date,
+            student_count: batch._count.batch_students,
+            activity_name: batch.activities?.name ?? null,
+            entity_name:   batch.societies?.society_name ?? batch.schools?.school_name ?? null,
+        } : null,
+    };
+};
+
+/**
+ * Get commissions for a professional (their Payouts tab).
+ */
+exports.getProfessionalCommissions = async (professionalId) => {
+    return await prisma.commissions.findMany({
+        where: { professional_id: professionalId },
+        orderBy: { created_at: "desc" },
+    });
+};
+
+// ── ME settlement ─────────────────────────────────────────────────────────
+
+/**
+ * Get all societies for ME with activity and student counts.
+ */
+exports.getMESocietySummary = async (meProfessionalId) => {
+    const societies = await prisma.societies.findMany({
+        where: { me_professional_id: meProfessionalId },
+        select: {
+            id:           true,
+            society_name: true,
+            individual_participants: {
+                select: { activity: true, students: { select: { user_id: true } } },
+            },
+        },
+        orderBy: { created_at: "desc" },
+    });
+
+    return societies.map((s) => {
+        const activitySet = new Set(s.individual_participants.map((ip) => ip.activity).filter(Boolean));
+        return {
+            society_id:      s.id,
+            society_name:    s.society_name,
+            activity_count:  activitySet.size,
+            activities:      Array.from(activitySet),
+            student_count:   s.individual_participants.length,
+        };
+    });
+};
+
+/**
+ * Get student breakdown for ME "Describe Settlement" modal.
+ * Returns each student's name, activity, term_months, total amount paid, and 5% ME earns.
+ */
+exports.getMESocietySettlementDescribe = async (societyId, meProfessionalId, meCommissionRate) => {
+    // Verify society belongs to this ME
+    const society = await prisma.societies.findFirst({
+        where: { id: societyId, me_professional_id: meProfessionalId },
+        select: { id: true, society_name: true },
+    });
+    if (!society) return null;
+
+    const participants = await prisma.individual_participants.findMany({
+        where: { society_id: societyId },
+        select: {
+            id:          true,
+            activity:    true,
+            term_months: true,
+            students: {
+                select: {
+                    user_id: true,
+                    users: {
+                        select: {
+                            full_name: true,
+                            payments: {
+                                where:   { service_type: { in: ["activity_purchase_group", "group_coaching"] }, status: "captured" },
+                                select:  { amount: true, term_months: true, captured_at: true },
+                                orderBy: { captured_at: "desc" },
+                                take:    1,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        orderBy: { id: "asc" },
+    });
+
+    let totalSettlement = 0;
+    const rows = participants.map((ip) => {
+        const payment     = ip.students?.users?.payments?.[0] ?? null;
+        const upfrontFee  = payment ? parseFloat(payment.amount) : 0;
+        const termMonths  = ip.term_months ?? payment?.term_months ?? 1;
+        const meEarns     = parseFloat(((upfrontFee * meCommissionRate) / 100).toFixed(2));
+        totalSettlement  += meEarns;
+
+        return {
+            student_name:  ip.students?.users?.full_name ?? null,
+            activity:      ip.activity,
+            term_months:   termMonths,
+            upfront_fee:   upfrontFee,
+            me_earns:      meEarns,
+            captured_at:   payment?.captured_at ?? null,
+        };
+    });
+
+    return {
+        society_id:       societyId,
+        society_name:     society.society_name,
+        commission_rate:  meCommissionRate,
+        students:         rows,
+        total_settlement: parseFloat(totalSettlement.toFixed(2)),
+    };
+};
+
+/**
+ * Count students enrolled in a society (for 20-student threshold check).
+ */
+exports.countSocietyStudents = async (societyId) => {
+    return await prisma.individual_participants.count({ where: { society_id: societyId } });
+};
+
+/**
+ * Check if ME commission for a society is already pending/paid (already settled).
+ */
+exports.getMECommissionForSociety = async (meProfessionalId, societyId) => {
+    return await prisma.commissions.findFirst({
+        where: {
+            professional_id:   meProfessionalId,
+            professional_type: "marketing_executive",
+            source_type:       "group_coaching_society",
+            entity_id:         societyId,
+            status:            { in: ["pending", "approved", "paid"] },
+        },
+    });
+};
+
+// ── Vendor panel ─────────────────────────────────────────────────────────
+
+/**
+ * Get vendor panel data: listed products and recent orders with commission breakup.
+ */
+exports.getVendorPanelData = async (vendorProfessionalId) => {
+    // Find vendor record from professional_id
+    const vendor = await prisma.vendors.findFirst({
+        where: { professional_id: vendorProfessionalId },
+        select: { id: true },
+    });
+    if (!vendor) return null;
+
+    const [products, orders] = await Promise.all([
+        prisma.vendor_products.findMany({
+            where: { vendor_id: vendor.id },
+            select: {
+                id:                    true,
+                product_name:          true,
+                sports_category:       true,
+                price:                 true,
+                selling_price:         true,
+                stock:                 true,
+                description:           true,
+                product_image:         true,
+                within_city_charge:    true,
+                within_state_charge:   true,
+                outside_state_charge:  true,
+                age_groups:            true,
+            },
+            orderBy: { id: "desc" },
+        }),
+        prisma.kit_orders.findMany({
+            where:   { vendor_id: vendor.id, payment_status: "paid" },
+            orderBy: { id: "desc" },
+            take:    20,
+            select: {
+                id:              true,
+                quantity:        true,
+                unit_price:      true,
+                delivery_charge: true,
+                total_amount:    true,
+                order_status:    true,
+                created_at:      true,
+                vendor_products: { select: { id: true, product_name: true, price: true } },
+                users_kit_orders_student_user_idTousers: {
+                    select: { full_name: true },
+                },
+            },
+        }),
+    ]);
+
+    // Fetch commissions for these orders separately (no direct Prisma relation)
+    const orderIds = orders.map((o) => o.id);
+    const commissions = orderIds.length > 0
+        ? await prisma.commissions.findMany({
+            where: {
+                professional_id:   vendorProfessionalId,
+                professional_type: "vendor",
+                source_type:       "kit_order",
+                source_id:         { in: orderIds },
+            },
+            select: { id: true, source_id: true, commission_amount: true, status: true },
+          })
+        : [];
+    const commissionByOrderId = Object.fromEntries(commissions.map((c) => [c.source_id, c]));
+
+    const enrichedOrders = orders.map((o) => {
+        const unitPrice      = parseFloat(o.unit_price);
+        const purchasePrice  = parseFloat(o.vendor_products?.price ?? 0);
+        const deliveryCharge = parseFloat(o.delivery_charge);
+        const qty            = o.quantity;
+
+        const profitMargin  = (unitPrice - purchasePrice) * qty;
+        const profitShare   = parseFloat((profitMargin * 0.90).toFixed(2));
+        const baseAmount    = purchasePrice * qty;
+        const settlement    = parseFloat((baseAmount + deliveryCharge + profitShare).toFixed(2));
+        const commission    = commissionByOrderId[o.id] ?? null;
+
+        return {
+            order_id:          o.id,
+            product_name:      o.vendor_products?.product_name ?? null,
+            buyer_name:        o.users_kit_orders_student_user_idTousers?.full_name ?? null,
+            order_date:        o.created_at,
+            order_status:      o.order_status,
+            base_price:        baseAmount,
+            transport:         deliveryCharge,
+            profit_margin:     profitMargin,
+            profit_share_90:   profitShare,
+            settlement:        settlement,
+            commission_id:     commission?.id ?? null,
+            commission_status: commission?.status ?? null,
+        };
+    });
+
+    return {
+        products: products.map((p) => ({
+            ...p,
+            price:        parseFloat(p.price),
+            selling_price: parseFloat(p.selling_price),
+        })),
+        orders: enrichedOrders,
+    };
+};
+
+/**
+ * Get pending commission id for a kit order for a vendor.
+ */
+exports.getVendorOrderCommission = async (vendorProfessionalId, orderId) => {
+    return await prisma.commissions.findFirst({
+        where: {
+            professional_id:   vendorProfessionalId,
+            professional_type: "vendor",
+            source_type:       "kit_order",
+            source_id:         orderId,
         },
     });
 };

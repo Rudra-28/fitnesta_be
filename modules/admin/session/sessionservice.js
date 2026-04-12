@@ -107,12 +107,15 @@ async function createIndividualSession({
 
 /**
  * Auto-generate sessions for individual_coaching or personal_tutor.
- * Generates up to session_cap sessions from start_date → end_date
+ * Generates ALL eligible sessions from start_date → end_date
  * (end_date = start_date + term_months) on the selected days_of_week.
- * Persists the session config and membership window onto the student record.
+ *
+ * NOTE: session_cap is the commission cap (max 18 sessions/month used for
+ * commission calculation). It is stored on the student record for internal
+ * use — it does NOT limit how many sessions are created here.
  *
  * Body: { session_type, student_id, professional_id, activity_id (IC only),
- *         start_date, term_months, session_cap (max 20),
+ *         start_date, term_months, session_cap (commission cap, max 20),
  *         days_of_week: ["Monday","Wednesday",...], start_time, end_time }
  */
 async function generateIndividualSessions({
@@ -149,7 +152,8 @@ async function generateIndividualSessions({
     throw Object.assign(new Error("Professional not found or not approved"), { code: "PROFESSIONAL_NOT_FOUND" });
   }
 
-  // Resolve cap: use admin-provided cap (max 20), else fall back to commission_rules
+  // Resolve commission cap: used for commission tracking only, NOT for limiting session creation.
+  // Use admin-provided cap (max 20), else fall back to commission_rules.
   let resolvedCap = session_cap ? Math.min(parseInt(session_cap), 20) : null;
   if (!resolvedCap) {
     const capRuleKey = session_type === "personal_tutor"
@@ -169,11 +173,13 @@ async function generateIndividualSessions({
   const endDt = new Date(startDt);
   endDt.setMonth(endDt.getMonth() + parseInt(term_months));
 
-  // Generate up to resolvedCap session dates within the membership window
+  // Generate ALL eligible session dates within the full membership window.
+  // The commission cap (resolvedCap) is stored on the record separately — it does not
+  // limit how many sessions are scheduled for the student.
   const sessionDates = [];
   const current = new Date(startDt);
 
-  while (sessionDates.length < resolvedCap && current <= endDt) {
+  while (current <= endDt) {
     const dayName = DAY_NAMES[current.getDay()];
     if (days_of_week.includes(dayName)) {
       sessionDates.push(new Date(current));
@@ -243,9 +249,10 @@ async function generateIndividualSessions({
 
   return {
     session_type,
-    session_cap:        resolvedCap,
+    commission_cap:     resolvedCap,   // max sessions counted for commission (not a session limit)
     membership_start:   startDt,
     membership_end:     endDt,
+    total_scheduled:    created.length + skipped.length,
     generated:          created.length,
     skipped:            skipped.length,
     skipped_detail:     skipped,
@@ -397,6 +404,52 @@ async function getSession(sessionId) {
   return session;
 }
 
+/**
+ * Hard-delete a single session.
+ * - Cannot delete a completed session (use cancel instead).
+ * - Cascades to session_participants and session_feedback.
+ */
+async function deleteSession(sessionId) {
+  const session = await repo.getSessionById(sessionId);
+  if (!session) throw Object.assign(new Error("Session not found"), { code: "SESSION_NOT_FOUND" });
+
+  if (session.status === "completed") {
+    throw Object.assign(
+      new Error("Cannot delete a completed session. Cancel it instead if needed."),
+      { code: "SESSION_ALREADY_FINAL" }
+    );
+  }
+
+  return repo.deleteSession(sessionId);
+}
+
+/**
+ * Bulk delete all upcoming (scheduled) sessions for a student.
+ * Useful when a student's full schedule needs to be wiped (e.g., re-generating).
+ *
+ * Body: { student_id, session_type, from_date (optional, defaults to today) }
+ */
+async function bulkDeleteFutureSessions({ student_id, session_type, from_date }) {
+  if (!["personal_tutor", "individual_coaching"].includes(session_type)) {
+    throw Object.assign(new Error("session_type must be personal_tutor or individual_coaching"), { code: "INVALID_SESSION_TYPE" });
+  }
+  if (!student_id) {
+    throw Object.assign(new Error("student_id is required"), { code: "MISSING_FIELDS" });
+  }
+
+  // Default from_date to today so we never delete past sessions
+  const resolvedFromDate = from_date ? new Date(from_date) : new Date();
+  resolvedFromDate.setHours(0, 0, 0, 0);
+
+  const deleted = await repo.bulkDeleteFutureSessions({
+    student_id,
+    session_type,
+    from_date: resolvedFromDate,
+  });
+
+  return { deleted_count: deleted };
+}
+
 async function listSessions(filters) {
   return repo.listSessions(filters);
 }
@@ -461,7 +514,10 @@ async function getStudentSessionBatches(studentId) {
  * return a month-by-month breakdown of how many sessions would be created —
  * without writing anything to the database.
  *
- * Response: { term_months, session_cap, total_sessions, months: [{ month_label, month_number, start, end, sessions_count }] }
+ * Sessions are generated for the FULL term (not capped at commission_cap).
+ * commission_cap is returned separately for informational purposes.
+ *
+ * Response: { term_months, commission_cap, total_sessions, months: [{ month_label, month_number, start, end, sessions_count }] }
  */
 async function previewSessionGeneration({
   session_type,
@@ -490,21 +546,23 @@ async function previewSessionGeneration({
     term_months = full?.term_months ?? 1;
   }
 
-  // Load session cap from commission_rules
+  // Load commission cap from commission_rules (for informational display only — does NOT limit sessions)
   const capRuleKey = session_type === "personal_tutor"
     ? "personal_tutor_sessions_cap"
     : "individual_coaching_sessions_cap";
   const capRule = await prisma.commission_rules.findUnique({ where: { rule_key: capRuleKey } });
-  const session_cap = capRule ? parseInt(capRule.value) : 18;
+  const commission_cap = capRule ? parseInt(capRule.value) : 18;
 
   const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const startDt   = new Date(start_date);
   startDt.setHours(0, 0, 0, 0);
 
-  // Build per-month breakdown
+  const endDt = new Date(startDt);
+  endDt.setMonth(endDt.getMonth() + parseInt(term_months));
+
+  // Build per-month breakdown across the FULL term — no cap applied to session count
   const months = [];
   let totalSessions = 0;
-  let remaining = session_cap;
 
   for (let m = 0; m < term_months; m++) {
     const monthStart = new Date(startDt);
@@ -512,15 +570,12 @@ async function previewSessionGeneration({
 
     const monthEnd = new Date(monthStart);
     monthEnd.setMonth(monthEnd.getMonth() + 1);
-    // Last day of that month window (exclusive)
-    const windowEnd = m === term_months - 1 ? monthEnd : monthEnd;
 
     let count = 0;
     const cur = new Date(monthStart);
-    while (cur < windowEnd && remaining > 0) {
+    while (cur < monthEnd) {
       if (days_of_week.includes(DAY_NAMES[cur.getDay()])) {
         count++;
-        remaining--;
       }
       cur.setDate(cur.getDate() + 1);
     }
@@ -534,16 +589,15 @@ async function previewSessionGeneration({
       sessions_count: count,
     });
     totalSessions += count;
-    if (remaining <= 0) break;
   }
 
   return {
     session_type,
     term_months,
-    session_cap,
+    commission_cap,   // max sessions counted for commission — not a scheduling limit
     total_sessions: totalSessions,
     membership_start: startDt.toISOString().slice(0, 10),
-    membership_end:   (() => { const e = new Date(startDt); e.setMonth(e.getMonth() + term_months); return e.toISOString().slice(0, 10); })(),
+    membership_end:   endDt.toISOString().slice(0, 10),
     months,
   };
 }
@@ -564,4 +618,6 @@ module.exports = {
   getStudentSessionBatches,
   getSessionFeedback,
   previewSessionGeneration,
+  deleteSession,
+  bulkDeleteFutureSessions,
 };

@@ -12,6 +12,9 @@ exports.validateMeSociety = (data) => {
     if (!data.societyCategory)
         errors.push("Society category is required");
 
+    if (data.societyCategory === "custom" && !data.customCategoryName?.trim())
+        errors.push("Custom category name is required when society category is custom");
+
     if (!data.address || data.address.trim().length < 5)
         errors.push("Address is required");
 

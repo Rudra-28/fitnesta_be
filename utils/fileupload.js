@@ -25,3 +25,28 @@ const upload = multer({
 });
 
 module.exports = upload;
+
+// ── Activity images (jpg/png only, stored in fitnesta/activities) ─────────
+const activityImageStorage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => ({
+    folder:           "fitnesta/activities",
+    resource_type:    "image",
+    allowed_formats:  ["jpg", "jpeg", "png"],
+    public_id:        `activity-${Date.now()}-${file.originalname.replace(/\s+/g, "_").replace(/[^\w.-]/g, "")}`,
+  }),
+});
+
+const activityImageFilter = (req, file, cb) => {
+  const allowed = /jpeg|jpg|png/;
+  if (allowed.test(file.originalname.split(".").pop().toLowerCase()) && allowed.test(file.mimetype)) {
+    return cb(null, true);
+  }
+  cb(new Error("Only JPG and PNG files are allowed for activity images"));
+};
+
+module.exports.uploadActivityImage = multer({
+  storage:    activityImageStorage,
+  limits:     { fileSize: 2 * 1024 * 1024 },
+  fileFilter: activityImageFilter,
+});

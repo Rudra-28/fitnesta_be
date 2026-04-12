@@ -5,6 +5,7 @@ const { superAdminGuard } = require("./adminmiddleware");
 const controller = require("./admincontroller");
 const sessionController = require("./session/sessioncontroller");
 const upload = require("../../utils/fileupload");
+const { uploadActivityImage } = require("../../utils/fileupload");
 
 const docUpload = upload.fields([{ name: "activityAgreementPdf", maxCount: 1 }]);
 const handleUpload = (req, res, next) => {
@@ -37,11 +38,15 @@ router.post("/reject/:id", controller.reject);                             // PO
 router.get("/professionals", controller.listProfessionals);                // GET /api/v1/admin/professionals?type=trainer
 router.get("/activities/:activityId/professionals", controller.getProfessionalsByActivity); // GET /api/v1/admin/activities/:activityId/professionals?type=trainer|teacher
 
-// ── Activities (for batch creation dropdown) ──────────────────────────────
-router.get("/activities", controller.listActivities);                              // GET /api/v1/admin/activities?coaching_type=group_coaching
+// ── Activities ────────────────────────────────────────────────────────────
+router.get("/activities",      controller.listActivities);                                                         // GET    /api/v1/admin/activities?coaching_type=group_coaching
+router.post("/activities",     superAdminGuard, uploadActivityImage.single("image"), controller.createActivity);  // POST   /api/v1/admin/activities
+router.put("/activities/:id",  superAdminGuard, uploadActivityImage.single("image"), controller.updateActivity);  // PUT    /api/v1/admin/activities/:id
+router.delete("/activities/:id", superAdminGuard, controller.deleteActivity);                                     // DELETE /api/v1/admin/activities/:id?force=true
 
 // ── Societies ─────────────────────────────────────────────────────────────
 router.get("/societies", controller.getAllSocietiesAdmin);                          // GET  /api/v1/admin/societies
+router.get("/societies/approved", controller.getApprovedSocieties);                 // GET  /api/v1/admin/societies/approved (for batch creation)
 router.get("/societies/:id", controller.getSocietyAdminById);                      // GET  /api/v1/admin/societies/:id
 router.post("/societies", handleUpload, controller.adminRegisterSociety);           // POST /api/v1/admin/societies
 
@@ -154,6 +159,44 @@ router.get("/legal", controller.getLegalContent);                          // GE
 router.get("/settlement/preview", controller.getSettlementPreview);                        // GET  /api/v1/admin/settlement/preview?professional_id=5 (optional)
 router.post("/settlement/confirm", controller.confirmSettlement);                          // POST /api/v1/admin/settlement/confirm  { assignment_ids: [1,2,3] } (optional — omit to settle all)
 router.get("/settlement/unsettled-count", controller.getUnsettledCount);                   // GET  /api/v1/admin/settlement/unsettled-count  (dashboard badge)
+
+// ── Per-professional "Sessions & Settle" tab  ─────────────────────────────
+// GET  /api/v1/admin/professionals/:professionalId/settlement-preview
+//   → Returns group-coaching batches + individual students with trainer_earns amount.
+// POST /api/v1/admin/professionals/:professionalId/settle
+//   → "Settle Amount" button: creates commission records at status=pending.
+//      Body (all optional): { assignment_ids: [1,2], cap_overrides: { "5": 15 } }
+router.get("/professionals/:professionalId/settlement-preview", controller.getSessionsAndSettlePreview);
+router.post("/professionals/:professionalId/settle", controller.settleAmountForProfessional);
+
+// ── Enriched Sessions & Settle (trainer / teacher) ────────────────────────
+// GET  /api/v1/admin/professionals/:professionalId/sessions-settle
+//   → Full session breakdown: batch info, completed/upcoming/absent counts, trainer_earns.
+router.get("/professionals/:professionalId/sessions-settle", controller.getSessionsSettle);
+
+// ── Professional Payouts tab ──────────────────────────────────────────────
+// GET /api/v1/admin/professionals/:professionalId/payouts
+//   → All commission records for this professional (pending_payout total + list).
+router.get("/professionals/:professionalId/payouts", controller.getProfessionalPayouts);
+
+// ── ME Settlement ─────────────────────────────────────────────────────────
+// GET  /api/v1/admin/professionals/:professionalId/me-settlement-preview
+//   → All societies with activity count and student count.
+// GET  /api/v1/admin/professionals/:professionalId/me-societies/:societyId/describe
+//   → Student breakdown for "Describe Settlement" modal.
+// POST /api/v1/admin/professionals/:professionalId/me-societies/:societyId/settle
+//   → Settle ME commission for a society (validates 20-student threshold).
+router.get("/professionals/:professionalId/me-settlement-preview", controller.getMESettlementPreview);
+router.get("/professionals/:professionalId/me-societies/:societyId/describe", controller.getMESettlementDescribe);
+router.post("/professionals/:professionalId/me-societies/:societyId/settle", controller.settleMECommission);
+
+// ── Vendor panel ──────────────────────────────────────────────────────────
+// GET  /api/v1/admin/professionals/:professionalId/vendor-panel
+//   → Listed products + recent orders with base/transport/profit-share breakup.
+// POST /api/v1/admin/professionals/:professionalId/vendor-orders/:orderId/settle
+//   → Move a kit order's commission to pending payout.
+router.get("/professionals/:professionalId/vendor-panel", controller.getVendorPanel);
+router.post("/professionals/:professionalId/vendor-orders/:orderId/settle", controller.settleVendorOrder);
 
 // ── Visiting Forms ────────────────────────────────────────────────────────────
 // GET /api/v1/admin/visiting-forms?meId=&placeType=society|school|organisation&permissionStatus=granted|not_granted|follow_up&from=&to=&page=&limit=

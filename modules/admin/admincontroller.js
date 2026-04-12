@@ -157,6 +157,15 @@ exports.getAvailableProfessionals = async (req, res) => {
 
 exports.getApprovedSocieties = async (req, res) => {
     try {
+        const data = await service.getApprovedSocieties();
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getAllSocietiesAdmin = async (req, res) => {
+    try {
         const data = await service.getAllSocietiesAdmin();
         res.json({ success: true, count: data.length, data });
     } catch (err) {
@@ -166,14 +175,21 @@ exports.getApprovedSocieties = async (req, res) => {
 
 exports.getApprovedSchools = async (req, res) => {
     try {
-        const data = await service.getAllSchoolsAdmin();
+        const data = await service.getApprovedSchools();
         res.json({ success: true, count: data.length, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
-exports.getAllSocietiesAdmin = exports.getApprovedSocieties;
+exports.getAllSchoolsAdmin = async (req, res) => {
+    try {
+        const data = await service.getAllSchoolsAdmin();
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
 
 exports.getSocietyAdminById = async (req, res) => {
     try {
@@ -413,6 +429,82 @@ exports.getUnsettledCount = async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 };
+
+/**
+ * GET /api/v1/admin/professionals/:professionalId/settlement-preview
+ *
+ * Returns the "Sessions & Settle" tab data for one professional.
+ * Each item represents one assignment (group-coaching batch or individual/tutor student)
+ * with the computed trainer_earns ready to be settled.
+ */
+exports.getSessionsAndSettlePreview = async (req, res) => {
+    try {
+        const { professionalId } = req.params;
+        if (!professionalId) {
+            return res.status(400).json({ success: false, error: "professionalId is required" });
+        }
+        const data = await service.getSessionsAndSettlePreview(Number(professionalId));
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+/**
+ * POST /api/v1/admin/professionals/:professionalId/settle
+ *
+ * "Settle Amount" button.
+ * Settles all (or specified) active assignments for this professional.
+ * Creates commissions records at status = "pending" → visible in trainer Payouts tab.
+ *
+ * Body (optional):
+ *   {
+ *     assignment_ids: [1, 2],      // omit to settle all active assignments
+ *     cap_overrides:  { "5": 15 }  // override session denominator for specific assignments
+ *   }
+ */
+exports.settleAmountForProfessional = async (req, res) => {
+    try {
+        const { professionalId } = req.params;
+        if (!professionalId) {
+            return res.status(400).json({ success: false, error: "professionalId is required" });
+        }
+
+        const assignmentIds = Array.isArray(req.body.assignment_ids)
+            ? req.body.assignment_ids.map(Number)
+            : null;
+
+        const rawOverrides = req.body.cap_overrides ?? {};
+        const capOverrides = Object.fromEntries(
+            Object.entries(rawOverrides).map(([k, v]) => [Number(k), Number(v)])
+        );
+
+        const result = await service.settleAmountForProfessional(
+            Number(professionalId),
+            assignmentIds,
+            capOverrides
+        );
+
+        auditLog(req, "settle_amount_professional", {
+            entity_type: "settlement",
+            entity_id:   Number(professionalId),
+            details:     {
+                professional_id:  Number(professionalId),
+                assignment_ids:   assignmentIds ?? "all",
+                settled_count:    result.settled_count,
+                skipped_count:    result.skipped_count,
+            },
+        });
+
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+
 
 exports.listTrainerAssignments = async (req, res) => {
     try {
@@ -817,6 +909,51 @@ exports.listActivities = async (req, res) => {
     }
 };
 
+exports.createActivity = async (req, res) => {
+    try {
+        const image_url = req.file?.path ?? null;
+        const adminUserId = req.user?.userId ?? null;
+        // fee_structures may arrive as a JSON string from multipart form
+        let fee_structures = req.body.fee_structures;
+        if (typeof fee_structures === "string") {
+            try { fee_structures = JSON.parse(fee_structures); } catch { fee_structures = undefined; }
+        }
+        const data = await service.createActivity({ ...req.body, image_url, fee_structures, adminUserId });
+        auditLog(req, "create_activity", { entity_type: "activity", entity_id: data.id });
+        res.status(201).json({ success: true, data });
+    } catch (err) {
+        const status = ["ACTIVITY_NAME_REQUIRED", "ACTIVITY_CATEGORY_REQUIRED", "INVALID_FEE_STRUCTURE"].includes(err.message) ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.updateActivity = async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        const image_url = req.file?.path ?? undefined;
+        const data = await service.updateActivity(id, { ...req.body, ...(image_url !== undefined && { image_url }) });
+        auditLog(req, "update_activity", { entity_type: "activity", entity_id: id });
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.message === "ACTIVITY_NOT_FOUND" ? 404 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.deleteActivity = async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        const force = req.query.force === "true";
+        await service.deleteActivity(id, force);
+        auditLog(req, "delete_activity", { entity_type: "activity", entity_id: id, details: { force } });
+        res.json({ success: true });
+    } catch (err) {
+        const status = err.message === "ACTIVITY_NOT_FOUND" ? 404
+                     : err.message === "ACTIVITY_HAS_HISTORY" ? 409 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 exports.reject = async (req, res) => {
     try {
         const result = await service.rejectRegistration(
@@ -1060,6 +1197,144 @@ exports.getVisitingFormByIdAdmin = async (req, res) => {
     try {
         const data = await service.getVisitingFormByIdAdmin(req.params.id);
         res.json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Enriched Sessions & Settle (trainer / teacher) ─────────────────────────
+
+/**
+ * GET /api/v1/admin/professionals/:professionalId/sessions-settle
+ *
+ * Returns all active assignments with full session breakdown:
+ *   batch info, session cycle, completed/upcoming/absent counts,
+ *   commission rate, and trainer_earns ready to settle.
+ */
+exports.getSessionsSettle = async (req, res) => {
+    try {
+        const { professionalId } = req.params;
+        const data = await service.getEnrichedSettlementPreview(Number(professionalId));
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+/**
+ * GET /api/v1/admin/professionals/:professionalId/payouts
+ *
+ * Returns all commission records for a professional (their Payouts tab).
+ */
+exports.getProfessionalPayouts = async (req, res) => {
+    try {
+        const { professionalId } = req.params;
+        const data = await service.getProfessionalPayouts(Number(professionalId));
+        const pending = data.filter((c) => c.status === "pending" || c.status === "approved")
+                            .reduce((s, c) => s + c.commission_amount, 0);
+        res.json({ success: true, pending_payout: parseFloat(pending.toFixed(2)), count: data.length, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── ME settlement ──────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/professionals/:professionalId/me-settlement-preview
+ *
+ * Returns all societies for the ME with activity count and student count.
+ */
+exports.getMESettlementPreview = async (req, res) => {
+    try {
+        const { professionalId } = req.params;
+        const data = await service.getMESettlementPreview(Number(professionalId));
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+/**
+ * GET /api/v1/admin/professionals/:professionalId/me-societies/:societyId/describe
+ *
+ * Returns student breakdown for "Describe Settlement" modal:
+ *   student name, activity, months, upfront fee, ME earns (5%).
+ */
+exports.getMESettlementDescribe = async (req, res) => {
+    try {
+        const { professionalId, societyId } = req.params;
+        const data = await service.getMESettlementDescribe(Number(professionalId), Number(societyId));
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+/**
+ * POST /api/v1/admin/professionals/:professionalId/me-societies/:societyId/settle
+ *
+ * Settle ME commission for a society.
+ * Validates 20-student threshold, then moves on_hold commissions to pending.
+ */
+exports.settleMECommission = async (req, res) => {
+    try {
+        const { professionalId, societyId } = req.params;
+        const result = await service.settleMECommission(Number(professionalId), Number(societyId));
+
+        auditLog(req, "settle_me_commission", {
+            entity_type: "me_settlement",
+            entity_id:   Number(professionalId),
+            details:     { society_id: Number(societyId), commissions_released: result.commissions_released },
+        });
+
+        res.json({ success: true, ...result });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Vendor panel ───────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/professionals/:professionalId/vendor-panel
+ *
+ * Returns vendor's listed products and recent orders with full commission breakup.
+ */
+exports.getVendorPanel = async (req, res) => {
+    try {
+        const { professionalId } = req.params;
+        const data = await service.getVendorPanel(Number(professionalId));
+        res.json({ success: true, data });
+    } catch (err) {
+        const status = err.status || 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+/**
+ * POST /api/v1/admin/professionals/:professionalId/vendor-orders/:orderId/settle
+ *
+ * Settle a specific kit order commission — moves it to pending for payout processing.
+ */
+exports.settleVendorOrder = async (req, res) => {
+    try {
+        const { professionalId, orderId } = req.params;
+        const result = await service.settleVendorOrder(Number(professionalId), Number(orderId));
+
+        auditLog(req, "settle_vendor_order", {
+            entity_type: "vendor_settlement",
+            entity_id:   Number(professionalId),
+            details:     { order_id: Number(orderId), commission_id: result.commission_id },
+        });
+
+        res.json({ success: true, ...result });
     } catch (err) {
         const status = err.status || 500;
         res.status(status).json({ success: false, error: err.message });

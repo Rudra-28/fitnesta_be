@@ -48,7 +48,7 @@ exports.getActivitiesByCoachingType = async (coachingType, societyCategory = nul
 exports.getAllActiveActivities = async () => {
     return await prisma.activities.findMany({
         where: { is_active: true },
-        select: { id: true, name: true, notes: true },
+        select: { id: true, name: true, notes: true, activity_category: true, image_url: true },
         orderBy: { id: "asc" },
     });
 };
