@@ -21,6 +21,8 @@ exports.insertUser = async (tx, data) => {
 };
 
 exports.insertStudent = async (tx, userId, type) => {
+    const existing = await tx.students.findFirst({ where: { user_id: userId }, select: { id: true } });
+    if (existing) return existing.id;
     const student = await tx.students.create({
         data: { user_id: userId, student_type: type },
     });

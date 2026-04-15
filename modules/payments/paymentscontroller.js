@@ -10,6 +10,7 @@ const ptAddonService         = require("../student/subjectaddon/subjectaddonserv
 const ssService              = require("../student/school-student/schoolstudentservice");
 const kitOrderService        = require("../student/kitorder/kitorderservice");
 const activityPurchaseService = require("../student/activitypurchase/activitypurchaseservice");
+const subjectPurchaseService  = require("../student/subjectpurchase/subjectpurchaseservice");
 const commissionRepo         = require("../commissions/commissionrepo");
 
 const SERVICE_MAP = {
@@ -22,6 +23,7 @@ const SERVICE_MAP = {
     activity_purchase_individual:    activityPurchaseService,
     activity_purchase_group:         activityPurchaseService,
     activity_purchase_school:        activityPurchaseService,
+    subject_purchase:                subjectPurchaseService,
 };
 
 /**
@@ -84,7 +86,37 @@ exports.verifyPayment = async (req, res) => {
             receipt = await paymentsService.getReceipt(temp_uuid, userId);
         } catch (_) { /* non-fatal — Flutter can fetch via GET /receipt/:temp_uuid */ }
 
-        if (userId) sendNotification(userId, "Payment Successful", "Your registration is confirmed.", { type: "payment_confirmed", temp_uuid });
+        if (userId) {
+            let notificationBody = "Your registration is confirmed.";
+            
+            try {
+                const activityIds = formDataParsed?.payment?.activity_ids;
+                const termMonths = formDataParsed?.payment?.term_months;
+                
+                if (activityIds && Array.isArray(activityIds) && activityIds.length > 0 && termMonths) {
+                    const prisma = require("../../config/prisma");
+                    const activities = await prisma.activities.findMany({
+                        where: { id: { in: activityIds.map(Number) } },
+                        select: { name: true }
+                    });
+                    
+                    if (activities.length > 0) {
+                        const activityNames = activities.map(a => a.name).join(", ");
+                        notificationBody = `You are now part of the ${activityNames} activity for ${termMonths} months.`;
+                    }
+                }
+            } catch(e) {
+                console.error("Failed to personalize payment notification:", e.message);
+            }
+
+            const fcmToken = formDataParsed?.fcmToken || formDataParsed?.fcm_token || null;
+            if (fcmToken) {
+                const { sendNotificationToToken } = require("../../utils/fcm");
+                sendNotificationToToken(fcmToken, "Payment Successful", notificationBody, { type: "payment_confirmed", temp_uuid });
+            } else {
+                sendNotification(userId, "Payment Successful", notificationBody, { type: "payment_confirmed", temp_uuid });
+            }
+        }
 
         return res.status(200).json({ success: true, message: "Payment verified and registration finalized", receipt });
     } catch (error) {

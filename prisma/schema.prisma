@@ -239,8 +239,11 @@ model school_students {
   address      String?   @db.Text
   activities   String?   @db.Text
   kit_type     String?   @db.Text
-  term_months  Int       @default(9) @db.TinyInt
-  created_at   DateTime? @default(now()) @db.Timestamp(0)
+  term_months             Int       @default(9) @db.TinyInt
+  membership_start_date   DateTime? @db.Date
+  membership_end_date     DateTime? @db.Date
+  is_active               Boolean   @default(true)
+  created_at              DateTime? @default(now()) @db.Timestamp(0)
   students     students  @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_1")
   schools      schools   @relation(fields: [school_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "school_students_ibfk_2")
 
@@ -764,6 +767,7 @@ model batches {
   start_date        DateTime                  @db.Date
   end_date          DateTime                  @db.Date
   capacity          Int                       @default(25) @db.TinyInt
+  session_cap       Int?                      @db.TinyInt
   cycle_start_date  DateTime?                 @db.Date
   cycle_end_date    DateTime?                 @db.Date
   last_settled_at   DateTime?                 @db.Timestamp(0)

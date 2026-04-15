@@ -1,19 +1,70 @@
 const service = require("./authservice");
 const repo = require("./authrepository");
+const { getAdmin } = require("../../config/firebase");
 
+// ── Pre-check: is this mobile number a registered admin? ─────────────────────
+exports.checkAdmin = async (req, res) => {
+  try {
+    const { mobile } = req.body;
+    if (!mobile) {
+      return res.status(400).json({ success: false, message: "mobile is required" });
+    }
+
+    const cleanMobile = mobile.replace("+91", "").trim();
+    const user = await repo.findUserByMobile(cleanMobile);
+
+    if (!user || user.role !== "admin") {
+      return res.status(404).json({ success: false, error_code: "USER_NOT_FOUND", message: "No admin account found with this number." });
+    }
+    if (user.approval_status === "pending") {
+      return res.status(403).json({ success: false, error_code: "APPROVAL_PENDING" });
+    }
+    if (user.approval_status === "rejected") {
+      return res.status(403).json({ success: false, error_code: "REGISTRATION_REJECTED" });
+    }
+    if (user.is_suspended) {
+      return res.status(403).json({ success: false, error_code: "ACCOUNT_SUSPENDED" });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("checkAdmin error:", err.message);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ── Login: verify Firebase phone idToken → issue our own JWT ──────────────────
 exports.login = async (req, res) => {
   try {
-    const { mobile, role } = req.body;
+    const { idToken, role } = req.body;
 
-    if (!mobile || !role) {
+    if (!idToken || !role) {
       return res.status(400).json({
         success: false,
-        message: "mobile and role are required fields."
+        message: "idToken and role are required fields."
       });
     }
 
-    console.log("REQ BODY:", req.body);
+    // 1. Verify the Firebase ID token produced after OTP confirmation
+    const firebaseAdmin = getAdmin();
+    let decoded;
+    try {
+      decoded = await firebaseAdmin.auth().verifyIdToken(idToken);
+    } catch (_) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired OTP session. Please try again."
+      });
+    }
 
+    // 2. Extract the verified phone number (+919876543210 → 9876543210)
+    const phone = decoded.phone_number;
+    if (!phone) {
+      return res.status(400).json({ success: false, message: "No phone number in token." });
+    }
+    const mobile = phone.replace("+91", "").trim();
+
+    // 3. Standard admin lookup + JWT issuance (existing logic)
     const result = await service.loginUser(mobile, role);
 
     res.status(200).json({
@@ -23,37 +74,29 @@ exports.login = async (req, res) => {
     });
 
   } catch (error) {
-    // Map specific errors to appropriate Status Codes
     let statusCode = 500;
     let message = "Something went wrong during login. Please try again later.";
 
-    if (error.message === "MISSING_PHONE_NUMBER") {
-      statusCode = 400;
-      message = "No phone number is associated with this Firebase account.";
-    } else if (error.message === "USER_NOT_FOUND") {
-      statusCode = 404;
-      message = "No account found with this mobile number.";
+    if (error.message === "USER_NOT_FOUND") {
+      statusCode = 404; message = "No account found with this mobile number.";
     } else if (error.message === "ROLE_MISMATCH") {
-      statusCode = 403;
-      message = `You are not registered as a ${req.body.role || "this role"}.`;
+      statusCode = 403; message = `You are not registered as a ${req.body.role || "this role"}.`;
     } else if (error.message === "PROFESSIONAL_DATA_MISMATCH" || error.message === "STUDENT_DATA_MISMATCH") {
-      statusCode = 403;
-      message = "Data mismatch: Registration incomplete.";
+      statusCode = 403; message = "Data mismatch: Registration incomplete.";
     } else if (error.message === "APPROVAL_PENDING") {
-      statusCode = 403;
-      message = "Your registration is pending admin approval. You will be notified once approved.";
+      statusCode = 403; message = "Your registration is pending admin approval.";
     } else if (error.message === "REGISTRATION_REJECTED") {
-      statusCode = 403;
-      message = "Your registration was rejected. Please contact support.";
+      statusCode = 403; message = "Your registration was rejected. Please contact support.";
     } else if (error.message === "ACCOUNT_SUSPENDED") {
-      statusCode = 403;
-      message = "Your account has been suspended. Please contact support.";
+      statusCode = 403; message = "Your account has been suspended. Please contact support.";
+    } else if (error.message === "ADMIN_RECORD_NOT_FOUND") {
+      statusCode = 403; message = "Admin record not found. Please contact super-admin.";
     }
 
     res.status(statusCode).json({
       success: false,
-      message: message,
-      error_code: error.message // Useful for frontend debugging
+      message,
+      error_code: error.message
     });
   }
 };

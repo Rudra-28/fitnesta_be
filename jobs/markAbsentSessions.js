@@ -9,7 +9,7 @@ const prisma = require("../config/prisma");
  * not punch in, so the session is marked absent from their perspective.
  */
 function startMarkAbsentJob() {
-  cron.schedule("* * * * *", async () => {
+  cron.schedule("*/5 * * * *", async () => {
     try {
       const now = new Date();
 
@@ -17,9 +17,23 @@ function startMarkAbsentJob() {
       // (same epoch base Prisma uses for @db.Time — 1970-01-01)
       const cutoff = new Date(1970, 0, 1, now.getHours(), now.getMinutes() - 15, now.getSeconds());
 
-      // Today's date (midnight) for date comparison
+      // Today's date (midnight)
       const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const todayEnd   = new Date(todayStart);
+
+      // Mark ALL past-date scheduled sessions as absent (no time check needed — entire day passed)
+      const pastResult = await prisma.sessions.updateMany({
+        where: {
+          status:         "scheduled",
+          scheduled_date: { lt: todayStart },
+        },
+        data: { status: "absent", updated_at: now },
+      });
+      if (pastResult.count > 0) {
+        console.log(`[absent-job] Marked ${pastResult.count} past-date session(s) as absent`);
+      }
+
+      // Mark today's sessions where start_time + 15 min has already passed
+      const todayEnd = new Date(todayStart);
       todayEnd.setDate(todayEnd.getDate() + 1);
 
       const result = await prisma.sessions.updateMany({

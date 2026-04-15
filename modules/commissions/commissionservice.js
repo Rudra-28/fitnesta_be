@@ -48,7 +48,7 @@ const repo   = require("./commissionrepo");
  * @param {string|null} societyCategory
  * @param {number|null} termMonthsOverride — pass participant.term_months directly to skip DB lookup
  */
-async function resolveEffectiveMonthly(studentUserId, serviceType, activityName, societyCategory, termMonthsOverride = null) {
+async function resolveEffectiveMonthly(studentUserId, serviceType, activityName, societyCategory, termMonthsOverride = null, customCategoryName = null) {
     let termMonths = termMonthsOverride;
     let totalFee   = null;
 
@@ -101,8 +101,9 @@ async function resolveEffectiveMonthly(studentUserId, serviceType, activityName,
         where: {
             coaching_type: coachingType,
             term_months:   termMonths,
-            ...(societyCategory ? { society_category: societyCategory } : {}),
-            ...(activityName    ? { activities: { name: activityName } } : {}),
+            ...(societyCategory     ? { society_category:     societyCategory     } : {}),
+            ...(customCategoryName  ? { custom_category_name: customCategoryName  } : {}),
+            ...(activityName        ? { activities: { name: activityName }         } : {}),
         },
         select: { effective_monthly: true, total_fee: true },
     });
@@ -349,6 +350,62 @@ exports.recordSchoolTrainerAssignment = async (trainerProfessionalId, schoolId, 
     }
 };
 
+/**
+ * Ensure a batch-style settlement assignment exists for a professional.
+ * Used when a single batch session is reassigned without changing the batch owner.
+ */
+exports.ensureBatchProfessionalAssignment = async ({
+    professionalId,
+    professionalType,
+    batchType,
+    societyId = null,
+    schoolId = null,
+    activityId = null,
+    assignedFrom = new Date(),
+}) => {
+    try {
+        const assignmentType = batchType === "school_student"
+            ? "group_coaching_school"
+            : "group_coaching_society";
+
+        const existing = await prisma.trainer_assignments.findFirst({
+            where: {
+                professional_id: professionalId,
+                assignment_type: assignmentType,
+                society_id:      societyId,
+                school_id:       schoolId,
+                activity_id:     activityId,
+                is_active:       true,
+            },
+            select: { id: true },
+        });
+        if (existing) return existing;
+
+        let sessionsAllocated = null;
+        if (assignmentType === "group_coaching_school") {
+            const rules = await repo.getAllRules();
+            sessionsAllocated = parseInt(rules.trainer_group_school_sessions_cap?.value ?? 18);
+        }
+
+        return await prisma.trainer_assignments.create({
+            data: {
+                professional_id:    professionalId,
+                professional_type:  professionalType,
+                assignment_type:    assignmentType,
+                society_id:         societyId,
+                school_id:          schoolId,
+                activity_id:        activityId,
+                sessions_allocated: sessionsAllocated,
+                assigned_from:      assignedFrom,
+                is_active:          true,
+            },
+        });
+    } catch (err) {
+        console.error("[CommissionService] ensureBatchProfessionalAssignment error:", err.message);
+        return null;
+    }
+};
+
 // ── Settlement ─────────────────────────────────────────────────────────────
 
 /**
@@ -363,12 +420,11 @@ exports.previewSettlement = async (professionalId = null) => {
 
     const assignments = await prisma.trainer_assignments.findMany({
         where: {
-            is_active: true,
             ...(professionalId ? { professional_id: professionalId } : {}),
         },
         include: {
             professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
-            societies:     { select: { id: true, society_name: true, society_category: true } },
+            societies:     { select: { id: true, society_name: true, society_category: true, custom_category_name: true } },
             schools:       { select: { id: true, school_name: true } },
             activities:    { select: { id: true, name: true, activity_category: true } },
         },
@@ -379,6 +435,7 @@ exports.previewSettlement = async (professionalId = null) => {
     for (const a of assignments) {
         try {
             const item = await buildSettlementItem(a, rules);
+            if (!a.is_active && item.sessions_attended <= 0) continue;
             results.push(item);
         } catch (err) {
             console.error(`[Settlement] preview error for assignment ${a.id}:`, err.message);
@@ -387,6 +444,46 @@ exports.previewSettlement = async (professionalId = null) => {
 
     return results;
 };
+
+function getAssignmentSessionType(assignmentType) {
+    if (assignmentType === "individual_coaching") return "individual_coaching";
+    if (assignmentType === "personal_tutor") return "personal_tutor";
+    if (assignmentType === "group_coaching_society") return "group_coaching";
+    if (assignmentType === "group_coaching_school") return "school_student";
+    return null;
+}
+
+async function getRelevantCompletedSessions(assignment, windowStart, windowEnd) {
+    const sessionType = getAssignmentSessionType(assignment.assignment_type);
+    if (!sessionType) return [];
+
+    const where = {
+        professional_id: assignment.professional_id,
+        session_type:    sessionType,
+        status:          "completed",
+        scheduled_date:  { gte: windowStart, lte: windowEnd },
+    };
+
+    if (assignment.assignment_type === "group_coaching_society" || assignment.assignment_type === "group_coaching_school") {
+        where.batches = {
+            ...(assignment.society_id ? { society_id: assignment.society_id } : {}),
+            ...(assignment.school_id  ? { school_id:  assignment.school_id }  : {}),
+            ...(assignment.activity_id ? { activity_id: assignment.activity_id } : {}),
+        };
+    } else if (assignment.activity_id) {
+        where.activity_id = assignment.activity_id;
+    }
+
+    return prisma.sessions.findMany({
+        where,
+        select: {
+            id: true,
+            student_id: true,
+            batch_id: true,
+            activity_id: true,
+        },
+    });
+}
 
 /**
  * Confirm settlement: commit all (or filtered) active assignments.
@@ -401,13 +498,12 @@ exports.confirmSettlement = async (assignmentIds = null, capOverrides = {}, prof
 
     const assignments = await prisma.trainer_assignments.findMany({
         where: {
-            is_active: true,
             ...(professionalId  ? { professional_id: professionalId }   : {}),
             ...(assignmentIds   ? { id: { in: assignmentIds } }         : {}),
         },
         include: {
             professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
-            societies:     { select: { id: true, society_name: true, society_category: true } },
+            societies:     { select: { id: true, society_name: true, society_category: true, custom_category_name: true } },
             schools:       { select: { id: true, school_name: true } },
             activities:    { select: { id: true, name: true, activity_category: true } },
         },
@@ -419,6 +515,7 @@ exports.confirmSettlement = async (assignmentIds = null, capOverrides = {}, prof
         try {
             const capOverride = capOverrides[a.id] ?? null;
             const item = await buildSettlementItem(a, rules, capOverride);
+            if (!a.is_active && item.sessions_attended <= 0) continue;
 
             if (item.commission_amount <= 0) {
                 settled.push({ assignment_id: a.id, skipped: true, reason: "zero commission" });
@@ -493,30 +590,8 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
         : new Date(assigned_from);
     const windowEnd = new Date();
 
-    let sessionsAttended;
-
-    if (assignment_type === "individual_coaching" || assignment_type === "personal_tutor") {
-        // IC/PT: count from sessions table (individual sessions per professional)
-        sessionsAttended = await prisma.sessions.count({
-            where: {
-                professional_id,
-                session_type: assignment_type === "individual_coaching" ? "individual_coaching" : "personal_tutor",
-                status:       "completed",
-                scheduled_date: { gte: windowStart, lte: windowEnd },
-            },
-        });
-    } else {
-        // Group coaching: count from trainer_batches
-        sessionsAttended = await prisma.trainer_batches.count({
-            where: {
-                trainer_professional_id: professional_id,
-                ...(society_id  ? { society_id }  : {}),
-                ...(school_id   ? { school_id }   : {}),
-                ...(activity_id ? { activity_id } : {}),
-                batch_date: { gte: windowStart, lte: windowEnd },
-            },
-        });
-    }
+    const completedSessions = await getRelevantCompletedSessions(assignment, windowStart, windowEnd);
+    const sessionsAttended  = completedSessions.length;
 
     // ── 2. Sum effective monthly fees of students in this assignment ──────
     let effectiveFeeBase = 0;
@@ -525,40 +600,61 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
     let flatAmountPerSession = 0;
 
     if (assignment_type === "group_coaching_society" && society_id) {
-        // society_category is already loaded via the assignment's societies relation —
-        // pass it directly so resolveEffectiveMonthly doesn't re-query per student
-        const societyCategory = societies?.society_category ?? null;
+        const societyCategory    = societies?.society_category ?? null;
+        const customCategoryName = societies?.custom_category_name ?? null;
+        const relevantBatchIds   = [...new Set(completedSessions.map((s) => s.batch_id).filter(Boolean))];
 
-        // Find this trainer's batch for this society + activity
-        const trainerBatch = await prisma.batches.findFirst({
+        const trainerBatches = await prisma.batches.findMany({
             where: {
-                professional_id: professional_id,
                 society_id,
                 ...(activity_id ? { activity_id } : {}),
-                is_active: true,
+                ...(relevantBatchIds.length ? { id: { in: relevantBatchIds } } : {}),
             },
             select: {
                 id: true,
+                societies: { select: { society_category: true, custom_category_name: true } },
                 batch_students: {
-                    select: { students: { select: { user_id: true, individual_participants: { select: { term_months: true, activity: true } } } } },
+                    select: {
+                        student_id: true,
+                        students: {
+                            select: {
+                                user_id: true,
+                                individual_participants: {
+                                    select: { term_months: true, activity: true, batch_id: true },
+                                },
+                            },
+                        },
+                    },
                 },
             },
         });
 
-        const batchStudents = trainerBatch?.batch_students ?? [];
-        const studentCount  = batchStudents.length;
-
-        for (const bs of batchStudents) {
-            const uid = bs.students?.user_id;
-            if (!uid) continue;
-            // Pick the individual_participant entry matching this activity
-            const ip = bs.students?.individual_participants?.find(p =>
-                !activities?.name || p.activity === activities.name
-            );
-            const em = await resolveEffectiveMonthly(uid, "group_coaching", activities?.name ?? null, societyCategory, ip?.term_months ?? null);
-            if (em) effectiveFeeBase += em;
+        const seenStudents = new Set();
+        for (const batch of trainerBatches) {
+            for (const bs of batch.batch_students ?? []) {
+                if (seenStudents.has(bs.student_id)) continue;
+                seenStudents.add(bs.student_id);
+                const uid = bs.students?.user_id;
+                if (!uid) continue;
+                const ip = (bs.students?.individual_participants ?? []).find((p) =>
+                    (!activities?.name || p.activity === activities.name) &&
+                    (!p.batch_id || p.batch_id === batch.id)
+                ) ?? (bs.students?.individual_participants ?? []).find((p) =>
+                    !activities?.name || p.activity === activities.name
+                );
+                const em = await resolveEffectiveMonthly(
+                    uid,
+                    "group_coaching",
+                    activities?.name ?? null,
+                    batch.societies?.society_category ?? societyCategory,
+                    ip?.term_months ?? null,
+                    batch.societies?.custom_category_name ?? customCategoryName
+                );
+                if (em) effectiveFeeBase += em;
+            }
         }
 
+        const studentCount = seenStudents.size;
         const minStudents = parseFloat(rules.trainer_group_society_min_students?.value ?? 10);
 
         if (studentCount < minStudents) {
@@ -569,42 +665,61 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
         }
 
     } else if (assignment_type === "group_coaching_school" && school_id) {
-        // Scope to this trainer's batch for this school + activity
-        const trainerBatch = await prisma.batches.findFirst({
+        const relevantBatchIds = [...new Set(completedSessions.map((s) => s.batch_id).filter(Boolean))];
+
+        const trainerBatches = await prisma.batches.findMany({
             where: {
-                professional_id: professional_id,
                 school_id,
                 ...(activity_id ? { activity_id } : {}),
-                is_active: true,
+                ...(relevantBatchIds.length ? { id: { in: relevantBatchIds } } : {}),
             },
             select: {
                 id: true,
                 batch_students: {
-                    select: { students: { select: { user_id: true, school_students: { select: { term_months: true } } } } },
+                    select: {
+                        student_id: true,
+                        students: {
+                            select: {
+                                user_id: true,
+                                school_students: { select: { term_months: true } },
+                            },
+                        },
+                    },
                 },
             },
         });
 
-        const batchStudents = trainerBatch?.batch_students ?? [];
-
-        for (const bs of batchStudents) {
-            const uid = bs.students?.user_id;
-            if (!uid) continue;
-            const termMonths = bs.students?.school_students?.[0]?.term_months ?? 9;
-            const em = await resolveEffectiveMonthly(uid, "school_student", null, null, termMonths);
-            if (em) effectiveFeeBase += em;
+        const seenStudents = new Set();
+        for (const batch of trainerBatches) {
+            for (const bs of batch.batch_students ?? []) {
+                if (seenStudents.has(bs.student_id)) continue;
+                seenStudents.add(bs.student_id);
+                const uid = bs.students?.user_id;
+                if (!uid) continue;
+                const termMonths = bs.students?.school_students?.[0]?.term_months ?? 9;
+                const em = await resolveEffectiveMonthly(uid, "school_student", null, null, termMonths);
+                if (em) effectiveFeeBase += em;
+            }
         }
 
         commissionRate = parseFloat(rules.trainer_group_school_rate?.value ?? 45);
 
     } else if (assignment_type === "individual_coaching") {
-        const participants = await prisma.individual_participants.findMany({
-            where: {
-                trainer_professional_id: professional_id,
-                students: { student_type: "individual_coaching" },
-            },
-            select: { society_id: true, activity: true, term_months: true, students: { select: { user_id: true } } },
-        });
+        const studentIds = [...new Set(completedSessions.map((s) => s.student_id).filter(Boolean))];
+        const participants = studentIds.length > 0
+            ? await prisma.individual_participants.findMany({
+                where: {
+                    student_id: { in: studentIds },
+                    students: { student_type: "individual_coaching" },
+                },
+                select: {
+                    student_id: true,
+                    activity: true,
+                    term_months: true,
+                    students: { select: { user_id: true } },
+                },
+            })
+            : [];
 
         for (const p of participants) {
             const uid = p.students?.user_id;
@@ -616,10 +731,13 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
         commissionRate = parseFloat(rules.trainer_personal_coaching_rate?.value ?? 80);
 
     } else if (assignment_type === "personal_tutor") {
-        const tutors = await prisma.personal_tutors.findMany({
-            where: { teacher_professional_id: professional_id },
-            select: { term_months: true, students: { select: { user_id: true } } },
-        });
+        const studentIds = [...new Set(completedSessions.map((s) => s.student_id).filter(Boolean))];
+        const tutors = studentIds.length > 0
+            ? await prisma.personal_tutors.findMany({
+                where: { student_id: { in: studentIds } },
+                select: { term_months: true, students: { select: { user_id: true } } },
+            })
+            : [];
 
         for (const t of tutors) {
             const uid = t.students?.user_id;

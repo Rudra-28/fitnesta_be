@@ -29,7 +29,7 @@ router.get("/sub-admins", superAdminGuard, controller.listAdmins);              
 router.post("/sub-admins", superAdminGuard, controller.createSubAdmin);                   // POST   /api/v1/admin/sub-admins
 router.delete("/sub-admins/:userId", superAdminGuard, controller.removeSubAdmin);         // DELETE /api/v1/admin/sub-admins/:userId
 
-router.get("/pending", controller.listPending);                            // GET  /api/v1/admin/pending?type=trainer
+router.get("/pending", controller.listPending);                           // GET  /api/v1/admin/pending?type=trainer
 router.get("/pending/:id", controller.listPending);                        // GET  /api/v1/admin/pending/:id
 router.post("/approve/:id", controller.approve);                           // POST /api/v1/admin/approve/5
 router.post("/reject/:id", controller.reject);                             // POST /api/v1/admin/reject/5
@@ -59,7 +59,9 @@ router.post("/schools", handleUpload, controller.adminRegisterSchool);          
 router.get("/me-list", controller.getMEList);                                      // GET  /api/v1/admin/me-list
 
 // ── All students list (assigned + unassigned) ─────────────────────────────
-router.get("/students", controller.listStudents);                              // GET /api/v1/admin/students?type=personal_tutor|individual_coaching
+router.get("/students", controller.listStudents);                              // GET   /api/v1/admin/students?type=personal_tutor|individual_coaching
+router.get("/students/:studentId", controller.getStudentDetail);              // GET   /api/v1/admin/students/:studentId
+router.patch("/students/:studentId", controller.updateStudentDetail);         // PATCH /api/v1/admin/students/:studentId
 
 // ── Student assignment ─────────────────────────────────────────────────────
 router.get("/students/unassigned", controller.getUnassignedStudents);         // GET  /api/v1/admin/students/unassigned?service=personal_tutor
@@ -74,6 +76,11 @@ router.get("/fee-structures/custom-categories", controller.listCustomFeeCategori
 router.get("/fee-structures", controller.listFeeStructures);               // GET  /api/v1/admin/fee-structures?section=school|society|individual_coaching|personal_tutor
 router.post("/fee-structures", controller.upsertFeeStructure);             // POST /api/v1/admin/fee-structures
 router.put("/fee-structures/:id", controller.upsertFeeStructure);          // PUT  /api/v1/admin/fee-structures/:id
+
+// ── Dashboard profit stats ─────────────────────────────────────────────────
+// GET /api/v1/admin/dashboard/profit-stats?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Returns admin's profit share derived from commission rows (base - commission).
+router.get("/dashboard/profit-stats", controller.getAdminProfitStats);
 
 // ── Payments ───────────────────────────────────────────────────────────────
 // Filters: ?service_type=personal_tutor|individual_coaching|...  &status=captured|refunded|failed  &user_id=5  &from=&to=
@@ -127,6 +134,14 @@ router.get("/sessions/student-info", controller.getSessionStudentInfo);
 // ── Professionals for session creation (with busy/available flag) ─────────
 // GET /api/v1/admin/professionals/for-session?type=teacher|trainer&date=&start_time=&end_time=&subject=&activity=
 router.get("/professionals/for-session", controller.getProfessionalsForSession);
+
+// ── Document proxy (streams Cloudinary files through the backend so the JWT is validated first) ──
+// NOTE: must be declared before any /:param wildcards to avoid being shadowed
+router.get("/document-proxy", controller.proxyDocument);  // GET /api/v1/admin/document-proxy?url=https://res.cloudinary.com/...
+
+// ── Single professional profile (with documents) ──────────────────────────
+// NOTE: must be declared after all /professionals/<literal> routes to avoid shadowing them
+router.get("/professionals/:professionalId", controller.getProfessional);  // GET /api/v1/admin/professionals/5
 
 // ── Personal tutor session creation — student subjects + teachers ─────────
 // GET /api/v1/admin/students/:studentId/subjects

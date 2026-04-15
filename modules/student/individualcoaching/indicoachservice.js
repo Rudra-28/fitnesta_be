@@ -26,13 +26,15 @@ exports.initiateRegistration = async (formData, serviceType) => {
 
     let coachingType = coaching_type || serviceType || "individual_coaching";
 
-    // Duplicate check — same mobile + any of the selected activities already pending or approved
+    // Duplicate check 1 — same mobile already has an approved (paid) registration for one of these activities
+    // Only 'approved' is checked here — 'pending' rows are abandoned attempts (user went back without paying)
+    // and must not block a fresh attempt.
     const mobile = formData.user_info?.contactNumber || null;
     if (mobile) {
         for (const actId of activity_ids) {
-            const duplicate = await prisma.$queryRaw`
+            const paidDuplicate = await prisma.$queryRaw`
                 SELECT id FROM pending_registrations
-                WHERE status IN ('pending', 'approved')
+                WHERE status = 'approved'
                   AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.user_info.contactNumber')) = ${mobile}
                   AND JSON_CONTAINS(
                         JSON_EXTRACT(form_data, '$.payment.activity_ids'),
@@ -40,11 +42,27 @@ exports.initiateRegistration = async (formData, serviceType) => {
                       )
                 LIMIT 1
             `;
-            if (duplicate.length > 0) {
-                const err = new Error("You have already registered for one or more of the selected activities.");
+            if (paidDuplicate.length > 0) {
+                const err = new Error("You are already enrolled in this activity.");
                 err.status = 409;
                 throw err;
             }
+        }
+
+        // Duplicate check 2 — same mobile has an active individual_participant record (is_active = true).
+        // This catches re-registrations after the student record was fully created.
+        const activeEnrollment = await prisma.$queryRaw`
+            SELECT ip.id FROM individual_participants ip
+            INNER JOIN students s ON s.id = ip.student_id
+            INNER JOIN users u ON u.id = s.user_id
+            WHERE u.mobile = ${mobile}
+              AND ip.is_active = 1
+            LIMIT 1
+        `;
+        if (activeEnrollment.length > 0) {
+            const err = new Error("You are already enrolled in an active coaching plan for this activity.");
+            err.status = 409;
+            throw err;
         }
     }
 
@@ -92,6 +110,12 @@ exports.initiateRegistration = async (formData, serviceType) => {
     formData.calculated_amount = amount;
 
     await repo.insertPendingRegistration(tempUuid, formData, coachingType);
+
+    const fcmToken = formData.fcmToken || formData.fcm_token;
+    if (fcmToken) {
+        const { sendNotificationToToken } = require("../../../utils/fcm");
+        sendNotificationToToken(fcmToken, "Data Captured", "Your form data has been captured, please complete your payment.");
+    }
 
     return {
         tempUuid,

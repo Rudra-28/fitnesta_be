@@ -30,6 +30,13 @@ exports.createMarketExe = async (data) => {
     // 5. Save to pending_registrations — does NOT touch users/professionals/marketing_executives yet
     const tempUuid = await repo.insertPending(data);
 
+    // Notify user of form submission
+    const fcmToken = data.fcmToken || data.fcm_token;
+    if (fcmToken) {
+        const { sendNotificationToToken } = require("../../../../utils/fcm");
+        sendNotificationToToken(fcmToken, "Form Submitted", "Your form has been submitted to the admin for approval.");
+    }
+
     return {
         success: true,
         tempUuid,

@@ -75,6 +75,77 @@ exports.getApprovedProfessionals = async (type) => {
     });
 };
 
+// ── Single professional by ID ─────────────────────────────────────────────
+
+exports.getProfessionalById = async (professionalId) => {
+    return await prisma.professionals.findUnique({
+        where: { id: Number(professionalId) },
+        select: {
+            id: true,
+            profession_type: true,
+            referral_code: true,
+            place: true,
+            date: true,
+            own_two_wheeler: true,
+            communication_languages: true,
+            pan_card: true,
+            adhar_card: true,
+            relative_name: true,
+            relative_contact: true,
+            users: {
+                select: {
+                    id: true,
+                    full_name: true,
+                    mobile: true,
+                    email: true,
+                    address: true,
+                    photo: true,
+                    created_at: true,
+                },
+            },
+            trainers: {
+                select: {
+                    player_level: true,
+                    category: true,
+                    specified_game: true,
+                    specified_skills: true,
+                    experience_details: true,
+                    qualification_docs: true,
+                    documents: true,
+                },
+            },
+            teachers: {
+                select: {
+                    subject: true,
+                    experience_details: true,
+                    ded_doc: true,
+                    bed_doc: true,
+                    other_doc: true,
+                },
+            },
+            marketing_executives: {
+                select: {
+                    dob: true,
+                    education_qualification: true,
+                    previous_experience: true,
+                    activity_agreement_pdf: true,
+                },
+            },
+            vendors: {
+                select: {
+                    store_name: true,
+                    store_address: true,
+                    store_location: true,
+                    gst_certificate: true,
+                },
+            },
+            wallets: {
+                select: { balance: true },
+            },
+        },
+    });
+};
+
 // ── Unassigned students ────────────────────────────────────────────────────
 
 exports.getUnassignedPersonalTutors = async () => {
@@ -218,11 +289,58 @@ exports.getFeeStructures = async (coachingType) => {
 
 // ── Societies & Schools (for batch creation dropdowns) ────────────────────
 
+// adminRepo.js
 exports.getApprovedSocieties = async () => {
     return await prisma.societies.findMany({
         where: { approval_status: "approved" },
-        select: { id: true, society_name: true, society_category: true, custom_category_name: true, address: true },
+        select: { 
+            id: true, 
+            society_name: true, 
+            society_category: true, 
+            custom_category_name: true, 
+            address: true,
+            _count: {
+                select: { participants: true } 
+            }
+        },
         orderBy: { society_name: "asc" },
+    });
+};
+
+// adminRepo.js
+exports.getSocietyById = async (id) => {
+    return await prisma.societies.findUnique({
+        where: { id: parseInt(id) },
+        include: {
+            // This 'participants' key must match your Prisma schema relation name
+            participants: {
+                select: {
+                    id: true,
+                    full_name: true,
+                    email: true,
+                    phone: true,
+                    activity_name: true, // Assuming participants have an activity field
+                    status: true
+                }
+            }
+        }
+    });
+};
+// New function for fetching details when clicked
+exports.getSocietyParticipants = async (societyId) => {
+    return await prisma.societies.findUnique({
+        where: { id: parseInt(societyId) },
+        select: {
+            society_name: true,
+            participants: {
+                select: {
+                    id: true,
+                    full_name: true,
+                    activity_name: true, 
+                    email: true
+                }
+            }
+        }
     });
 };
 
@@ -347,8 +465,8 @@ exports.findProfessionalById = async (id, type) => {
     });
 };
 
-// Student types are registered automatically after payment — never need admin approval
-const STUDENT_SERVICE_TYPES = ["personal_tutor", "individual_coaching", "school_student"];
+// Only these service types require admin approval
+const APPROVABLE_SERVICE_TYPES = ["trainer", "teacher", "marketing_executive", "vendor", "society_request"];
 
 exports.getAllPending = async (serviceType) => {
     return await prisma.pending_registrations.findMany({
@@ -356,7 +474,7 @@ exports.getAllPending = async (serviceType) => {
             status: "pending",
             service_type: serviceType
                 ? serviceType
-                : { notIn: STUDENT_SERVICE_TYPES },
+                : { in: APPROVABLE_SERVICE_TYPES },
         },
         select: {
             id: true,
@@ -379,7 +497,6 @@ exports.getById = async (id) => {
 
 exports.getAllCommissionRules = async () => {
     return await prisma.commission_rules.findMany({
-        where:   { rule_key: { not: "me_min_live_activities" } },
         orderBy: [{ professional_type: "asc" }, { rule_key: "asc" }],
     });
 };
@@ -442,7 +559,108 @@ exports.markCommissionPaid = async (id, commissionAmount, professionalId) => {
     });
 };
 
+// ── Admin Profit Stats ─────────────────────────────────────────────────────
 
+/**
+ * Aggregate commission rows to compute admin's profit share.
+ *
+ * For every commission row:
+ *   base_amount       = the monthly fee collected from students (what Fitnesta earned on those sessions)
+ *   commission_amount = what the professional (trainer / teacher / ME) earned
+ *   admin_share       = base_amount - commission_amount  (admin's profit margin)
+ *
+ * Results are grouped by status (on_hold | pending | approved | paid)
+ * and by professional_type so the dashboard can show a breakdown.
+ *
+ * @param {{ from?: string, to?: string }} opts  — optional date range filter (ISO date strings)
+ */
+exports.getAdminProfitStats = async ({ from, to } = {}) => {
+    const dateFilter = {};
+    if (from) dateFilter.gte = new Date(from);
+    if (to)   dateFilter.lte = new Date(to);
+
+    const where = Object.keys(dateFilter).length > 0 ? { created_at: dateFilter } : {};
+
+    // Aggregate sums grouped by status + professional_type
+    const grouped = await prisma.commissions.groupBy({
+        by:    ["status", "professional_type"],
+        where,
+        _sum:  {
+            base_amount:       true,
+            commission_amount: true,
+        },
+        _count: { id: true },
+    });
+
+    // Also pull total captured payments for the same period (gross revenue)
+    const paymentsWhere = Object.keys(dateFilter).length > 0
+        ? { status: "captured", captured_at: dateFilter }
+        : { status: "captured" };
+
+    const paymentAgg = await prisma.payments.aggregate({
+        where: paymentsWhere,
+        _sum:  { amount: true },
+        _count: { id: true },
+    });
+
+    // RE-summarise into a clean shape
+    const byStatus = { on_hold: {}, pending: {}, approved: {}, paid: {} };
+
+    for (const row of grouped) {
+        const s   = row.status;
+        const pt  = row.professional_type;
+        const base = parseFloat(row._sum.base_amount       ?? 0);
+        const comm = parseFloat(row._sum.commission_amount ?? 0);
+
+        if (!byStatus[s]) byStatus[s] = {};
+        if (!byStatus[s][pt]) byStatus[s][pt] = { base_amount: 0, commission_amount: 0, admin_share: 0, count: 0 };
+
+        byStatus[s][pt].base_amount       += base;
+        byStatus[s][pt].commission_amount += comm;
+        byStatus[s][pt].admin_share       += (base - comm);
+        byStatus[s][pt].count             += row._count.id;
+    }
+
+    // Flatten into per-status totals + per-type breakdown
+    const summary = {};
+    for (const [status, byType] of Object.entries(byStatus)) {
+        const totalBase  = Object.values(byType).reduce((s, v) => s + v.base_amount,       0);
+        const totalComm  = Object.values(byType).reduce((s, v) => s + v.commission_amount,  0);
+        const totalAdmin = Object.values(byType).reduce((s, v) => s + v.admin_share,        0);
+        const totalCount = Object.values(byType).reduce((s, v) => s + v.count,              0);
+
+        summary[status] = {
+            total_base_amount:       parseFloat(totalBase.toFixed(2)),
+            total_commission_amount: parseFloat(totalComm.toFixed(2)),
+            admin_profit:            parseFloat(totalAdmin.toFixed(2)),
+            commission_count:        totalCount,
+            by_professional_type:    Object.fromEntries(
+                Object.entries(byType).map(([pt, v]) => [pt, {
+                    base_amount:       parseFloat(v.base_amount.toFixed(2)),
+                    commission_amount: parseFloat(v.commission_amount.toFixed(2)),
+                    admin_share:       parseFloat(v.admin_share.toFixed(2)),
+                    count:             v.count,
+                }])
+            ),
+        };
+    }
+
+    const grandBase  = grouped.reduce((s, r) => s + parseFloat(r._sum.base_amount       ?? 0), 0);
+    const grandComm  = grouped.reduce((s, r) => s + parseFloat(r._sum.commission_amount ?? 0), 0);
+
+    return {
+        gross_revenue:           parseFloat((paymentAgg._sum.amount ?? 0).toFixed(2)),
+        total_payment_count:     paymentAgg._count.id,
+        total_base_amount:       parseFloat(grandBase.toFixed(2)),
+        total_commission_paid_out: parseFloat(grandComm.toFixed(2)),
+        total_admin_profit:      parseFloat((grandBase - grandComm).toFixed(2)),
+        // Profit realised only from PAID commissions (most conservative view)
+        realised_profit: parseFloat(
+            Object.values(byStatus.paid ?? {}).reduce((s, v) => s + v.admin_share, 0).toFixed(2)
+        ),
+        by_status: summary,
+    };
+};
 
 // ── Travelling allowances ──────────────────────────────────────────────────
 
@@ -755,7 +973,8 @@ exports.adminInsertSociety = async (data, meProfessionalId, adminUserId) => {
             registered_by_user_id: adminUserId,
             me_professional_id: meProfessionalId ?? null,
             society_name: data.societyName,
-            society_category: data.societyCategory === "A+" ? "A_" : (data.societyCategory ?? null),
+            society_category:     data.societyCategory === "A+" ? "A_" : (data.societyCategory ?? null),
+            custom_category_name: data.societyCategory === "custom" ? (data.customCategoryName?.trim() ?? null) : null,
             address: data.address,
             pin_code: data.pinCode,
             total_participants: data.totalParticipants ? Number(data.totalParticipants) : null,
@@ -1149,12 +1368,22 @@ exports.listPayIns = async ({ serviceType, from, to } = {}) => {
 // ── Pay-outs ───────────────────────────────────────────────────────────────
 
 exports.listPayOutCommissions = async ({ professionalType, status, from, to } = {}) => {
+
+    const whereClause = {
+        ...(professionalType && { professional_type: professionalType }),
+        ...((from || to) ? { created_at: { ...(from && { gte: new Date(from) }), ...(to && { lte: new Date(to) }) } } : {}),
+    };
+
+    if (status) {
+        whereClause.status = status;
+    } else {
+        // If the admin is just looking at the general payout list, 
+        // exclude anything that hasn't been settled yet.
+        whereClause.status = { not: "on_hold" };
+    }
+
     return await prisma.commissions.findMany({
-        where: {
-            ...(professionalType && { professional_type: professionalType }),
-            ...(status           && { status }),
-            ...((from || to) ? { created_at: { ...(from && { gte: new Date(from) }), ...(to && { lte: new Date(to) }) } } : {}),
-        },
+        where: whereClause,
         select: {
             id: true,
             professional_type: true,
@@ -1678,35 +1907,130 @@ exports.getAssignmentSessionExtras = async (assignment) => {
 
     const windowStart = last_settled_at ? new Date(last_settled_at) : new Date(assigned_from);
 
+    const sessionType =
+        assignment_type === "individual_coaching" ? "individual_coaching" :
+        assignment_type === "personal_tutor" ? "personal_tutor" :
+        assignment_type === "group_coaching_society" ? "group_coaching" :
+        assignment_type === "group_coaching_school" ? "school_student" :
+        null;
+
     if (assignment_type === "individual_coaching" || assignment_type === "personal_tutor") {
-        const sessionType = assignment_type === "individual_coaching" ? "individual_coaching" : "personal_tutor";
-        const [completed, upcoming, absent] = await Promise.all([
+        const baseWhere = {
+            professional_id,
+            session_type: sessionType,
+            ...(activity_id ? { activity_id } : {}),
+        };
+        const [completed, upcoming, absent, sessions] = await Promise.all([
             prisma.sessions.count({
-                where: { professional_id, session_type: sessionType, status: "completed",
-                         scheduled_date: { gte: windowStart, lte: now } },
+                where: { ...baseWhere, status: "completed", scheduled_date: { gte: windowStart, lte: now } },
             }),
             prisma.sessions.count({
-                where: { professional_id, session_type: sessionType,
-                         status: { in: ["scheduled", "ongoing"] }, scheduled_date: { gte: now } },
+                where: { ...baseWhere, status: { in: ["scheduled", "ongoing"] }, scheduled_date: { gte: now } },
             }),
             prisma.sessions.count({
-                where: { professional_id, session_type: sessionType, status: "absent",
-                         scheduled_date: { gte: windowStart, lte: now } },
+                where: { ...baseWhere, status: "absent", scheduled_date: { gte: windowStart, lte: now } },
+            }),
+            prisma.sessions.findMany({
+                where: {
+                    ...baseWhere,
+                    status: { in: ["completed", "scheduled", "ongoing", "absent"] },
+                    scheduled_date: { gte: windowStart },
+                },
+                select: { student_id: true },
             }),
         ]);
         const total = completed + absent;
+
+        const studentIds = [...new Set(sessions.map((s) => s.student_id).filter(Boolean))];
+        let students = [];
+        if (assignment_type === "individual_coaching") {
+            const rows = studentIds.length > 0 ? await prisma.individual_participants.findMany({
+                where: { student_id: { in: studentIds } },
+                select: {
+                    id: true,
+                    student_id: true,
+                    activity: true,
+                    students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+                },
+            }) : [];
+            students = rows.map((r) => ({
+                student_id: r.students?.id ?? null,
+                name: r.students?.users?.full_name ?? "—",
+                mobile: r.students?.users?.mobile ?? null,
+                detail: r.activity ?? null,
+            }));
+        } else {
+            const rows = studentIds.length > 0 ? await prisma.personal_tutors.findMany({
+                where: { student_id: { in: studentIds } },
+                select: {
+                    id: true,
+                    student_id: true,
+                    teacher_for: true,
+                    students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+                },
+            }) : [];
+            students = rows.map((r) => ({
+                student_id: r.students?.id ?? null,
+                name: r.students?.users?.full_name ?? "—",
+                mobile: r.students?.users?.mobile ?? null,
+                detail: r.teacher_for ?? null,
+            }));
+        }
+
         return { upcoming_sessions: upcoming, absent_sessions: absent,
-                 attendance_pct: total > 0 ? Math.round((completed / total) * 100) : 0, batch_info: null };
+                 attendance_pct: total > 0 ? Math.round((completed / total) * 100) : 0, batch_info: null, students };
     }
 
-    // Group coaching — look up batch info
-    const batch = await prisma.batches.findFirst({
-        where: {
-            professional_id,
+    const batchWhere = {
+        professional_id,
+        session_type: sessionType,
+        batches: {
             ...(society_id  ? { society_id }  : {}),
             ...(school_id   ? { school_id }   : {}),
             ...(activity_id ? { activity_id } : {}),
-            is_active: true,
+        },
+    };
+
+    const [completed, upcoming, absent, matchingSessions] = await Promise.all([
+        prisma.sessions.count({
+            where: {
+                ...batchWhere,
+                status:         "completed",
+                scheduled_date: { gte: windowStart, lte: now },
+            },
+        }),
+        prisma.sessions.count({
+            where: {
+                ...batchWhere,
+                status:         { in: ["scheduled", "ongoing"] },
+                scheduled_date: { gte: now },
+            },
+        }),
+        prisma.sessions.count({
+            where: {
+                ...batchWhere,
+                status:         "absent",
+                scheduled_date: { gte: windowStart, lte: now },
+            },
+        }),
+        prisma.sessions.findMany({
+            where: {
+                ...batchWhere,
+                status: { in: ["completed", "scheduled", "ongoing", "absent"] },
+                scheduled_date: { gte: windowStart },
+            },
+            select: { batch_id: true },
+            orderBy: { scheduled_date: "desc" },
+        }),
+    ]);
+
+    const batchIds = [...new Set(matchingSessions.map((s) => s.batch_id).filter(Boolean))];
+    const batch = await prisma.batches.findFirst({
+        where: {
+            ...(society_id  ? { society_id }  : {}),
+            ...(school_id   ? { school_id }   : {}),
+            ...(activity_id ? { activity_id } : {}),
+            ...(batchIds.length ? { id: { in: batchIds } } : {}),
         },
         select: {
             id: true, batch_name: true, days_of_week: true, start_time: true, end_time: true,
@@ -1719,33 +2043,6 @@ exports.getAssignmentSessionExtras = async (assignment) => {
     });
 
     const batchId = batch?.id ?? null;
-
-    const [completed, upcoming, absent] = await Promise.all([
-        prisma.sessions.count({
-            where: {
-                professional_id,
-                ...(batchId ? { batch_id: batchId } : {}),
-                status:         "completed",
-                scheduled_date: { gte: windowStart, lte: now },
-            },
-        }),
-        prisma.sessions.count({
-            where: {
-                professional_id,
-                ...(batchId ? { batch_id: batchId } : {}),
-                status:         { in: ["scheduled", "ongoing"] },
-                scheduled_date: { gte: now },
-            },
-        }),
-        prisma.sessions.count({
-            where: {
-                professional_id,
-                ...(batchId ? { batch_id: batchId } : {}),
-                status:         "absent",
-                scheduled_date: { gte: windowStart, lte: now },
-            },
-        }),
-    ]);
 
     const total = completed + absent;
     return {
@@ -1764,6 +2061,21 @@ exports.getAssignmentSessionExtras = async (assignment) => {
             activity_name: batch.activities?.name ?? null,
             entity_name:   batch.societies?.society_name ?? batch.schools?.school_name ?? null,
         } : null,
+        students: batchId ? await (async () => {
+            const bs = await prisma.batch_students.findMany({
+                where: { batch_id: batchId },
+                select: {
+                    student_id: true,
+                    students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+                },
+            });
+            return bs.map((r) => ({
+                student_id: r.student_id,
+                name: r.students?.users?.full_name ?? "—",
+                mobile: r.students?.users?.mobile ?? null,
+                detail: null,
+            }));
+        })() : [],
     };
 };
 
@@ -2010,5 +2322,174 @@ exports.getVendorOrderCommission = async (vendorProfessionalId, orderId) => {
             source_type:       "kit_order",
             source_id:         orderId,
         },
+    });
+};
+
+// ── Student detail (GET /admin/students/:studentId) ───────────────────────
+
+exports.getStudentDetail = async (studentId) => {
+    const sid = Number(studentId);
+    return await prisma.students.findUnique({
+        where: { id: sid },
+        select: {
+            id: true,
+            student_type: true,
+            users: {
+                select: {
+                    id: true,
+                    full_name: true,
+                    mobile: true,
+                    email: true,
+                    address: true,
+                    photo: true,
+                    approval_status: true,
+                    created_at: true,
+                },
+            },
+            personal_tutors: {
+                select: {
+                    id: true,
+                    dob: true,
+                    standard: true,
+                    batch: true,
+                    teacher_for: true,
+                    preferred_time: true,
+                    term_months: true,
+                    membership_start_date: true,
+                    membership_end_date: true,
+                    session_cap: true,
+                    session_days_of_week: true,
+                    session_start_time: true,
+                    session_end_time: true,
+                    is_active: true,
+                    teacher_professional_id: true,
+                    professionals: {
+                        select: {
+                            id: true,
+                            users: { select: { full_name: true, mobile: true } },
+                            teachers: { select: { subject: true } },
+                        },
+                    },
+                },
+            },
+            individual_participants: {
+                select: {
+                    id: true,
+                    participant_name: true,
+                    mobile: true,
+                    flat_no: true,
+                    dob: true,
+                    age: true,
+                    society_id: true,
+                    society_name: true,
+                    activity: true,
+                    kits: true,
+                    preferred_batch: true,
+                    preferred_time: true,
+                    term_months: true,
+                    membership_start_date: true,
+                    membership_end_date: true,
+                    session_cap: true,
+                    session_days_of_week: true,
+                    session_start_time: true,
+                    session_end_time: true,
+                    is_active: true,
+                    trainer_professional_id: true,
+                    batch_id: true,
+                    professionals: {
+                        select: {
+                            id: true,
+                            users: { select: { full_name: true, mobile: true } },
+                            trainers: { select: { category: true, specified_game: true } },
+                        },
+                    },
+                    societies: { select: { id: true, society_name: true, address: true } },
+                },
+            },
+            school_students: {
+                select: {
+                    id: true,
+                    student_name: true,
+                    standard: true,
+                    address: true,
+                    activities: true,
+                    kit_type: true,
+                    term_months: true,
+                    membership_start_date: true,
+                    membership_end_date: true,
+                    is_active: true,
+                    school_id: true,
+                    schools: { select: { id: true, school_name: true, address: true } },
+                },
+            },
+            batch_students: {
+                select: {
+                    id: true,
+                    joined_at: true,
+                    batches: {
+                        select: {
+                            id: true,
+                            batch_name: true,
+                            batch_type: true,
+                            days_of_week: true,
+                            start_time: true,
+                            end_time: true,
+                            start_date: true,
+                            end_date: true,
+                            is_active: true,
+                            activities: { select: { id: true, name: true } },
+                            professionals: {
+                                select: {
+                                    id: true,
+                                    users: { select: { full_name: true, mobile: true } },
+                                },
+                            },
+                            societies: { select: { id: true, society_name: true } },
+                            schools: { select: { id: true, school_name: true } },
+                        },
+                    },
+                },
+            },
+            parent_consents: {
+                select: {
+                    id: true,
+                    participant_name: true,
+                    dob: true,
+                    age: true,
+                    society_name: true,
+                    activity_enrolled: true,
+                    parent_name: true,
+                    emergency_contact_no: true,
+                    parent_signature_doc: true,
+                    consent_date: true,
+                    created_at: true,
+                },
+                orderBy: { created_at: "desc" },
+            },
+        },
+    });
+};
+
+// ── Update individual_participant record ──────────────────────────────────
+exports.updateIndividualParticipant = async (id, data) => {
+    return await prisma.individual_participants.update({
+        where: { id: Number(id) },
+        data,
+    });
+};
+
+// ── Update personal_tutor record ──────────────────────────────────────────
+exports.updatePersonalTutor = async (id, data) => {
+    return await prisma.personal_tutors.update({
+        where: { id: Number(id) },
+        data,
+    });
+};
+
+// ── Update school_student record ──────────────────────────────────────────
+exports.updateSchoolStudent = async (id, data) => {
+    return await prisma.school_students.update({
+        where: { id: Number(id) },
+        data,
     });
 };

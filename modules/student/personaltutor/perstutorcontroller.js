@@ -164,7 +164,7 @@ exports.checkRegistrationStatus = async (req, res) => {
         if (registration.status === "approved") {
             console.log(`[PT] Registration approved — userId: ${registration.userId}, issuing JWT`);
             const token = jwt.sign(
-                { id: registration.userId, role: "student" },
+                { userId: registration.userId, mobile: registration.user?.mobile ?? null, role: "student", student_type: "personal_tutor" },
                 process.env.JWT_ACCESS_SECRET,
                 { expiresIn: "7d" }
             );

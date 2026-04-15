@@ -1,5 +1,6 @@
 const prisma = require("../../../config/prisma");
 const repo   = require("./batchrepo");
+const notify = require("../../../utils/notifications");
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -130,7 +131,19 @@ async function createBatch({
   end_time,
   start_date,
   end_date,
+  session_cap,
 }) {
+  // school_student batches must use a trainer
+  if (batch_type === "school_student") {
+    const pro = await prisma.professionals.findUnique({
+      where: { id: Number(professional_id) },
+      select: { profession_type: true },
+    });
+    if (pro && pro.profession_type !== "trainer") {
+      throw Object.assign(new Error("School batches require a trainer, not a teacher"), { code: "INVALID_PROFESSIONAL_TYPE" });
+    }
+  }
+
   // Validate: group_coaching requires society_id, school_student requires school_id
   if (batch_type === "group_coaching" && !society_id) {
     throw Object.assign(new Error("society_id is required for group_coaching batch"), { code: "SOCIETY_OR_SCHOOL_REQUIRED" });
@@ -183,8 +196,14 @@ async function createBatch({
     );
   }
 
+  // Resolve session_cap: admin-supplied or fallback to commission_rules
+  let resolvedCap = session_cap ? Math.min(parseInt(session_cap), 99) : null;
+  if (!resolvedCap) {
+    resolvedCap = await resolveStandardCap(batch_type, Number(activity_id));
+  }
+
   // Cycle end is derived after session generation — set a wide placeholder for now
-  return repo.createBatch({
+  const batch = await repo.createBatch({
     batch_type,
     society_id: society_id ? Number(society_id) : null,
     school_id: school_id ? Number(school_id) : null,
@@ -199,7 +218,13 @@ async function createBatch({
     end_date: endDt,
     cycle_start_date: startDt,
     cycle_end_date:   startDt, // will be updated when sessions are generated
+    session_cap:      resolvedCap,
   });
+
+  return {
+    ...batch,
+    _note: "The session count cannot be changed once sessions are created.",
+  };
 }
 
 async function getBatch(batchId) {
@@ -268,6 +293,17 @@ async function updateBatch(batchId, updates) {
     dayNamesToCancel = oldDays.filter((d) => !newDays.includes(d));
   }
 
+  // Lock session_cap once sessions exist for this batch
+  if (updates.session_cap !== undefined) {
+    const sessionCount = await prisma.sessions.count({ where: { batch_id: batch.id } });
+    if (sessionCount > 0) {
+      throw Object.assign(
+        new Error("The session count cannot be changed once sessions are created."),
+        { code: "SESSION_CAP_LOCKED" }
+      );
+    }
+  }
+
   const batchUpdateData = { updated_at: new Date() };
   if (updates.professional_id) batchUpdateData.professional_id = Number(updates.professional_id);
   if (updates.professional_type) batchUpdateData.professional_type = updates.professional_type;
@@ -276,6 +312,7 @@ async function updateBatch(batchId, updates) {
   if (updates.days_of_week) batchUpdateData.days_of_week = updates.days_of_week;
   if (updates.end_date) batchUpdateData.end_date = new Date(updates.end_date);
   if (updates.batch_name !== undefined) batchUpdateData.batch_name = updates.batch_name;
+  if (updates.session_cap !== undefined) batchUpdateData.session_cap = Math.min(parseInt(updates.session_cap), 99);
 
   await repo.updateBatch(batch.id, batchUpdateData);
 
@@ -287,6 +324,8 @@ async function updateBatch(batchId, updates) {
     await repo.cancelSessionsOnRemovedDays(batch.id, dayNamesToCancel);
   }
 
+  notify.notifyBatchUpdated(batch, updates).catch(() => {});
+
   return repo.getBatchById(batch.id);
 }
 
@@ -294,6 +333,7 @@ async function deleteBatch(batchId) {
   const batch = await repo.getBatchById(Number(batchId));
   if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
 
+  notify.notifyBatchDeleted(batch).catch(() => {});
   await repo.cancelFutureBatchSessions(batch.id);
   await repo.softDeleteBatch(batch.id);
   return { success: true };
@@ -439,6 +479,51 @@ async function bulkAssignStudents(batchId, studentIds) {
   if (assignable.length > 0) {
     await repo.bulkCreateBatchStudents(assignable.map((id) => ({ batch_id: batch.id, student_id: id })));
     await repo.addParticipantsToFutureBatchSessions(batch.id, assignable);
+
+    // Auto-set membership_start_date and membership_end_date for each enrolled student
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    for (const studentId of assignable) {
+      const student = students.find((s) => s.id === studentId);
+      if (!student) continue;
+
+      if (batch.batch_type === "group_coaching") {
+        // individual_participants
+        const ip = await prisma.individual_participants.findFirst({
+          where: { student_id: studentId },
+          select: { id: true, term_months: true, membership_start_date: true },
+        });
+        if (ip && !ip.membership_start_date) {
+          const endDate = new Date(today);
+          endDate.setMonth(endDate.getMonth() + (ip.term_months || 1));
+          await prisma.individual_participants.update({
+            where: { id: ip.id },
+            data: {
+              membership_start_date: today,
+              membership_end_date:   endDate,
+              batch_id:              batch.id,
+            },
+          });
+        }
+      } else if (batch.batch_type === "school_student") {
+        // school_students
+        const ss = await prisma.school_students.findFirst({
+          where: { student_id: studentId },
+          select: { id: true, term_months: true, membership_start_date: true },
+        });
+        if (ss && !ss.membership_start_date) {
+          const endDate = new Date(today);
+          endDate.setMonth(endDate.getMonth() + (ss.term_months || 9));
+          await prisma.school_students.update({
+            where: { id: ss.id },
+            data: {
+              membership_start_date: today,
+              membership_end_date:   endDate,
+            },
+          });
+        }
+      }
+    }
   }
 
   return { assigned: assignable.length, skipped_conflicts: conflicted };
@@ -499,32 +584,42 @@ async function getBatchDetail(batchId) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // Past sessions (completed or cancelled) with participant attendance
+  const sessionInclude = {
+    professionals: {
+      select: {
+        id: true,
+        profession_type: true,
+        users: { select: { full_name: true, mobile: true } },
+      },
+    },
+    session_participants: {
+      select: {
+        attended:   true,
+        student_id: true,
+        students:   { select: { users: { select: { full_name: true } } } },
+      },
+    },
+  };
+
+  // Past sessions with participant attendance + who handled it
   const pastSessions = await prisma.sessions.findMany({
     where: {
       batch_id:       batch.id,
       scheduled_date: { lt: today },
     },
-    include: {
-      session_participants: {
-        select: {
-          attended:   true,
-          student_id: true,
-          students:   { select: { users: { select: { full_name: true } } } },
-        },
-      },
-    },
+    include: sessionInclude,
     orderBy: { scheduled_date: "desc" },
-    take: 50,
+    take: 100,
   });
 
-  // Upcoming sessions
+  // Upcoming sessions with professional info
   const upcomingSessions = await prisma.sessions.findMany({
     where: {
       batch_id:       batch.id,
       scheduled_date: { gte: today },
       status:         { in: ["scheduled", "ongoing"] },
     },
+    include: sessionInclude,
     orderBy: { scheduled_date: "asc" },
   });
 
@@ -561,8 +656,12 @@ async function computeSettlementPreview(batch) {
     const cycleStart = new Date(batch.cycle_start_date);
     const cycleEnd   = new Date(batch.cycle_end_date);
 
-    // Standard cap = denominator for per-session rate (from commission_rules + activity_category)
-    const standardCap = await resolveStandardCap(batch.batch_type, batch.activity_id);
+    // Standard cap = denominator for per-session rate.
+    // If the batch has a session_cap set, use it. Otherwise fall back to commission_rules.
+    // Dynamic override: if actual sessions in this cycle differ from cap, use actual count.
+    const standardCap = batch.session_cap
+      ? batch.session_cap
+      : await resolveStandardCap(batch.batch_type, batch.activity_id);
 
     // Sessions generated in this cycle
     const sessions = await prisma.sessions.findMany({
@@ -657,8 +756,12 @@ async function computeSettlementPreview(batch) {
     }
 
     if (!isFlat) {
-        const totalPool      = parseFloat(((baseAmount * commissionRate) / 100).toFixed(2));
-        const perSessionRate = standardCap > 0 ? parseFloat((totalPool / standardCap).toFixed(2)) : 0;
+        const totalPool = parseFloat(((baseAmount * commissionRate) / 100).toFixed(2));
+        // Dynamic override: if actual sessions in cycle differ from cap, use actual count as cap
+        const effectiveCap = sessionsGenerated !== standardCap && sessionsGenerated > 0
+          ? sessionsGenerated
+          : standardCap;
+        const perSessionRate = effectiveCap > 0 ? parseFloat((totalPool / effectiveCap).toFixed(2)) : 0;
         commissionAmount     = parseFloat((sessionsAttended * perSessionRate).toFixed(2));
     }
 
@@ -666,12 +769,18 @@ async function computeSettlementPreview(batch) {
     today.setHours(0, 0, 0, 0);
     const cycleComplete = today > cycleEnd;
 
+    const effectiveCap = sessionsGenerated !== standardCap && sessionsGenerated > 0
+      ? sessionsGenerated
+      : standardCap;
+
     return {
         cycle_start:         cycleStart,
         cycle_end:           cycleEnd,
         cycle_complete:      cycleComplete,
         settlement_locked:   !cycleComplete,
         standard_cap:        standardCap,
+        effective_cap:       effectiveCap,
+        cap_overridden:      effectiveCap !== standardCap,
         sessions_generated:  sessionsGenerated,
         sessions_attended:   sessionsAttended,
         student_count:       batchStudentIds.length,
@@ -809,10 +918,357 @@ async function listSettlements(batchId) {
 
 function parseTimeString(timeStr) {
   if (timeStr instanceof Date) return timeStr;
-  // Accepts "HH:MM" or "HH:MM:SS"
-  const [h, m, s = "0"] = String(timeStr).split(":");
+  const str = String(timeStr).trim();
+
+  // Full ISO datetime string (e.g. "1970-01-01T05:00:00.000Z" from Prisma DateTime fields)
+  if (str.includes('T') || (str.includes('-') && str.includes(':'))) {
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d;
+  }
+
+  // 12-hour format with AM/PM (e.g. "4:30 PM" from toLocaleTimeString)
+  const ampmMatch = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i);
+  if (ampmMatch) {
+    let h = Number(ampmMatch[1]);
+    const m = Number(ampmMatch[2]);
+    const s = Number(ampmMatch[3] ?? 0);
+    const meridiem = ampmMatch[4].toUpperCase();
+    if (meridiem === 'PM' && h < 12) h += 12;
+    if (meridiem === 'AM' && h === 12) h = 0;
+    return new Date(1970, 0, 1, h, m, s);
+  }
+
+  // HH:MM or HH:MM:SS (24-hour, the expected format from <input type="time">)
+  const [h, m, s = '0'] = str.split(':');
   const d = new Date(1970, 0, 1, Number(h), Number(m), Number(s));
   return d;
+}
+
+/**
+ * Reassign a single batch session to a different professional.
+ * - Session must belong to the batch and be scheduled/ongoing.
+ * - Conflict-checks the new professional at that slot (excludes the session itself).
+ * - No trainer_assignments impact — only the individual session record changes.
+ */
+async function reassignBatchSession(batchId, sessionId, newProfessionalId) {
+  const batch = await repo.getBatchById(batchId);
+  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+
+  const session = await prisma.sessions.findUnique({ where: { id: sessionId } });
+  if (!session || session.batch_id !== batchId) {
+    throw Object.assign(new Error("Session not found in this batch"), { code: "BATCH_NOT_FOUND" });
+  }
+  if (["completed", "cancelled", "absent"].includes(session.status)) {
+    throw Object.assign(new Error(`Cannot reassign a ${session.status} session`), { code: "INVALID_STATUS" });
+  }
+
+  const professional = await prisma.professionals.findUnique({
+    where: { id: newProfessionalId },
+    include: { users: { select: { approval_status: true } } },
+  });
+  if (!professional || professional.users?.approval_status !== "approved") {
+    throw Object.assign(new Error("Professional not found or not approved"), { code: "PROFESSIONAL_NOT_FOUND" });
+  }
+
+  // Conflict check — exclude this session
+  const conflict = await prisma.sessions.findFirst({
+    where: {
+      id:              { not: sessionId },
+      professional_id: newProfessionalId,
+      scheduled_date:  session.scheduled_date,
+      status:          { in: ["scheduled", "ongoing"] },
+      AND: [
+        { start_time: { lt: session.end_time } },
+        { end_time:   { gt: session.start_time } },
+      ],
+    },
+  });
+  if (conflict) {
+    throw Object.assign(new Error("New professional is already booked at this date and time"), { code: "PROFESSIONAL_CONFLICT" });
+  }
+
+  const updated = await prisma.sessions.update({
+    where: { id: sessionId },
+    data:  { professional_id: newProfessionalId, updated_at: new Date() },
+  });
+
+  notify.notifyBatchSessionReassigned(batch, session, newProfessionalId).catch(() => {});
+
+  const commissionService = require("../../commissions/commissionservice");
+  await commissionService.ensureBatchProfessionalAssignment({
+    professionalId:   newProfessionalId,
+    professionalType: professional.profession_type,
+    batchType:        batch.batch_type,
+    societyId:        batch.society_id ?? null,
+    schoolId:         batch.school_id ?? null,
+    activityId:       batch.activity_id ?? null,
+    assignedFrom:     session.scheduled_date ?? new Date(),
+  });
+
+  return updated;
+}
+
+/**
+ * Reassign all future scheduled sessions of a batch to a different professional.
+ * Also updates the batch's own professional_id so new generated sessions use the new pro.
+ * Creates a new trainer_assignments record for the new professional.
+ */
+async function reassignAllFutureBatchSessions(batchId, newProfessionalId) {
+  const batch = await repo.getBatchById(batchId);
+  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+  if (!batch.is_active) throw Object.assign(new Error("Batch is inactive"), { code: "BATCH_INACTIVE" });
+
+  const professional = await prisma.professionals.findUnique({
+    where: { id: newProfessionalId },
+    include: { users: { select: { approval_status: true } } },
+  });
+  if (!professional || professional.users?.approval_status !== "approved") {
+    throw Object.assign(new Error("Professional not found or not approved"), { code: "PROFESSIONAL_NOT_FOUND" });
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const { count } = await prisma.sessions.updateMany({
+    where: {
+      batch_id:       batchId,
+      status:         "scheduled",
+      scheduled_date: { gte: today },
+    },
+    data: { professional_id: newProfessionalId, updated_at: new Date() },
+  });
+
+  // Update batch's own professional so future generate-sessions uses new pro
+  await prisma.batches.update({
+    where: { id: batchId },
+    data:  { professional_id: newProfessionalId },
+  });
+
+  // Deactivate old trainer_assignment for this batch
+  if (batch.professional_id !== newProfessionalId) {
+    await prisma.trainer_assignments.updateMany({
+      where: {
+        professional_id: batch.professional_id,
+        assignment_type: batch.batch_type === "group_coaching" ? "group_coaching_society" : "group_coaching_school",
+        society_id:      batch.society_id ?? null,
+        school_id:       batch.school_id  ?? null,
+        activity_id:     batch.activity_id ?? null,
+        is_active:       true,
+      },
+      data: { is_active: false },
+    });
+
+    // Create new trainer_assignment for new professional
+    const commissionService = require("../../commissions/commissionservice");
+    if (batch.batch_type === "group_coaching" && batch.school_id == null) {
+      await commissionService.recordSchoolTrainerAssignment(newProfessionalId, batch.school_id, batch.activity_id);
+    }
+    // For group_coaching_society a direct create is simpler
+    const existingAssignment = await prisma.trainer_assignments.findFirst({
+      where: {
+        professional_id: newProfessionalId,
+        assignment_type: batch.batch_type === "group_coaching" ? "group_coaching_society" : "group_coaching_school",
+        society_id:      batch.society_id ?? null,
+        school_id:       batch.school_id  ?? null,
+        activity_id:     batch.activity_id ?? null,
+        is_active:       true,
+      },
+    });
+    if (!existingAssignment) {
+      await prisma.trainer_assignments.create({
+        data: {
+          professional_id:    newProfessionalId,
+          professional_type:  professional.profession_type,
+          assignment_type:    batch.batch_type === "group_coaching" ? "group_coaching_society" : "group_coaching_school",
+          society_id:         batch.society_id ?? null,
+          school_id:          batch.school_id  ?? null,
+          activity_id:        batch.activity_id ?? null,
+          sessions_allocated: null,
+          assigned_from:      new Date(),
+          is_active:          true,
+        },
+      });
+    }
+  }
+
+  notify.notifyAllBatchSessionsReassigned(batch, newProfessionalId).catch(() => {});
+
+  return { updated_sessions: count, new_professional_id: newProfessionalId };
+}
+
+/**
+ * Extend a student's membership term inside a batch.
+ * Adds `term_months` (or a custom number) to the existing membership_end_date.
+ * If no membership_end_date exists yet, sets start = today and end = today + months.
+ */
+async function extendStudentTerm(batchId, studentId, extraMonths) {
+  const batch = await repo.getBatchById(Number(batchId));
+  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+
+  // Verify student is actually in this batch
+  const enrollment = await prisma.batch_students.findFirst({
+    where: { batch_id: Number(batchId), student_id: Number(studentId) },
+  });
+  if (!enrollment) throw Object.assign(new Error("Student not found in this batch"), { code: "STUDENT_NOT_FOUND" });
+
+  const months = Number(extraMonths);
+  if (!months || months < 1 || months > 12) {
+    throw Object.assign(new Error("extra_months must be between 1 and 12"), { code: "INVALID_EXTEND_MONTHS" });
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (batch.batch_type === "group_coaching") {
+    const ip = await prisma.individual_participants.findFirst({
+      where: { student_id: Number(studentId) },
+      select: { id: true, term_months: true, membership_start_date: true, membership_end_date: true },
+    });
+    if (!ip) throw Object.assign(new Error("Student record not found"), { code: "STUDENT_NOT_FOUND" });
+
+    const base  = ip.membership_end_date ? new Date(ip.membership_end_date) : today;
+    const newEnd = new Date(base);
+    newEnd.setMonth(newEnd.getMonth() + months);
+
+    await prisma.individual_participants.update({
+      where: { id: ip.id },
+      data: {
+        membership_start_date: ip.membership_start_date ?? today,
+        membership_end_date:   newEnd,
+        term_months:           (ip.term_months || 0) + months,
+        is_active:             true,
+      },
+    });
+    return { student_id: Number(studentId), new_membership_end_date: newEnd };
+  } else {
+    // school_student
+    const ss = await prisma.school_students.findFirst({
+      where: { student_id: Number(studentId) },
+      select: { id: true, term_months: true, membership_start_date: true, membership_end_date: true },
+    });
+    if (!ss) throw Object.assign(new Error("Student record not found"), { code: "STUDENT_NOT_FOUND" });
+
+    const base  = ss.membership_end_date ? new Date(ss.membership_end_date) : today;
+    const newEnd = new Date(base);
+    newEnd.setMonth(newEnd.getMonth() + months);
+
+    await prisma.school_students.update({
+      where: { id: ss.id },
+      data: {
+        membership_start_date: ss.membership_start_date ?? today,
+        membership_end_date:   newEnd,
+        term_months:           (ss.term_months || 0) + months,
+        is_active:             true,
+      },
+    });
+    return { student_id: Number(studentId), new_membership_end_date: newEnd };
+  }
+}
+
+/**
+ * Create a single extra session inside an existing batch on a specific date.
+ * Admin uses this to add an ad-hoc session (e.g. makeup class, extra practice).
+ * Adds all current batch_students as session_participants automatically.
+ */
+async function createBatchSession(batchId, { scheduled_date, start_time, end_time, professional_id }) {
+  const batch = await repo.getBatchById(Number(batchId));
+  if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+  if (!batch.is_active) throw Object.assign(new Error("Batch is inactive"), { code: "BATCH_INACTIVE" });
+
+  if (!scheduled_date) throw Object.assign(new Error("scheduled_date is required"), { code: "MISSING_FIELDS" });
+
+  const date = new Date(scheduled_date);
+  if (isNaN(date.getTime())) throw Object.assign(new Error("Invalid scheduled_date"), { code: "DATE_RANGE_INVALID" });
+
+  const startT = start_time ? parseTimeString(start_time) : batch.start_time;
+  const endT   = end_time   ? parseTimeString(end_time)   : batch.end_time;
+
+  const proId = professional_id ? Number(professional_id) : batch.professional_id;
+
+  // Validate professional if overridden
+  if (professional_id) {
+    const pro = await prisma.professionals.findUnique({
+      where: { id: proId },
+      include: { users: { select: { approval_status: true } } },
+    });
+    if (!pro || pro.users?.approval_status !== "approved") {
+      throw Object.assign(new Error("Professional not found or not approved"), { code: "PROFESSIONAL_NOT_FOUND" });
+    }
+  }
+
+  // Conflict check for professional
+  const conflict = await prisma.sessions.findFirst({
+    where: {
+      professional_id: proId,
+      scheduled_date:  date,
+      status: { notIn: ["cancelled"] },
+      AND: [{ start_time: { lt: endT } }, { end_time: { gt: startT } }],
+    },
+  });
+  if (conflict) {
+    throw Object.assign(new Error(`Professional is already booked on ${scheduled_date} at this time`), { code: "PROFESSIONAL_CONFLICT" });
+  }
+
+  // Get current batch students to add as participants
+  const batchStudents = await repo.getBatchStudents(batch.id);
+  const studentIds = batchStudents.map((bs) => bs.student_id);
+
+  const session = await repo.createSessionWithParticipants(
+    {
+      session_type:    batch.batch_type === "school_student" ? "school_student" : "group_coaching",
+      batch_id:        batch.id,
+      student_id:      null,
+      professional_id: proId,
+      activity_id:     batch.activity_id,
+      scheduled_date:  date,
+      start_time:      startT,
+      end_time:        endT,
+      status:          "scheduled",
+    },
+    studentIds
+  );
+
+  return session;
+}
+
+/**
+ * Returns approved professionals eligible to be assigned/reassigned for a batch.
+ * - school_student batches: trainers only
+ * - group_coaching batches: use the batch's professional_type (trainer/teacher)
+ * - If batchId is not provided, type param is used directly.
+ */
+async function getAvailableProfessionalsForBatch(batchId, type) {
+  let professionalType = type;
+  if (batchId) {
+    const batch = await repo.getBatchById(Number(batchId));
+    if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
+    professionalType = batch.batch_type === "school_student" ? "trainer" : batch.professional_type;
+  }
+
+  if (!professionalType) throw Object.assign(new Error("type is required"), { code: "MISSING_FIELDS" });
+
+  const rows = await prisma.professionals.findMany({
+    where: {
+      profession_type: professionalType,
+      users: { approval_status: "approved" },
+    },
+    select: {
+      id: true,
+      profession_type: true,
+      users: { select: { full_name: true, mobile: true } },
+      trainers: { select: { category: true, specified_game: true } },
+      teachers: { select: { subject: true } },
+    },
+    orderBy: { id: "desc" },
+  });
+
+  return rows.map((r) => ({
+    professional_id:  r.id,
+    profession_type:  r.profession_type,
+    full_name:        r.users?.full_name ?? null,
+    mobile:           r.users?.mobile ?? null,
+    details:          r.trainers?.[0] ?? r.teachers?.[0] ?? null,
+  }));
 }
 
 module.exports = {
@@ -830,4 +1286,9 @@ module.exports = {
   settleBatchCycle,
   markSettlementPaid,
   listSettlements,
+  reassignBatchSession,
+  reassignAllFutureBatchSessions,
+  extendStudentTerm,
+  createBatchSession,
+  getAvailableProfessionalsForBatch,
 };

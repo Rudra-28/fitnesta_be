@@ -10,7 +10,7 @@ async function buildReceipt(row) {
         : row.form_data;
 
     const userInfo    = formData?.user_info || {};
-    const activityIds = (formData?.payment?.activity_ids || []).map(Number);
+    const activityIds = (formData?.payment?.activity_ids || formData?.activity_ids || []).map(Number);
 
     // Resolve society_category for group_coaching (needed to match correct fee row)
     let societyCategory = null;
@@ -29,10 +29,15 @@ async function buildReceipt(row) {
     // Resolve standard for personal_tutor / school_student
     const standard = formData?.payment?.standard ?? formData?.personaltutor?.standard ?? null;
 
+    const VALID_COACHING_TYPES = new Set([
+        "group_coaching", "individual_coaching", "personal_tutor", "school_student",
+    ]);
+
     // Fetch activity names + per-activity fees in parallel
+    const canFetchFees = activityIds.length > 0 && VALID_COACHING_TYPES.has(row.service_type);
     const [activities, feeRecords] = await Promise.all([
         activitiesRepo.getActivitiesByIds(activityIds),
-        activityIds.length > 0
+        canFetchFees
             ? activitiesRepo.getFeesForActivities(
                 activityIds,
                 row.service_type,

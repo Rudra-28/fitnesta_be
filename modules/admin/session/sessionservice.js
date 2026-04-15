@@ -2,6 +2,7 @@ const prisma = require("../../../config/prisma");
 const repo = require("./sessionrepo");
 const adminRepo = require("../adminrepository");
 const commissionService = require("../../commissions/commissionservice");
+const notify = require("../../../utils/notifications");
 
 function parseTimeString(timeStr) {
   if (timeStr instanceof Date) return timeStr;
@@ -458,15 +459,30 @@ async function updateSessionStatus(sessionId, status, cancel_reason) {
   const session = await repo.getSessionById(sessionId);
   if (!session) throw Object.assign(new Error("Session not found"), { code: "SESSION_NOT_FOUND" });
 
-  if (session.status === "completed" || session.status === "cancelled") {
+  const FINAL_STATUSES = ["completed", "cancelled", "absent"];
+  if (FINAL_STATUSES.includes(session.status)) {
     throw Object.assign(new Error(`Cannot update a ${session.status} session`), { code: "SESSION_ALREADY_FINAL" });
+  }
+
+  // Batch sessions (group_coaching / school_student): admin can only cancel.
+  // ongoing/completed/absent are set automatically by trainer punch-in/out.
+  const BATCH_TYPES = ["group_coaching", "school_student"];
+  if (BATCH_TYPES.includes(session.session_type) && status !== "cancelled") {
+    throw Object.assign(
+      new Error("Batch session status is managed automatically. Admin can only cancel a batch session."),
+      { code: "MANUAL_STATUS_NOT_ALLOWED" }
+    );
   }
 
   if (status === "cancelled" && !cancel_reason) {
     throw Object.assign(new Error("cancel_reason is required when cancelling a session"), { code: "MISSING_FIELDS" });
   }
 
-  return repo.updateSessionStatus(sessionId, status, cancel_reason);
+  const updated = await repo.updateSessionStatus(sessionId, status, cancel_reason);
+  if (status === "cancelled") {
+    notify.notifySessionCancelled(session, cancel_reason).catch(() => {});
+  }
+  return updated;
 }
 
 async function cancelSession(sessionId, cancel_reason) {
@@ -477,7 +493,8 @@ async function rescheduleSession(sessionId, { scheduled_date, start_time, end_ti
   const session = await repo.getSessionById(sessionId);
   if (!session) throw Object.assign(new Error("Session not found"), { code: "SESSION_NOT_FOUND" });
 
-  if (session.status === "completed" || session.status === "cancelled") {
+  const FINAL_STATUSES = ["completed", "cancelled", "absent"];
+  if (FINAL_STATUSES.includes(session.status)) {
     throw Object.assign(new Error(`Cannot reschedule a ${session.status} session`), { code: "SESSION_ALREADY_FINAL" });
   }
 
@@ -502,7 +519,9 @@ async function rescheduleSession(sessionId, { scheduled_date, start_time, end_ti
     }
   }
 
-  return repo.rescheduleSession(sessionId, { scheduled_date: date, start_time: startTimeDt, end_time: endTimeDt });
+  const updated = await repo.rescheduleSession(sessionId, { scheduled_date: date, start_time: startTimeDt, end_time: endTimeDt });
+  notify.notifySessionRescheduled(session, { scheduled_date: date, start_time: startTimeDt, end_time: endTimeDt }).catch(() => {});
+  return updated;
 }
 
 async function getStudentSessionBatches(studentId) {
@@ -606,6 +625,147 @@ async function getSessionFeedback(sessionId) {
   return repo.getSessionFeedback(sessionId);
 }
 
+/**
+ * Reassign a single session to a different professional.
+ * - Session must be scheduled (not completed/cancelled).
+ * - Conflict-checks the new professional at that session's date/time.
+ * - No commission impact: settlement reads completed sessions by professional_id,
+ *   so the new professional is credited naturally when the session completes.
+ */
+async function reassignSingleSession(sessionId, newProfessionalId) {
+  const session = await repo.getSessionById(sessionId);
+  if (!session) throw Object.assign(new Error("Session not found"), { code: "SESSION_NOT_FOUND" });
+
+  if (["completed", "cancelled", "absent"].includes(session.status)) {
+    throw Object.assign(
+      new Error(`Cannot reassign a ${session.status} session`),
+      { code: "SESSION_ALREADY_FINAL" }
+    );
+  }
+
+  const professional = await prisma.professionals.findUnique({
+    where: { id: Number(newProfessionalId) },
+    include: { users: { select: { approval_status: true } } },
+  });
+  if (!professional || professional.users?.approval_status !== "approved") {
+    throw Object.assign(new Error("Professional not found or not approved"), { code: "PROFESSIONAL_NOT_FOUND" });
+  }
+
+  // Conflict-check for the new professional (exclude this session itself)
+  const conflict = await repo.checkProfessionalConflict(
+    Number(newProfessionalId),
+    session.scheduled_date,
+    session.start_time,
+    session.end_time,
+    Number(sessionId)
+  );
+  if (conflict) {
+    throw Object.assign(new Error("New professional is already booked at this date and time"), {
+      code: "PROFESSIONAL_CONFLICT",
+    });
+  }
+
+  const updated = await repo.reassignSingleSession(sessionId, newProfessionalId);
+  notify.notifySessionReassigned(session, Number(newProfessionalId)).catch(() => {});
+
+  if (session.session_type === "personal_tutor" && session.student_id) {
+    const pt = await adminRepo.findPersonalTutorByStudentId(session.student_id);
+    if (pt) {
+      await commissionService.recordTeacherAssignment(pt.id, Number(newProfessionalId));
+    }
+  } else if (session.session_type === "individual_coaching" && session.student_id) {
+    const ip = await adminRepo.findIndividualParticipantByStudentId(session.student_id);
+    if (ip) {
+      await commissionService.recordTrainerAssignment(ip.id, Number(newProfessionalId));
+    }
+  }
+
+  return updated;
+}
+
+/**
+ * Reassign all future scheduled sessions for a student to a new professional.
+ *
+ * Commission impact:
+ * - Deactivates the old professional's trainer_assignments record for this student
+ *   so their commission cycle stops (their already-completed sessions are still
+ *   settled at the next settlement run before deactivation takes effect).
+ * - Creates a new trainer_assignments record for the new professional starting today,
+ *   so future settlements attribute correctly.
+ * - Updates teacher_professional_id / trainer_professional_id on the student record.
+ *
+ * Body: { session_type, student_id, new_professional_id }
+ */
+async function reassignAllFutureSessions({ session_type, student_id, new_professional_id }) {
+  if (!["personal_tutor", "individual_coaching"].includes(session_type)) {
+    throw Object.assign(new Error("session_type must be personal_tutor or individual_coaching"), { code: "INVALID_SESSION_TYPE" });
+  }
+  if (!student_id || !new_professional_id) {
+    throw Object.assign(new Error("student_id and new_professional_id are required"), { code: "MISSING_FIELDS" });
+  }
+
+  const professional = await prisma.professionals.findUnique({
+    where: { id: Number(new_professional_id) },
+    include: { users: { select: { approval_status: true } } },
+  });
+  if (!professional || professional.users?.approval_status !== "approved") {
+    throw Object.assign(new Error("Professional not found or not approved"), { code: "PROFESSIONAL_NOT_FOUND" });
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const updatedCount = await repo.reassignFutureSessions({
+    student_id,
+    session_type,
+    new_professional_id,
+    from_date: today,
+  });
+
+  let oldProfId = null;
+
+  // Update student record and trainer_assignments
+  if (session_type === "personal_tutor") {
+    const pt = await adminRepo.findPersonalTutorByStudentId(student_id);
+    if (pt) {
+      oldProfId = pt.teacher_professional_id ?? null;
+      if (pt.teacher_professional_id && pt.teacher_professional_id !== Number(new_professional_id)) {
+        await prisma.trainer_assignments.updateMany({
+          where: {
+            professional_id: pt.teacher_professional_id,
+            assignment_type: "personal_tutor",
+            is_active:       true,
+          },
+          data: { is_active: false },
+        });
+      }
+      await adminRepo.assignTeacherToStudent(pt.id, Number(new_professional_id));
+      await commissionService.recordTeacherAssignment(pt.id, Number(new_professional_id));
+    }
+  } else {
+    const ip = await adminRepo.findIndividualParticipantByStudentId(student_id);
+    if (ip) {
+      oldProfId = ip.trainer_professional_id ?? null;
+      if (ip.trainer_professional_id && ip.trainer_professional_id !== Number(new_professional_id)) {
+        await prisma.trainer_assignments.updateMany({
+          where: {
+            professional_id: ip.trainer_professional_id,
+            assignment_type: "individual_coaching",
+            is_active:       true,
+          },
+          data: { is_active: false },
+        });
+      }
+      await adminRepo.assignTrainerToStudent(ip.id, Number(new_professional_id));
+      await commissionService.recordTrainerAssignment(ip.id, Number(new_professional_id));
+    }
+  }
+
+  notify.notifyAllSessionsReassigned(student_id, oldProfId, Number(new_professional_id), session_type).catch(() => {});
+
+  return { updated_sessions: updatedCount, new_professional_id: Number(new_professional_id) };
+}
+
 module.exports = {
   createIndividualSession,
   generateIndividualSessions,
@@ -620,4 +780,6 @@ module.exports = {
   previewSessionGeneration,
   deleteSession,
   bulkDeleteFutureSessions,
+  reassignSingleSession,
+  reassignAllFutureSessions,
 };

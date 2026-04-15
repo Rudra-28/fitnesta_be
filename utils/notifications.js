@@ -1,0 +1,224 @@
+/**
+ * Notification helpers for admin-triggered events.
+ * All functions are fire-and-forget (never throw).
+ *
+ * Targets:
+ *   - student (via students.user_id)
+ *   - professional (via professionals.user_id)
+ *   - batch students (via batch_students → students.user_id)
+ */
+
+const prisma = require("../config/prisma");
+const { sendNotification } = require("./fcm");
+
+// ── Low-level helpers ──────────────────────────────────────────────────────
+
+async function notifyStudent(studentId, title, body, data = {}) {
+  try {
+    const s = await prisma.students.findUnique({ where: { id: Number(studentId) }, select: { user_id: true } });
+    if (s?.user_id) await sendNotification(s.user_id, title, body, data);
+  } catch (e) { console.error("[NOTIFY] student", studentId, e.message); }
+}
+
+async function notifyProfessional(professionalId, title, body, data = {}) {
+  try {
+    const p = await prisma.professionals.findUnique({ where: { id: Number(professionalId) }, select: { user_id: true } });
+    if (p?.user_id) await sendNotification(p.user_id, title, body, data);
+  } catch (e) { console.error("[NOTIFY] professional", professionalId, e.message); }
+}
+
+async function notifyBatchStudents(batchId, title, body, data = {}) {
+  try {
+    const rows = await prisma.batch_students.findMany({
+      where: { batch_id: Number(batchId) },
+      include: { students: { select: { user_id: true } } },
+    });
+    await Promise.all(
+      rows.map(r => r.students?.user_id ? sendNotification(r.students.user_id, title, body, data) : null)
+    );
+  } catch (e) { console.error("[NOTIFY] batchStudents", batchId, e.message); }
+}
+
+// ── Individual session events ──────────────────────────────────────────────
+
+/**
+ * Session rescheduled by admin.
+ * @param {object} session  - full session object (must have student_id, professional_id, scheduled_date, start_time)
+ * @param {object} newDate  - { scheduled_date, start_time, end_time } (raw, before DB write)
+ */
+async function notifySessionRescheduled(session, newDate) {
+  const dateStr = new Date(newDate.scheduled_date).toDateString();
+  const timeStr = formatTime(newDate.start_time);
+  const body = `Rescheduled to ${dateStr} at ${timeStr}`;
+
+  await Promise.all([
+    session.student_id      && notifyStudent(session.student_id, "Session Rescheduled", body, { type: "session_rescheduled", session_id: String(session.id) }),
+    session.professional_id && notifyProfessional(session.professional_id, "Session Rescheduled", body, { type: "session_rescheduled", session_id: String(session.id) }),
+  ]);
+}
+
+/**
+ * Single session reassigned to a new professional.
+ * @param {object} session        - original session (has student_id, professional_id)
+ * @param {number} newProfId      - new professional's id
+ */
+async function notifySessionReassigned(session, newProfId) {
+  const dateStr = new Date(session.scheduled_date).toDateString();
+  const data = { type: "session_reassigned", session_id: String(session.id) };
+
+  await Promise.all([
+    session.student_id && notifyStudent(session.student_id,
+      "Your Session Has a New Trainer/Teacher",
+      `Your session on ${dateStr} has been reassigned to a new professional.`,
+      data),
+    session.professional_id && notifyProfessional(session.professional_id,
+      "Session Removed from Your Schedule",
+      `Your session on ${dateStr} has been reassigned to another professional.`,
+      { ...data }),
+    notifyProfessional(newProfId,
+      "New Session Assigned",
+      `A session on ${dateStr} has been assigned to you.`,
+      data),
+  ]);
+}
+
+/**
+ * All future sessions for a student reassigned to a new professional.
+ */
+async function notifyAllSessionsReassigned(studentId, oldProfId, newProfId, sessionType) {
+  const label = sessionType === "personal_tutor" ? "tutoring" : "coaching";
+  const data = { type: "sessions_reassigned" };
+
+  await Promise.all([
+    notifyStudent(studentId,
+      "Your Sessions Have Been Reassigned",
+      `All upcoming ${label} sessions have been assigned to a new professional.`,
+      data),
+    oldProfId && notifyProfessional(oldProfId,
+      "Sessions Removed from Your Schedule",
+      `All upcoming ${label} sessions for a student have been reassigned.`,
+      data),
+    notifyProfessional(newProfId,
+      "New Sessions Assigned",
+      `Upcoming ${label} sessions for a student have been assigned to you.`,
+      data),
+  ]);
+}
+
+/**
+ * Session cancelled by admin.
+ */
+async function notifySessionCancelled(session, cancelReason) {
+  const dateStr = new Date(session.scheduled_date).toDateString();
+  const body = `Session on ${dateStr} has been cancelled. Reason: ${cancelReason}`;
+  const data = { type: "session_cancelled", session_id: String(session.id) };
+
+  await Promise.all([
+    session.student_id      && notifyStudent(session.student_id, "Session Cancelled", body, data),
+    session.professional_id && notifyProfessional(session.professional_id, "Session Cancelled", body, data),
+  ]);
+}
+
+// ── Batch events ───────────────────────────────────────────────────────────
+
+/**
+ * Batch timing / schedule changed by admin.
+ * Notifies professional + all batch students.
+ */
+async function notifyBatchUpdated(batch, updates) {
+  const changes = [];
+  if (updates.start_time || updates.end_time) changes.push("timing updated");
+  if (updates.days_of_week)                   changes.push("schedule days updated");
+  if (updates.professional_id)                changes.push("new trainer/teacher assigned");
+
+  if (!changes.length) return;
+
+  const batchLabel = batch.batch_name || `Batch #${batch.id}`;
+  const body = `${batchLabel}: ${changes.join(", ")}.`;
+  const data = { type: "batch_updated", batch_id: String(batch.id) };
+
+  await Promise.all([
+    notifyProfessional(batch.professional_id, "Batch Updated", body, data),
+    notifyBatchStudents(batch.id, "Batch Schedule Updated", body, data),
+  ]);
+}
+
+/**
+ * Single batch session reassigned.
+ */
+async function notifyBatchSessionReassigned(batch, session, newProfId) {
+  const dateStr = new Date(session.scheduled_date).toDateString();
+  const batchLabel = batch.batch_name || `Batch #${batch.id}`;
+  const data = { type: "batch_session_reassigned", session_id: String(session.id), batch_id: String(batch.id) };
+
+  await Promise.all([
+    session.professional_id && notifyProfessional(session.professional_id,
+      "Batch Session Reassigned",
+      `Your session for ${batchLabel} on ${dateStr} has been reassigned.`,
+      data),
+    notifyProfessional(newProfId,
+      "New Batch Session Assigned",
+      `A session for ${batchLabel} on ${dateStr} has been assigned to you.`,
+      data),
+    notifyBatchStudents(batch.id,
+      "Batch Session Has New Trainer/Teacher",
+      `The session for ${batchLabel} on ${dateStr} has a new professional.`,
+      data),
+  ]);
+}
+
+/**
+ * All future batch sessions reassigned to a new professional.
+ */
+async function notifyAllBatchSessionsReassigned(batch, newProfId) {
+  const batchLabel = batch.batch_name || `Batch #${batch.id}`;
+  const data = { type: "batch_sessions_reassigned", batch_id: String(batch.id) };
+
+  await Promise.all([
+    batch.professional_id && notifyProfessional(batch.professional_id,
+      "Removed from Batch",
+      `You have been removed from ${batchLabel}. All future sessions are reassigned.`,
+      data),
+    notifyProfessional(newProfId,
+      "Assigned to Batch",
+      `You have been assigned to ${batchLabel} for all upcoming sessions.`,
+      data),
+    notifyBatchStudents(batch.id,
+      "Batch Has New Trainer/Teacher",
+      `${batchLabel} has been assigned a new professional for all upcoming sessions.`,
+      data),
+  ]);
+}
+
+/**
+ * Batch deleted / all future sessions cancelled.
+ */
+async function notifyBatchDeleted(batch) {
+  const batchLabel = batch.batch_name || `Batch #${batch.id}`;
+  const body = `${batchLabel} has been cancelled by the admin.`;
+  const data = { type: "batch_cancelled", batch_id: String(batch.id) };
+
+  await Promise.all([
+    batch.professional_id && notifyProfessional(batch.professional_id, "Batch Cancelled", body, data),
+    notifyBatchStudents(batch.id, "Batch Cancelled", body, data),
+  ]);
+}
+
+// ── Utility ────────────────────────────────────────────────────────────────
+
+function formatTime(t) {
+  if (!t) return "";
+  const d = t instanceof Date ? t : new Date(`1970-01-01T${t}`);
+  return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+}
+
+module.exports = {
+  notifySessionRescheduled,
+  notifySessionReassigned,
+  notifyAllSessionsReassigned,
+  notifySessionCancelled,
+  notifyBatchUpdated,
+  notifyBatchSessionReassigned,
+  notifyAllBatchSessionsReassigned,
+  notifyBatchDeleted,
+};

@@ -211,6 +211,44 @@ exports.listStudents = async (type) => {
     throw new Error("INVALID_TYPE");
 };
 
+exports.getProfessional = async (professionalId) => {
+    const r = await adminRepo.getProfessionalById(professionalId);
+    if (!r) throw Object.assign(new Error("PROFESSIONAL_NOT_FOUND"), { status: 404 });
+
+    const typeDetails = r.trainers?.[0] ?? r.teachers?.[0] ?? r.marketing_executives?.[0] ?? r.vendors?.[0] ?? null;
+
+    // Build a structured documents map: { label, url } — only include uploaded ones
+    const docs = [];
+    if (r.users?.photo)                              docs.push({ label: "Photo",                url: r.users.photo });
+    if (r.pan_card)                                  docs.push({ label: "PAN Card",             url: r.pan_card });
+    if (r.adhar_card)                                docs.push({ label: "Aadhaar Card",         url: r.adhar_card });
+    if (typeDetails?.qualification_docs)             docs.push({ label: "Highest Qualification",url: typeDetails.qualification_docs });
+    if (typeDetails?.documents)                      docs.push({ label: "Other Documents",      url: typeDetails.documents });
+    if (typeDetails?.ded_doc)                        docs.push({ label: "D.Ed Certificate",     url: typeDetails.ded_doc });
+    if (typeDetails?.bed_doc)                        docs.push({ label: "B.Ed Certificate",     url: typeDetails.bed_doc });
+    if (typeDetails?.other_doc)                      docs.push({ label: "Other Documents",      url: typeDetails.other_doc });
+    if (typeDetails?.activity_agreement_pdf)         docs.push({ label: "Agreement File",       url: typeDetails.activity_agreement_pdf });
+    if (typeDetails?.gst_certificate)                docs.push({ label: "GST Certificate",      url: typeDetails.gst_certificate });
+
+    return {
+        professional_id: r.id,
+        profession_type: r.profession_type,
+        referral_code: r.referral_code,
+        place: r.place,
+        date: r.date,
+        own_two_wheeler: r.own_two_wheeler,
+        communication_languages: r.communication_languages,
+        pan_card: r.pan_card,
+        adhar_card: r.adhar_card,
+        relative_name: r.relative_name,
+        relative_contact: r.relative_contact,
+        wallet_balance: r.wallets?.balance ?? 0,
+        user: r.users,
+        details: typeDetails,
+        documents: docs,
+    };
+};
+
 exports.listProfessionals = async (type) => {
     const rows = await adminRepo.getApprovedProfessionals(type);
     return rows.map((r) => ({
@@ -412,12 +450,18 @@ exports.getAvailableProfessionals = async (type, { date, startTime, endTime } = 
     throw new Error("INVALID_TYPE");
 };
 
+// service.js
 exports.getApprovedSocieties = async () => {
     const rows = await adminRepo.getApprovedSocieties();
     return rows.map((r) => ({
         ...r,
+        participant_count: r._count?.participants || 0,
         society_category: r.society_category ? (SOCIETY_CATEGORY_DISPLAY[r.society_category] ?? r.society_category) : null,
     }));
+};
+
+exports.getSocietyDetails = async (id) => {
+    return await adminRepo.getSocietyParticipants(id);
 };
 
 exports.getApprovedSchools = async () => {
@@ -889,6 +933,34 @@ exports.deleteActivity = async (id, force = false) => {
 
     // Default: soft delete
     return await adminRepo.updateActivity(id, { is_active: false });
+};
+
+// ── Admin Profit ───────────────────────────────────────────────────────────
+
+/**
+ * GET /admin/dashboard/profit-stats
+ *
+ * Shows the admin's total profit — i.e. the share Fitnesta KEEPS from every
+ * commission cycle.
+ *
+ * How it works (per commission row):
+ *   base_amount       = total monthly fees billed on that settlement cycle
+ *   commission_amount = what the professional (trainer / teacher / ME) earned
+ *   admin_profit      = base_amount − commission_amount   ← admin's cut
+ *
+ * Example:
+ *   Student pays ₹5,000/month.
+ *   Trainer's rate is 80 % → trainer earns ₹4,000 (commission_amount).
+ *   Admin keeps  20 % → ₹1,000 profit on that row.
+ *
+ * Status buckets for reporting:
+ *   on_hold  → commission held until threshold (20 students) is met — partial profit locked
+ *   pending  → commission raised but not yet approved by admin
+ *   approved → admin approved, payment pending
+ *   paid     → fully settled; this is "realised profit"
+ */
+exports.getAdminProfitStats = async ({ from, to } = {}) => {
+    return await adminRepo.getAdminProfitStats({ from, to });
 };
 
 // ── Payments ──────────────────────────────────────────────────────────────
@@ -1616,6 +1688,7 @@ exports.getEnrichedSettlementPreview = async (professionalId) => {
             commission_per_session: item.commission_per_session,
             trainer_earns:          item.commission_amount,
             last_settled_at:        item.last_settled_at ?? null,
+            students:               extras.students ?? [],
         });
     }
 
@@ -1816,4 +1889,105 @@ exports.getVisitingFormByIdAdmin = async (formId) => {
             photo:           r.professionals?.users?.photo       ?? null,
         },
     };
+};
+
+// ── Student detail + edit ─────────────────────────────────────────────────
+
+exports.getStudentDetail = async (studentId) => {
+    const row = await adminRepo.getStudentDetail(studentId);
+    if (!row) throw Object.assign(new Error("NOT_FOUND"), { status: 404 });
+    return row;
+};
+
+/**
+ * PATCH /admin/students/:studentId
+ *
+ * Body can contain:
+ *   user          — { full_name, mobile, email, address }
+ *   personal_tutor (id required) — any personal_tutors fields
+ *   individual_participant (id required) — any individual_participants fields
+ *   school_student (id required) — any school_students fields
+ *
+ * Only provided keys are updated (partial update).
+ */
+exports.updateStudentDetail = async (studentId, body) => {
+    const sid = Number(studentId);
+    const updates = [];
+
+    if (body.user && Object.keys(body.user).length) {
+        const student = await prisma.students.findUnique({ where: { id: sid }, select: { user_id: true } });
+        if (!student) throw Object.assign(new Error("NOT_FOUND"), { status: 404 });
+        if (student.user_id) {
+            const allowedUserFields = ["full_name", "mobile", "email", "address", "photo"];
+            const userData = {};
+            for (const key of allowedUserFields) {
+                if (body.user[key] !== undefined) userData[key] = body.user[key];
+            }
+            if (Object.keys(userData).length) {
+                updates.push(prisma.users.update({ where: { id: student.user_id }, data: userData }));
+            }
+        }
+    }
+
+    if (body.individual_participant?.id) {
+        const { id, ...rest } = body.individual_participant;
+        const allowed = [
+            "participant_name","mobile","flat_no","dob","age","society_id","society_name",
+            "activity","kits","preferred_batch","preferred_time","term_months",
+            "membership_start_date","membership_end_date","session_cap",
+            "session_days_of_week","session_start_time","session_end_time","is_active",
+        ];
+        const data = {};
+        for (const key of allowed) {
+            if (rest[key] !== undefined) {
+                data[key] = (key === "dob" || key === "membership_start_date" || key === "membership_end_date")
+                    ? new Date(rest[key]) : rest[key];
+            }
+        }
+        if (Object.keys(data).length) {
+            updates.push(adminRepo.updateIndividualParticipant(id, data));
+        }
+    }
+
+    if (body.personal_tutor?.id) {
+        const { id, ...rest } = body.personal_tutor;
+        const allowed = [
+            "dob","standard","batch","teacher_for","preferred_time","term_months",
+            "membership_start_date","membership_end_date","session_cap",
+            "session_days_of_week","session_start_time","session_end_time","is_active",
+        ];
+        const data = {};
+        for (const key of allowed) {
+            if (rest[key] !== undefined) {
+                data[key] = (key === "dob" || key === "membership_start_date" || key === "membership_end_date")
+                    ? new Date(rest[key]) : rest[key];
+            }
+        }
+        if (Object.keys(data).length) {
+            updates.push(adminRepo.updatePersonalTutor(id, data));
+        }
+    }
+
+    if (body.school_student?.id) {
+        const { id, ...rest } = body.school_student;
+        const allowed = [
+            "student_name","standard","address","activities","kit_type","term_months",
+            "membership_start_date","membership_end_date","is_active",
+        ];
+        const data = {};
+        for (const key of allowed) {
+            if (rest[key] !== undefined) {
+                data[key] = (key === "membership_start_date" || key === "membership_end_date")
+                    ? new Date(rest[key]) : rest[key];
+            }
+        }
+        if (Object.keys(data).length) {
+            updates.push(adminRepo.updateSchoolStudent(id, data));
+        }
+    }
+
+    if (!updates.length) throw Object.assign(new Error("NO_UPDATES"), { status: 400 });
+
+    await Promise.all(updates);
+    return adminRepo.getStudentDetail(studentId);
 };

@@ -57,6 +57,31 @@ exports.assignMeToRequest = async (req, res) => {
 exports.approveRequest = async (req, res) => {
     try {
         const result = await service.approveRequestByAdmin(Number(req.params.id), req.admin.userId, req.body?.note);
+
+        // Notify the student
+        try {
+            const { PrismaClient } = require('@prisma/client');
+            const prisma = new PrismaClient();
+            const pending = await prisma.pending_registrations.findUnique({
+                where: { id: Number(req.params.id) },
+                select: { form_data: true }
+            });
+            const formData = typeof pending?.form_data === "string" ? JSON.parse(pending.form_data) : pending?.form_data;
+            const userId = formData?.user_id ?? formData?.userId ?? null;
+            const fcmToken = formData?.fcm_token ?? formData?.fcmToken ?? null;
+
+            const title = "Society Request Approved";
+            const body = "Your society request has been acknowledged and approved by the admin.";
+
+            if (userId) {
+                const { sendNotification } = require("../../../utils/fcm");
+                sendNotification(userId, title, body, { type: "society_request_approved" });
+            } else if (fcmToken) {
+                const { sendNotificationToToken } = require("../../../utils/fcm");
+                sendNotificationToToken(fcmToken, title, body, { type: "society_request_approved" });
+            }
+        } catch (_) {}
+
         res.json({ success: true, ...result });
     } catch (err) { handleErr(err, res); }
 };
@@ -64,6 +89,31 @@ exports.approveRequest = async (req, res) => {
 exports.rejectRequest = async (req, res) => {
     try {
         const result = await service.rejectRequestByAdmin(Number(req.params.id), req.admin.userId, req.body?.note);
+
+        // Notify the student
+        try {
+            const { PrismaClient } = require('@prisma/client');
+            const prisma = new PrismaClient();
+            const pending = await prisma.pending_registrations.findUnique({
+                where: { id: Number(req.params.id) },
+                select: { form_data: true }
+            });
+            const formData = typeof pending?.form_data === "string" ? JSON.parse(pending.form_data) : pending?.form_data;
+            const userId = formData?.user_id ?? formData?.userId ?? null;
+            const fcmToken = formData?.fcm_token ?? formData?.fcmToken ?? null;
+
+            const title = "Society Request Rejected";
+            const body = "Your society request has been rejected by the admin.";
+
+            if (userId) {
+                const { sendNotification } = require("../../../utils/fcm");
+                sendNotification(userId, title, body, { type: "society_request_rejected" });
+            } else if (fcmToken) {
+                const { sendNotificationToToken } = require("../../../utils/fcm");
+                sendNotificationToToken(fcmToken, title, body, { type: "society_request_rejected" });
+            }
+        } catch (_) {}
+
         res.json({ success: true, ...result });
     } catch (err) { handleErr(err, res); }
 };

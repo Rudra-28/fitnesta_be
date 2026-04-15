@@ -94,6 +94,7 @@ exports.getAllSocieties = async () => {
             address: true,
             pin_code: true,
             society_category: true,
+            custom_category_name: true,
             agreement_signed_by_authority: true,
             approval_status: true,
         },

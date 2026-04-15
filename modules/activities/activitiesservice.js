@@ -1,7 +1,7 @@
 const repo = require("./activitiesrepository");
 
 const VALID_COACHING_TYPES = ["individual_coaching", "group_coaching", "personal_tutor", "school_student"];
-const VALID_SOCIETY_CATEGORIES = ["A+", "A", "B"];
+const VALID_SOCIETY_CATEGORIES = ["A+", "A", "B", "custom"];
 
 // "trainer" is a virtual alias — returns activities for both individual_coaching and school_student
 const ALIAS_MAP = { trainer: "trainer" };
@@ -17,22 +17,23 @@ exports.getPersonalTutorStandards = async () => {
     return await repo.getPersonalTutorStandards();
 };
 
-exports.getActivities = async (coachingType, societyCategory = null, standard = null, termMonths = null) => {
+exports.getActivities = async (coachingType, societyCategory = null, standard = null, termMonths = null, customCategoryName = null) => {
     // No coaching_type → return plain activity list
     if (!coachingType) {
         const activities = await repo.getAllActiveActivities();
         return { activities };
     }
 
-    // "trainer" → fetch activities for individual_coaching + school_student, deduplicated
+    // "trainer" → fetch activities for individual_coaching, school_student, and group_coaching, deduplicated
     if (coachingType === "trainer") {
-        const [ic, ss] = await Promise.all([
+        const [ic, ss, gc] = await Promise.all([
             repo.getActivitiesByCoachingType("individual_coaching", null, null, null),
             repo.getActivitiesByCoachingType("school_student", null, null, null),
+            repo.getActivitiesByCoachingType("group_coaching", null, null, null),
         ]);
         const seen = new Set();
         const activities = [];
-        for (const a of [...ic, ...ss]) {
+        for (const a of [...ic, ...ss, ...gc]) {
             if (!seen.has(a.id)) {
                 seen.add(a.id);
                 activities.push({ id: a.id, name: a.name, notes: a.notes ?? null });
@@ -58,7 +59,7 @@ exports.getActivities = async (coachingType, societyCategory = null, standard = 
             throw err;
         }
         if (!VALID_SOCIETY_CATEGORIES.includes(societyCategory)) {
-            const err = new Error(`Invalid society_category. Allowed values: A+, A, B`);
+            const err = new Error(`Invalid society_category. Allowed values: A+, A, B, custom`);
             err.status = 400;
             throw err;
         }
@@ -81,7 +82,10 @@ exports.getActivities = async (coachingType, societyCategory = null, standard = 
     // Convert "A+" → "A_" for Prisma enum lookup
     const prismaCategory = societyCategory === "A+" ? "A_" : societyCategory;
 
-    const activities = await repo.getActivitiesByCoachingType(resolved, prismaCategory, standard, termMonths);
+    // For custom category, pass customCategoryName so only activities with fees for that custom tier are returned
+    const resolvedCustomName = societyCategory === "custom" ? (customCategoryName ?? null) : null;
+
+    const activities = await repo.getActivitiesByCoachingType(resolved, prismaCategory, standard, termMonths, resolvedCustomName);
 
     const result = activities.map((activity) => ({
         id: activity.id,
@@ -97,6 +101,9 @@ exports.getActivities = async (coachingType, societyCategory = null, standard = 
             }
             if (f.society_category !== null) {
                 fee.society_category = SOCIETY_CATEGORY_DISPLAY[f.society_category] ?? f.society_category;
+            }
+            if (f.custom_category_name !== null) {
+                fee.custom_category_name = f.custom_category_name;
             }
             if (f.standard !== null) {
                 fee.standard = f.standard;

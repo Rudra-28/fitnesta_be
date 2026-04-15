@@ -244,8 +244,13 @@ exports.getMEWalletBreakdown = async (meProfessionalId, bucketStatus) => {
     });
 
     // ── Split rows by category ─────────────────────────────────────────────
-    const groupRows      = rows.filter(r => r.source_type === "group_coaching_society" && r.entity_id);
-    const schoolRows     = rows.filter(r => (r.source_type === "group_coaching_school" || r.source_type === "school_registration") && r.entity_id);
+    // Change these lines:
+const groupRows = rows.filter(r => r.source_type === "group_coaching_society" && r.entity_id);
+
+const schoolRows = rows.filter(r => 
+    (r.source_type === "group_coaching_school" || r.source_type === "school_registration") 
+    && r.entity_id
+);
     const individualRows = rows.filter(r => r.source_type === "individual_coaching");
     const tutorRows      = rows.filter(r => r.source_type === "personal_tutor");
 
@@ -304,7 +309,10 @@ exports.getMEWalletBreakdown = async (meProfessionalId, bucketStatus) => {
     const societyGroups = [];
     for (const entityId of societyEntityIds) {
         const entityRows    = groupRows.filter(r => r.entity_id === entityId);
-        const onboarding    = entityRows.find(r => parseFloat(r.base_amount) === 0);
+        // Inside the societyGroups loop:
+        const onboarding = entityRows.find(r => 
+        r.source_type === "group_coaching_society" && parseFloat(r.base_amount) === 0
+        );
         const admissions    = entityRows.filter(r => parseFloat(r.base_amount) > 0);
         const studentCount  = await prisma.individual_participants.count({
             where: { society_id: entityId, students: { student_type: "group_coaching" } },
@@ -343,8 +351,9 @@ exports.getMEWalletBreakdown = async (meProfessionalId, bucketStatus) => {
     const schoolGroups = [];
     for (const entityId of schoolEntityIds) {
         const entityRows   = schoolRows.filter(r => r.entity_id === entityId);
-        const onboarding   = entityRows.find(r => r.source_type === "school_registration");
-        const admissions   = entityRows.filter(r => r.source_type === "group_coaching_school");
+       // Inside the schoolGroups loop:
+        const onboarding = entityRows.find(r => r.source_type === "school_registration");
+        const admissions = entityRows.filter(r => r.source_type === "group_coaching_school");
         const studentCount = await prisma.school_students.count({ where: { school_id: entityId } });
         const totalHeld    = entityRows.reduce((s, r) => s + parseFloat(r.commission_amount), 0);
 

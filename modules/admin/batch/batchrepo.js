@@ -26,10 +26,36 @@ async function getBatchById(id) {
             select: {
               id: true,
               student_type: true,
-              users: { select: { full_name: true, mobile: true } },
+              users: { select: { id: true, full_name: true, mobile: true } },
+              individual_participants: {
+                select: {
+                  id: true,
+                  activity: true,
+                  term_months: true,
+                  membership_start_date: true,
+                  membership_end_date: true,
+                  flat_no: true,
+                  society_name: true,
+                  kits: true,
+                  dob: true,
+                  age: true,
+                },
+              },
+              school_students: {
+                select: {
+                  id: true,
+                  student_name: true,
+                  standard: true,
+                  activities: true,
+                  kit_type: true,
+                  term_months: true,
+                  created_at: true,
+                },
+              },
             },
           },
         },
+        orderBy: { joined_at: 'asc' },
       },
     },
   });

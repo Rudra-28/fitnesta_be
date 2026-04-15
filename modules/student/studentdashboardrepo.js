@@ -12,7 +12,7 @@ async function getStudentIdByUserId(userId) {
 
 async function getToggleState(studentId) {
   const [subjects, activities] = await Promise.all([
-    prisma.sessions.count({ where: { student_id: studentId, session_type: "personal_tutor" } }),
+    prisma.personal_tutors.count({ where: { student_id: studentId } }),
     prisma.sessions.count({
       where: {
         activity_id: { not: null },
@@ -88,6 +88,7 @@ function _statusWhere(status) {
     upcoming:  { status: { in: ["scheduled"] }, scheduled_date: { gte: now } },
     ongoing:   { status: "ongoing" },
     completed: { status: "completed" },
+    absent:    { status: "absent" },
     cancelled: { status: "cancelled" },
   }[status] ?? {};
 }
@@ -384,10 +385,11 @@ function _withCounts(entry) {
   const sessions = entry.sessions;
   const total = sessions.length;
   const completed = sessions.filter((s) => s.status === "completed").length;
+  const absent = sessions.filter((s) => s.status === "absent").length;
   const pending = sessions.filter((s) => s.status === "scheduled").length;
   const ongoing = sessions.filter((s) => s.status === "ongoing").length;
   const completion_percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
-  return { ...entry, total_sessions: total, completed_sessions: completed, pending_sessions: pending, ongoing_sessions: ongoing, completion_percentage };
+  return { ...entry, total_sessions: total, completed_sessions: completed, absent_sessions: absent, pending_sessions: pending, ongoing_sessions: ongoing, completion_percentage };
 }
 
 // ── Session detail ─────────────────────────────────────────────────────────
@@ -435,6 +437,25 @@ async function editProfile(userId, studentType, userData, typeData) {
   });
 }
 
+async function getSessionForAttendance(sessionId) {
+  return prisma.sessions.findUnique({
+    where: { id: Number(sessionId) },
+    select: { scheduled_date: true, start_time: true, status: true },
+  });
+}
+
+async function updateStudentAttendance(sessionId, studentId) {
+  return prisma.session_participants.update({
+    where: {
+      session_id_student_id: {
+        session_id: Number(sessionId),
+        student_id: Number(studentId),
+      },
+    },
+    data: { attended: true },
+  });
+}
+
 module.exports = {
   getStudentIdByUserId,
   getToggleState,
@@ -450,6 +471,8 @@ module.exports = {
   getActivitiesWithSessions,
   submitFeedback,
   editProfile,
+  getSessionForAttendance,
+  updateStudentAttendance,
 };
 
 async function submitFeedback(studentId, sessionId, rating, comment) {
@@ -472,3 +495,4 @@ async function submitFeedback(studentId, sessionId, rating, comment) {
     update: { rating, comment: comment ?? null },
   });
 }
+

@@ -288,6 +288,34 @@ async function bulkDeleteFutureSessions({ student_id, session_type, from_date })
   return count;
 }
 
+/**
+ * Reassign a single session to a different professional.
+ */
+async function reassignSingleSession(sessionId, newProfessionalId) {
+  return prisma.sessions.update({
+    where: { id: Number(sessionId) },
+    data:  { professional_id: Number(newProfessionalId), updated_at: new Date() },
+  });
+}
+
+/**
+ * Bulk-reassign all future scheduled sessions for a student to a new professional.
+ * Returns count of updated sessions.
+ */
+async function reassignFutureSessions({ student_id, session_type, new_professional_id, from_date }) {
+  const where = {
+    student_id:   Number(student_id),
+    session_type,
+    status:       "scheduled",
+    scheduled_date: { gte: new Date(from_date) },
+  };
+  const { count } = await prisma.sessions.updateMany({
+    where,
+    data: { professional_id: Number(new_professional_id), updated_at: new Date() },
+  });
+  return count;
+}
+
 module.exports = {
   checkProfessionalConflict,
   checkStudentConflict,
@@ -301,4 +329,6 @@ module.exports = {
   getSessionFeedback,
   deleteSession,
   bulkDeleteFutureSessions,
+  reassignSingleSession,
+  reassignFutureSessions,
 };

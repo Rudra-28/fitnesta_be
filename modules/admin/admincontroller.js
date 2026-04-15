@@ -2,6 +2,7 @@ const service = require("./adminservice");
 const { sendNotification } = require("../../utils/fcm");
 const prisma = require("../../config/prisma");
 const auditLog = require("../../utils/auditLog");
+const axios = require("axios");
 
 exports.listFeeStructures = async (req, res) => {
     try {
@@ -35,6 +36,68 @@ exports.listStudents = async (req, res) => {
     } catch (err) {
         const status = err.message === "INVALID_TYPE" ? 400 : 500;
         res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.getStudentDetail = async (req, res) => {
+    try {
+        const data = await service.getStudentDetail(req.params.studentId);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.updateStudentDetail = async (req, res) => {
+    try {
+        const data = await service.updateStudentDetail(req.params.studentId, req.body);
+
+        auditLog(req, "edit_student", {
+            entity_type: "student",
+            entity_id:   Number(req.params.studentId),
+            details:     { updated_sections: Object.keys(req.body) },
+        });
+
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.getProfessional = async (req, res) => {
+    try {
+        const data = await service.getProfessional(req.params.professionalId);
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.proxyDocument = async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ success: false, error: "url query param required" });
+
+    // Only allow proxying Cloudinary URLs to prevent SSRF abuse
+    let parsed;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return res.status(400).json({ success: false, error: "Invalid URL" });
+    }
+    if (!parsed.hostname.endsWith("cloudinary.com") && !parsed.hostname.endsWith("res.cloudinary.com")) {
+        return res.status(403).json({ success: false, error: "Only Cloudinary URLs are allowed" });
+    }
+
+    try {
+        const upstream = await axios.get(url, { responseType: "stream" });
+        res.setHeader("Content-Type", upstream.headers["content-type"] || "application/octet-stream");
+        const cd = upstream.headers["content-disposition"];
+        if (cd) res.setHeader("Content-Disposition", cd);
+        res.setHeader("Cache-Control", "private, max-age=3600");
+        upstream.data.pipe(res);
+    } catch (err) {
+        const status = err?.response?.status ?? 502;
+        res.status(502).json({ success: false, error: `Upstream ${status}: failed to fetch document` });
     }
 };
 
@@ -74,7 +137,7 @@ exports.approve = async (req, res) => {
             details:     { note: req.body?.note ?? null },
         });
 
-        // Notify the registrant — look up their user_id from the pending record
+        // Notify the registrant — using fcmToken or userId
         try {
             const pending = await prisma.pending_registrations.findUnique({
                 where:  { id: Number(req.params.id) },
@@ -83,9 +146,21 @@ exports.approve = async (req, res) => {
             const formData = typeof pending?.form_data === "string"
                 ? JSON.parse(pending.form_data)
                 : pending?.form_data;
+            
             const userId = formData?.user_id ?? formData?.userId ?? null;
+            const fcmToken = formData?.fcm_token ?? formData?.fcmToken ?? null;
+            
+            const title = "Registration Approved";
+            let body = "Your registration has been approved. You can now log in.";
+            if (pending?.service_type === "society_request") {
+                body = "Your society request has been acknowledged and approved by the admin.";
+            }
+
             if (userId) {
-                sendNotification(userId, "Registration Approved", "Your registration has been approved. You can now log in.", { type: "registration_approved" });
+                sendNotification(userId, title, body, { type: "registration_approved" });
+            } else if (fcmToken) {
+                const { sendNotificationToToken } = require("../../utils/fcm");
+                sendNotificationToToken(fcmToken, title, body, { type: "registration_approved" });
             }
         } catch (_) {}
 
@@ -155,10 +230,29 @@ exports.getAvailableProfessionals = async (req, res) => {
     }
 };
 
+// controller.js
+
+// 1. Existing List Handler
 exports.getApprovedSocieties = async (req, res) => {
     try {
         const data = await service.getApprovedSocieties();
         res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
+
+// 2. New Detail Handler (Triggered on click)
+exports.getSocietyDetails = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const data = await service.getSocietyDetails(id);
+        
+        if (!data) {
+            return res.status(404).json({ success: false, message: "Society not found" });
+        }
+        
+        res.json({ success: true, data });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
@@ -692,10 +786,81 @@ exports.markTravellingAllowancePaid = async (req, res) => {
 };
 
 // ── Reject ─────────────────────────────────────────────────────────────────
+exports.reject = async (req, res) => {
+    try {
+        const result = await service.rejectRegistration(
+            req.params.id,
+            req.admin.userId,
+            req.body?.note
+        );
 
-// ── Activities dropdown ────────────────────────────────────────────────────
+        auditLog(req, "reject_registration", {
+            entity_type: "pending_registration",
+            entity_id:   Number(req.params.id),
+            details:     { note: req.body?.note ?? null },
+        });
+
+        // Notify the registrant of rejection
+        try {
+            const pending = await prisma.pending_registrations.findUnique({
+                where:  { id: Number(req.params.id) },
+                select: { form_data: true },
+            });
+            const formData = typeof pending?.form_data === "string"
+                ? JSON.parse(pending.form_data)
+                : pending?.form_data;
+                
+            const userId = formData?.user_id ?? formData?.userId ?? null;
+            const fcmToken = formData?.fcm_token ?? formData?.fcmToken ?? null;
+            
+            const title = "Registration Rejected";
+            const body = "Your registration has been rejected by the admin.";
+
+            if (userId) {
+                sendNotification(userId, title, body, { type: "registration_rejected" });
+            } else if (fcmToken) {
+                const { sendNotificationToToken } = require("../../utils/fcm");
+                sendNotificationToToken(fcmToken, title, body, { type: "registration_rejected" });
+            }
+        } catch (_) {}
+
+        res.json({ success: true, ...result });
+    } catch (err) {
+        console.error("Reject error:", err.message);
+        const status = err.message === "PENDING_NOT_FOUND" ? 404
+                     : err.message === "ALREADY_REVIEWED"  ? 409
+                     : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 
 // ── Payments ──────────────────────────────────────────────────────────────
+
+// ── Admin Profit Stats ─────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/admin/dashboard/profit-stats
+ * Optional query params: ?from=2025-01-01&to=2025-12-31
+ *
+ * Returns:
+ *  - gross_revenue           : total captured payments (what students paid)
+ *  - total_base_amount       : sum of base_amount across all commission rows
+ *  - total_commission_paid_out: sum of commission_amount (what professionals earned)
+ *  - total_admin_profit      : base_amount - commission_amount (admin's share)
+ *  - realised_profit         : same calculation but only for STATUS = 'paid' rows
+ *  - by_status               : per-status breakdown (on_hold / pending / approved / paid)
+ *    └ by_professional_type  : further split by trainer / teacher / marketing_executive
+ */
+exports.getAdminProfitStats = async (req, res) => {
+    try {
+        const { from, to } = req.query;
+        const data = await service.getAdminProfitStats({ from, to });
+        res.json({ success: true, data });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+};
 
 exports.listPayments = async (req, res) => {
     try {

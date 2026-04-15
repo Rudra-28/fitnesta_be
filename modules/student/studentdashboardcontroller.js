@@ -66,6 +66,11 @@ module.exports = {
     res.json({ success: true, count: data.length, data });
   }),
 
+  markAttendance: wrap(async (req, res) => {
+    const data = await service.markAttendance(req.user.userId, Number(req.params.sessionId));
+    res.json(data);
+  }),
+
   editProfile: wrap(async (req, res) => {
     const data = await service.editProfile(req.user.userId, req.body);
     res.json(data);

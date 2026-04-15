@@ -24,13 +24,14 @@ exports.initiateRegistration = async (formData, serviceType) => {
         throw err;
     }
 
-    // Duplicate check — same mobile + any of the selected activities already pending or approved
+    // Duplicate check 1 — approved (paid) pending_registration for the same mobile + activity.
+    // 'pending' rows are abandoned payment attempts and must not block a retry.
     const mobile = formData.mobile || formData.contactNumber || null;
     if (mobile) {
         for (const actId of activity_ids) {
-            const duplicate = await prisma.$queryRaw`
+            const paidDuplicate = await prisma.$queryRaw`
                 SELECT id FROM pending_registrations
-                WHERE status IN ('pending', 'approved')
+                WHERE status = 'approved'
                   AND (
                         JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.mobile')) = ${mobile}
                         OR JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.contactNumber')) = ${mobile}
@@ -41,11 +42,25 @@ exports.initiateRegistration = async (formData, serviceType) => {
                       )
                 LIMIT 1
             `;
-            if (duplicate.length > 0) {
+            if (paidDuplicate.length > 0) {
                 const err = new Error("You have already registered for one or more of the selected activities.");
                 err.status = 409;
                 throw err;
             }
+        }
+
+        // Duplicate check 2 — active school_student record already exists for this mobile.
+        const activeEnrollment = await prisma.$queryRaw`
+            SELECT ss.id FROM school_students ss
+            INNER JOIN students s ON s.id = ss.student_id
+            INNER JOIN users u ON u.id = s.user_id
+            WHERE u.mobile = ${mobile}
+            LIMIT 1
+        `;
+        if (activeEnrollment.length > 0) {
+            const err = new Error("You are already enrolled as a school student.");
+            err.status = 409;
+            throw err;
         }
     }
 
@@ -75,6 +90,12 @@ exports.initiateRegistration = async (formData, serviceType) => {
     formData.razorpay_order_id = order.id;
 
     await repo.insertPendingRegistration(tempUuid, formData, serviceType);
+
+    const fcmToken = formData.fcmToken || formData.fcm_token;
+    if (fcmToken) {
+        const { sendNotificationToToken } = require("../../../utils/fcm");
+        sendNotificationToToken(fcmToken, "Data Captured", "Your form data has been captured, please complete your payment.");
+    }
 
     return {
         tempUuid,

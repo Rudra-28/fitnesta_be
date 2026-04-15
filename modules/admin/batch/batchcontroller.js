@@ -16,6 +16,9 @@ const ERROR_MAP = {
   ALREADY_SETTLED: 409,
   NOT_FOUND: 404,
   INVALID_STATUS: 409,
+  SESSION_CAP_LOCKED: 409,
+  INVALID_PROFESSIONAL_TYPE: 400,
+  MISSING_FIELDS: 400,
 };
 
 function handleError(res, err) {
@@ -157,6 +160,69 @@ async function listSettlements(req, res) {
   }
 }
 
+async function reassignBatchSession(req, res) {
+  try {
+    const { batchId, sessionId } = req.params;
+    const { new_professional_id } = req.body;
+    if (!new_professional_id) {
+      return res.status(400).json({ success: false, message: 'new_professional_id is required' });
+    }
+    const result = await service.reassignBatchSession(Number(batchId), Number(sessionId), Number(new_professional_id));
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function reassignAllFutureBatchSessions(req, res) {
+  try {
+    const { batchId } = req.params;
+    const { new_professional_id } = req.body;
+    if (!new_professional_id) {
+      return res.status(400).json({ success: false, message: 'new_professional_id is required' });
+    }
+    const result = await service.reassignAllFutureBatchSessions(Number(batchId), Number(new_professional_id));
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function extendStudentTerm(req, res) {
+  try {
+    const { batchId, studentId } = req.params;
+    const { extra_months } = req.body;
+    if (!extra_months) {
+      return res.status(400).json({ success: false, message: 'extra_months is required' });
+    }
+    const result = await service.extendStudentTerm(batchId, studentId, extra_months);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function createBatchSession(req, res) {
+  try {
+    const { batchId } = req.params;
+    const result = await service.createBatchSession(batchId, req.body);
+    return res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function getAvailableProfessionalsForBatch(req, res) {
+  try {
+    const { batchId } = req.params;
+    const { type } = req.query;
+    const result = await service.getAvailableProfessionalsForBatch(batchId || null, type);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 module.exports = {
   createBatch,
   listBatches,
@@ -172,4 +238,9 @@ module.exports = {
   settleBatchCycle,
   markSettlementPaid,
   listSettlements,
+  reassignBatchSession,
+  reassignAllFutureBatchSessions,
+  extendStudentTerm,
+  createBatchSession,
+  getAvailableProfessionalsForBatch,
 };

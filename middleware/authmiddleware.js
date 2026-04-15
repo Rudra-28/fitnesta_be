@@ -14,6 +14,11 @@ const verifyAccessToken = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
 
+    // Normalise: old registration tokens used "id", login tokens use "userId"
+    if (decoded.userId === undefined && decoded.id !== undefined) {
+      decoded.userId = decoded.id;
+    }
+
     const user = await prisma.users.findUnique({ where: { id: decoded.userId } });
     if (!user) {
       return res.status(401).json({ success: false, message: "User no longer exists" });

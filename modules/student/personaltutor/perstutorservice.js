@@ -38,13 +38,14 @@ exports.initiateRegistration = async (formData, serviceType) => {
 
     const ids = activity_ids.map((id) => parseInt(id));
 
-    // Duplicate check — same mobile + any of the selected activities already pending or approved
+    // Duplicate check 1 — approved (paid) pending_registration for the same mobile + activity.
+    // 'pending' rows are abandoned payment attempts and must not block a retry.
     const mobile = formData.user_info?.contactNumber || null;
     if (mobile) {
         for (const actId of ids) {
-            const duplicate = await prisma.$queryRaw`
+            const paidDuplicate = await prisma.$queryRaw`
                 SELECT id FROM pending_registrations
-                WHERE status IN ('pending', 'approved')
+                WHERE status = 'approved'
                   AND JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.user_info.contactNumber')) = ${mobile}
                   AND JSON_CONTAINS(
                         JSON_EXTRACT(form_data, '$.payment.activity_ids'),
@@ -52,11 +53,26 @@ exports.initiateRegistration = async (formData, serviceType) => {
                       )
                 LIMIT 1
             `;
-            if (duplicate.length > 0) {
-                const err = new Error(`You have already registered for one or more of the selected subjects.`);
+            if (paidDuplicate.length > 0) {
+                const err = new Error("You are already enrolled in one or more of the selected subjects.");
                 err.status = 409;
                 throw err;
             }
+        }
+
+        // Duplicate check 2 — active personal_tutor record already exists for this mobile.
+        const activeEnrollment = await prisma.$queryRaw`
+            SELECT pt.id FROM personal_tutors pt
+            INNER JOIN students s ON s.id = pt.student_id
+            INNER JOIN users u ON u.id = s.user_id
+            WHERE u.mobile = ${mobile}
+              AND pt.is_active = 1
+            LIMIT 1
+        `;
+        if (activeEnrollment.length > 0) {
+            const err = new Error("You are already enrolled in an active personal tutor plan.");
+            err.status = 409;
+            throw err;
         }
     }
 
@@ -95,6 +111,12 @@ exports.initiateRegistration = async (formData, serviceType) => {
     formData.calculated_amount = amount;
 
     await repo.insertPendingRegistration(tempUuid, formData, serviceType);
+
+    const fcmToken = formData.fcmToken || formData.fcm_token;
+    if (fcmToken) {
+        const { sendNotificationToToken } = require("../../../utils/fcm");
+        sendNotificationToToken(fcmToken, "Data Captured", "Your form data has been captured, please complete your payment.");
+    }
 
     return {
         tempUuid,

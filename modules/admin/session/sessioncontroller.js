@@ -7,6 +7,7 @@ const ERROR_MAP = {
   PROFESSIONAL_CONFLICT:    409,
   STUDENT_CONFLICT:         409,
   SESSION_ALREADY_FINAL:    409,
+  MANUAL_STATUS_NOT_ALLOWED: 403,
   INVALID_SESSION_TYPE:     400,
   MISSING_FIELDS:           400,
   NO_DAYS_IN_RANGE:         400,
@@ -161,6 +162,30 @@ async function bulkDeleteFutureSessions(req, res) {
   }
 }
 
+async function reassignSingleSession(req, res) {
+  try {
+    const { sessionId } = req.params;
+    const { new_professional_id } = req.body;
+    if (!new_professional_id) {
+      return res.status(400).json({ success: false, message: "new_professional_id is required" });
+    }
+    const result = await service.reassignSingleSession(sessionId, new_professional_id);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function reassignAllFutureSessions(req, res) {
+  try {
+    const { session_type, student_id, new_professional_id } = req.body;
+    const result = await service.reassignAllFutureSessions({ session_type, student_id, new_professional_id });
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 module.exports = {
   createSession,
   generateIndividualSessions,
@@ -175,4 +200,6 @@ module.exports = {
   previewSessionGeneration,
   deleteSession,
   bulkDeleteFutureSessions,
+  reassignSingleSession,
+  reassignAllFutureSessions,
 };
