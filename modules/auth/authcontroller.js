@@ -112,9 +112,11 @@ exports.getMe = async (req, res) => {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    let subrole = null;
-    let referral_code = null;
-    let student_type = null;
+    let subrole        = null;
+    let referral_code  = null;
+    let student_type   = null;
+    let school_name    = null;
+    let school_address = null;
 
     if (role === "professional") {
       const profs = await repo.findProfessionalsByUserId(user.id);
@@ -126,6 +128,15 @@ exports.getMe = async (req, res) => {
       const students = await repo.findStudentsByUserId(user.id);
       if (students.length > 0) {
         student_type = students[0].student_type;
+
+        // Pull school details for school_student type
+        if (student_type === "school_student") {
+          const schoolRecord = students[0].school_students?.[0];
+          if (schoolRecord?.schools) {
+            school_name    = schoolRecord.schools.school_name ?? null;
+            school_address = schoolRecord.schools.address     ?? null;
+          }
+        }
       }
     }
 
@@ -144,6 +155,8 @@ exports.getMe = async (req, res) => {
           subrole: role === "professional" ? subrole : null,
           referral_code: role === "professional" ? referral_code : null,
           student_type: role === "student" ? student_type : null,
+          school_name: role === "student" ? (school_name ?? null) : null,
+          school_address: role === "student" ? (school_address ?? null) : null,
           isVerified: user.is_verified ? 1 : 0
         }
       }

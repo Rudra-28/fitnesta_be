@@ -88,6 +88,8 @@ async function createIndividualSession({
     status: "scheduled",
   });
 
+  notify.notifySessionCreated(session).catch(() => {});
+
   // Auto-assign the professional to the student record if not already assigned
   if (session_type === "personal_tutor") {
     const pt = await adminRepo.findPersonalTutorByStudentId(student_id);
@@ -248,6 +250,10 @@ async function generateIndividualSessions({
     }
   }
 
+  if (created.length > 0) {
+    notify.notifySessionsGenerated(student_id, professional_id, created.length, session_type).catch(() => {});
+  }
+
   return {
     session_type,
     commission_cap:     resolvedCap,   // max sessions counted for commission (not a session limit)
@@ -304,7 +310,11 @@ async function extendMembership({ session_type, student_id, new_end_date }) {
     throw Object.assign(new Error("new_end_date must be after the current membership_end_date (" + oldEndDt.toISOString().slice(0, 10) + ")"), { code: "INVALID_DATE" });
   }
 
-  const cap       = record.session_cap ?? 20;
+  // session_cap is a MONTHLY commission cap — not a lifetime session limit.
+  // It is only used by the commission formula as the per-month denominator.
+  // It must NEVER limit how many sessions are scheduled.
+  const monthlyCap = record.session_cap ?? 20;
+
   const daysOfWeek = Array.isArray(record.session_days_of_week)
     ? record.session_days_of_week
     : JSON.parse(record.session_days_of_week);
@@ -323,21 +333,7 @@ async function extendMembership({ session_type, student_id, new_end_date }) {
     throw Object.assign(new Error("No professional assigned to this student yet"), { code: "NO_PROFESSIONAL" });
   }
 
-  // Count existing non-cancelled sessions
-  const existingCount = await prisma.sessions.count({
-    where: {
-      student_id: Number(student_id),
-      session_type,
-      status: { not: "cancelled" },
-    },
-  });
-
-  const remaining = cap - existingCount;
-  const capWarning = remaining <= 0
-    ? `Session cap of ${cap} already reached. No new sessions will be generated unless cap is increased.`
-    : null;
-
-  // Generate new session dates from oldEndDt+1 → newEndDt, up to remaining cap
+  // Generate ALL session dates from oldEndDt+1 → newEndDt (no cap limit on count)
   const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   const appendStart = new Date(oldEndDt);
   appendStart.setDate(appendStart.getDate() + 1);
@@ -345,7 +341,7 @@ async function extendMembership({ session_type, student_id, new_end_date }) {
   const sessionDates = [];
   const current = new Date(appendStart);
 
-  while (sessionDates.length < Math.max(remaining, 0) && current <= newEndDt) {
+  while (current <= newEndDt) {
     const dayName = DAY_NAMES[current.getDay()];
     if (daysOfWeek.includes(dayName)) {
       sessionDates.push(new Date(current));
@@ -389,9 +385,7 @@ async function extendMembership({ session_type, student_id, new_end_date }) {
     session_type,
     student_id:         Number(student_id),
     new_membership_end: newEndDt,
-    sessions_before:    existingCount,
-    cap,
-    cap_warning:        capWarning,
+    monthly_commission_cap: monthlyCap,
     generated:          created.length,
     skipped:            skipped.length,
     skipped_detail:     skipped,

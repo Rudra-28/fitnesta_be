@@ -75,7 +75,8 @@ async function deleteBatch(req, res) {
 
 async function generateSessions(req, res) {
   try {
-    const result = await service.generateSessions(req.params.batchId);
+    const { session_cap_override, start_date_override } = req.body ?? {};
+    const result = await service.generateSessions(req.params.batchId, { session_cap_override, start_date_override });
     return res.json({ success: true, ...result });
   } catch (err) {
     return handleError(res, err);

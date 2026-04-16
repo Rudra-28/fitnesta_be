@@ -5,7 +5,12 @@ exports.editTeacher = async (req, res) => {
         console.log(`[Teacher Edit Profile] Request received for User ID: ${req.user.userId}`);
         console.log(`[Teacher Edit Profile] Request Body:`, req.body);
 
-        const data = { ...req.body };
+        const fileData = {};
+        if (req.files) {
+            if (req.files['photo']) fileData.photo = req.files['photo'][0].path;
+        }
+
+        const data = { ...req.body, ...fileData };
         const result = await service.editTeacher(req.user.userId, data);
 
         console.log(`[Teacher Edit Profile] Successfully updated. Returning Response:`, result);

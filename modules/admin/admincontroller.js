@@ -89,14 +89,38 @@ exports.proxyDocument = async (req, res) => {
     }
 
     try {
-        const upstream = await axios.get(url, { responseType: "stream" });
-        res.setHeader("Content-Type", upstream.headers["content-type"] || "application/octet-stream");
-        const cd = upstream.headers["content-disposition"];
-        if (cd) res.setHeader("Content-Disposition", cd);
+        // Use the URL exactly as stored in the DB — Cloudinary's public_id includes
+        // the extension (e.g. file.jpg.jpg), so deduping breaks the lookup.
+        // New uploads (post resource_type fix) will have clean URLs.
+        //
+        // For PDFs uploaded before the resource_type fix: they were stored under
+        // /image/upload/ but Cloudinary silently failed to store them as raw.
+        // Those are dead records — they must be re-uploaded.
+        // New PDFs are stored under /raw/upload/ and work correctly.
+        const fetchUrl = url;
+
+        // Derive Content-Type from the file extension in the URL.
+        // Do NOT trust Cloudinary's upstream Content-Type — for raw resources
+        // it returns "image/gif" as a placeholder regardless of actual file type.
+        const MIME = {
+            pdf:  "application/pdf",
+            jpg:  "image/jpeg",
+            jpeg: "image/jpeg",
+            png:  "image/png",
+        };
+        const ext = fetchUrl.split("?")[0].split(".").pop().toLowerCase();
+        const contentType = MIME[ext] || "application/octet-stream";
+
+        console.log("[document-proxy] fetching:", fetchUrl, "→", contentType);
+        const upstream = await axios.get(fetchUrl, { responseType: "stream" });
+
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Content-Disposition", "inline");
         res.setHeader("Cache-Control", "private, max-age=3600");
         upstream.data.pipe(res);
     } catch (err) {
         const status = err?.response?.status ?? 502;
+        console.error("[document-proxy] error:", status, err?.response?.data ?? err?.message);
         res.status(502).json({ success: false, error: `Upstream ${status}: failed to fetch document` });
     }
 };
@@ -370,6 +394,16 @@ exports.upsertFeeStructure = async (req, res) => {
                      : err.message === "CUSTOM_CATEGORY_NAME_REQUIRED"  ? 400
                      : err.message === "FEE_STRUCTURE_NOT_FOUND"         ? 404
                      : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+exports.deleteFeeStructure = async (req, res) => {
+    try {
+        await service.deleteFeeStructure(Number(req.params.id));
+        res.json({ success: true });
+    } catch (err) {
+        const status = err.message === "FEE_STRUCTURE_NOT_FOUND" ? 404 : 500;
         res.status(status).json({ success: false, error: err.message });
     }
 };

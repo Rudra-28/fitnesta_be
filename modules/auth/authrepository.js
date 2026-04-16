@@ -58,7 +58,19 @@ const findProfessionalsByUserId = async (userId) => {
 const findStudentsByUserId = async (userId) => {
     return await prisma.students.findMany({
         where: { user_id: userId },
-        select: { student_type: true },
+        select: {
+            student_type: true,
+            school_students: {
+                select: {
+                    schools: {
+                        select: {
+                            school_name: true,
+                            address: true,
+                        },
+                    },
+                },
+            },
+        },
     });
 };
 

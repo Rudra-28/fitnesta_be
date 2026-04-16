@@ -48,6 +48,7 @@ const repo   = require("./commissionrepo");
  * @param {string|null} societyCategory
  * @param {number|null} termMonthsOverride — pass participant.term_months directly to skip DB lookup
  */
+exports.resolveEffectiveMonthly = resolveEffectiveMonthly;
 async function resolveEffectiveMonthly(studentUserId, serviceType, activityName, societyCategory, termMonthsOverride = null, customCategoryName = null) {
     let termMonths = termMonthsOverride;
     let totalFee   = null;
@@ -750,24 +751,38 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
     }
 
     // ── 3. Calculate commission ───────────────────────────────────────────
+    //
+    // Commission is ALWAYS calculated on a per-month basis:
+    //   per_session_rate = (monthly_fee_base × rate%) ÷ monthly_standard_cap
+    //   commission       = sessions_attended_this_month × per_session_rate
+    //
+    // To protect against late settlements spanning multiple months accidentally
+    // crediting more than one month's worth, sessions_attended is clamped to
+    // standard_cap. If the window genuinely spans >1 month admin should settle
+    // monthly — but the clamp ensures we can never mathematically overpay.
     const standardCap = resolveStandardCap(assignment_type, activities?.activity_category ?? null, rules);
+
+    // Clamp raw attended count to the monthly cap so a late settlement (e.g. 2-month
+    // window) cannot double-pay. Admin is expected to settle monthly; the clamp is
+    // a safety net, not the primary mechanism.
+    const sessionsAttendedClamped = Math.min(sessionsAttended, standardCap);
 
     // For IC/PT: allow admin to override the denominator if fewer sessions were completed
     const isIndividual = assignment_type === "individual_coaching" || assignment_type === "personal_tutor";
-    const capOverrideAvailable = isIndividual && sessionsAttended < standardCap && sessionsAttended > 0;
+    const capOverrideAvailable = isIndividual && sessionsAttendedClamped < standardCap && sessionsAttendedClamped > 0;
     const effectiveCap = (isIndividual && capOverride != null) ? capOverride : standardCap;
 
     let commissionPerSession, commissionAmount;
 
     if (isFlat) {
         commissionPerSession = flatAmountPerSession;
-        commissionAmount     = parseFloat((sessionsAttended * flatAmountPerSession).toFixed(2));
+        commissionAmount     = parseFloat((sessionsAttendedClamped * flatAmountPerSession).toFixed(2));
     } else {
         const totalCommissionPool = parseFloat(((effectiveFeeBase * commissionRate) / 100).toFixed(2));
         commissionPerSession      = effectiveCap > 0
             ? parseFloat((totalCommissionPool / effectiveCap).toFixed(2))
             : 0;
-        commissionAmount          = parseFloat((sessionsAttended * commissionPerSession).toFixed(2));
+        commissionAmount          = parseFloat((sessionsAttendedClamped * commissionPerSession).toFixed(2));
     }
 
     return {
@@ -789,7 +804,8 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
         cap_override_available:   capOverrideAvailable,
         cap_override_applied:     isIndividual && capOverride != null,
         sessions_allocated,
-        sessions_attended:        sessionsAttended,
+        sessions_attended:        sessionsAttendedClamped,   // clamped to monthly cap
+        sessions_attended_raw:    sessionsAttended,          // actual count before clamp (for display)
         effective_fee_base:       parseFloat(effectiveFeeBase.toFixed(2)),
         commission_rate:          isFlat ? 0 : commissionRate,
         is_flat_rate:             isFlat,

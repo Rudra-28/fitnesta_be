@@ -445,14 +445,19 @@ async function getSessionForAttendance(sessionId) {
 }
 
 async function updateStudentAttendance(sessionId, studentId) {
-  return prisma.session_participants.update({
+  return prisma.session_participants.upsert({
     where: {
       session_id_student_id: {
         session_id: Number(sessionId),
         student_id: Number(studentId),
       },
     },
-    data: { attended: true },
+    update: { attended: true },
+    create: {
+      session_id: Number(sessionId),
+      student_id: Number(studentId),
+      attended: true,
+    },
   });
 }
 

@@ -76,6 +76,7 @@ router.get("/fee-structures/custom-categories", controller.listCustomFeeCategori
 router.get("/fee-structures", controller.listFeeStructures);               // GET  /api/v1/admin/fee-structures?section=school|society|individual_coaching|personal_tutor
 router.post("/fee-structures", controller.upsertFeeStructure);             // POST /api/v1/admin/fee-structures
 router.put("/fee-structures/:id", controller.upsertFeeStructure);          // PUT  /api/v1/admin/fee-structures/:id
+router.delete("/fee-structures/:id", controller.deleteFeeStructure);       // DELETE /api/v1/admin/fee-structures/:id
 
 // ── Dashboard profit stats ─────────────────────────────────────────────────
 // GET /api/v1/admin/dashboard/profit-stats?from=YYYY-MM-DD&to=YYYY-MM-DD

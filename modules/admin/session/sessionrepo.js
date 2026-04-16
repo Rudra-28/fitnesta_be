@@ -125,8 +125,11 @@ async function listSessions({ student_id, professional_id, from, to, status, ses
           users: { select: { full_name: true } },
         },
       },
-      _count: { select: { session_participants: true } },
+      session_participants: {
+        select: { student_id: true, attended: true },
+      },
     },
+    // in_time and out_time are scalar fields — returned automatically in findMany
     orderBy: [{ scheduled_date: "asc" }, { start_time: "asc" }],
   });
 }
@@ -160,6 +163,7 @@ async function getStudentSessionBatches(studentId) {
       include: {
         professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
         activities:    { select: { id: true, name: true } },
+        session_participants: { select: { student_id: true, attended: true } },
       },
       orderBy: [{ scheduled_date: "asc" }, { start_time: "asc" }],
     }),
@@ -234,12 +238,16 @@ async function getStudentSessionBatches(studentId) {
       });
     }
     groupMap.get(key).sessions.push({
-      id:             s.id,
-      scheduled_date: s.scheduled_date,
-      start_time:     s.start_time,
-      end_time:       s.end_time,
-      status:         s.status,
-      cancel_reason:  s.cancel_reason,
+      id:                  s.id,
+      scheduled_date:      s.scheduled_date,
+      start_time:          s.start_time,
+      end_time:            s.end_time,
+      status:              s.status,
+      cancel_reason:       s.cancel_reason,
+      in_time:             s.in_time,
+      out_time:            s.out_time,
+      session_participants: s.session_participants,
+      professionals:       s.professionals,
     });
   }
 

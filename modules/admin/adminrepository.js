@@ -198,6 +198,9 @@ exports.getAllPersonalTutors = async () => {
             batch: true,
             teacher_for: true,
             dob: true,
+            membership_start_date: true,
+            membership_end_date: true,
+            term_months: true,
             // Who is assigned (null if not yet assigned)
             teacher_professional_id: true,
             professionals: {
@@ -230,6 +233,9 @@ exports.getAllIndividualParticipants = async () => {
             dob: true,
             age: true,
             kits: true,
+            membership_start_date: true,
+            membership_end_date: true,
+            term_months: true,
             // Who is assigned (null if not yet assigned)
             trainer_professional_id: true,
             professionals: {
@@ -742,6 +748,10 @@ exports.updateFeeStructureById = async (id, { total_fee, effective_monthly, cust
             last_edited_at: new Date(),
         },
     });
+};
+
+exports.deleteFeeStructureById = async (id) => {
+    return await prisma.fee_structures.delete({ where: { id } });
 };
 
 exports.createFeeStructure = async (data) => {
@@ -1950,14 +1960,26 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     id: true,
                     student_id: true,
                     activity: true,
-                    students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+                    term_months: true,
+                    students: {
+                        select: {
+                            id: true,
+                            user_id: true,
+                            users: { select: { full_name: true, mobile: true } },
+                        },
+                    },
                 },
             }) : [];
             students = rows.map((r) => ({
-                student_id: r.students?.id ?? null,
-                name: r.students?.users?.full_name ?? "—",
-                mobile: r.students?.users?.mobile ?? null,
-                detail: r.activity ?? null,
+                student_id:    r.students?.id ?? null,
+                user_id:       r.students?.user_id ?? null,
+                name:          r.students?.users?.full_name ?? "—",
+                mobile:        r.students?.users?.mobile ?? null,
+                activity:      r.activity ?? null,
+                term_months:   r.term_months ?? null,
+                service_type:  "individual_coaching",
+                society_category: null,
+                custom_category_name: null,
             }));
         } else {
             const rows = studentIds.length > 0 ? await prisma.personal_tutors.findMany({
@@ -1966,19 +1988,36 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     id: true,
                     student_id: true,
                     teacher_for: true,
-                    students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+                    term_months: true,
+                    students: {
+                        select: {
+                            id: true,
+                            user_id: true,
+                            users: { select: { full_name: true, mobile: true } },
+                        },
+                    },
                 },
             }) : [];
             students = rows.map((r) => ({
-                student_id: r.students?.id ?? null,
-                name: r.students?.users?.full_name ?? "—",
-                mobile: r.students?.users?.mobile ?? null,
-                detail: r.teacher_for ?? null,
+                student_id:    r.students?.id ?? null,
+                user_id:       r.students?.user_id ?? null,
+                name:          r.students?.users?.full_name ?? "—",
+                mobile:        r.students?.users?.mobile ?? null,
+                activity:      r.teacher_for ?? null,
+                term_months:   r.term_months ?? null,
+                service_type:  "personal_tutor",
+                society_category: null,
+                custom_category_name: null,
             }));
         }
 
-        return { upcoming_sessions: upcoming, absent_sessions: absent,
-                 attendance_pct: total > 0 ? Math.round((completed / total) * 100) : 0, batch_info: null, students };
+        return {
+            upcoming_sessions: upcoming,
+            absent_sessions:   absent,
+            attendance_pct:    total > 0 ? Math.round((completed / total) * 100) : 0,
+            batch_info:        null,
+            students,
+        };
     }
 
     const batchWhere = {
@@ -2066,15 +2105,64 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                 where: { batch_id: batchId },
                 select: {
                     student_id: true,
-                    students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+                    students: {
+                        select: {
+                            id: true,
+                            user_id: true,
+                            users: { select: { full_name: true, mobile: true } },
+                            individual_participants: {
+                                select: {
+                                    term_months: true,
+                                    activity: true,
+                                    batch_id: true,
+                                    individual_participants_society: {
+                                        select: {
+                                            societies: {
+                                                select: {
+                                                    society_category: true,
+                                                    custom_category_name: true,
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                            school_students: {
+                                select: { term_months: true },
+                            },
+                        },
+                    },
                 },
             });
-            return bs.map((r) => ({
-                student_id: r.student_id,
-                name: r.students?.users?.full_name ?? "—",
-                mobile: r.students?.users?.mobile ?? null,
-                detail: null,
-            }));
+
+            const activityName = batch?.activities?.name ?? null;
+            const isSchool     = assignment_type === "group_coaching_school";
+
+            return bs.map((r) => {
+                const ip = isSchool ? null
+                    : (r.students?.individual_participants ?? []).find(
+                        (p) => (!activityName || p.activity === activityName) && (!p.batch_id || p.batch_id === batchId)
+                      ) ?? (r.students?.individual_participants ?? []).find(
+                        (p) => !activityName || p.activity === activityName
+                      );
+
+                const sc   = isSchool ? null : (ip?.individual_participants_society?.societies ?? null);
+                const term = isSchool
+                    ? (r.students?.school_students?.[0]?.term_months ?? 9)
+                    : (ip?.term_months ?? null);
+
+                return {
+                    student_id:           r.student_id,
+                    user_id:              r.students?.user_id ?? null,
+                    name:                 r.students?.users?.full_name ?? "—",
+                    mobile:               r.students?.users?.mobile ?? null,
+                    activity:             activityName,
+                    term_months:          term,
+                    service_type:         isSchool ? "school_student" : "group_coaching",
+                    society_category:     sc?.society_category ?? null,
+                    custom_category_name: sc?.custom_category_name ?? null,
+                };
+            });
         })() : [],
     };
 };

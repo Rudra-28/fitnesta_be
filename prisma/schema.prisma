@@ -461,6 +461,21 @@ model users {
   kit_orders         kit_orders[]
   kit_order_refunds  kit_order_refunds[]
   support_tickets    support_tickets[]
+  notifications      notifications[]
+}
+
+model notifications {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  title      String    @db.VarChar(255)
+  body       String    @db.Text
+  type       String?   @db.VarChar(100)
+  data       Json?
+  is_read    Boolean   @default(false)
+  created_at DateTime  @default(now()) @db.Timestamp(0)
+  users      users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id, is_read])
 }
 
 model vendors {

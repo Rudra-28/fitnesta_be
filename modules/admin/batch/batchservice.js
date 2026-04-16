@@ -351,15 +351,19 @@ async function deleteBatch(batchId) {
  * The cycle_end_date is set to the date of the LAST generated session.
  * Existing session dates are skipped (deduplication).
  */
-async function generateSessions(batchId) {
+async function generateSessions(batchId, { session_cap_override, start_date_override } = {}) {
     const batch = await repo.getBatchById(Number(batchId));
     if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
     if (!batch.is_active) throw Object.assign(new Error("Batch is inactive"), { code: "BATCH_INACTIVE" });
 
-    const standardCap = await resolveStandardCap(batch.batch_type, batch.activity_id);
+    const standardCap = session_cap_override
+        ? Number(session_cap_override)
+        : (batch.session_cap ?? await resolveStandardCap(batch.batch_type, batch.activity_id));
 
-    // Cycle starts from the stored cycle_start_date (or batch start_date on first run)
-    const cycleStart = new Date(batch.cycle_start_date ?? batch.start_date);
+    // Cycle starts from the admin-supplied start_date_override, or the stored cycle_start_date, or batch start_date
+    const cycleStart = start_date_override
+        ? new Date(start_date_override)
+        : new Date(batch.cycle_start_date ?? batch.start_date);
     cycleStart.setHours(0, 0, 0, 0);
 
     const daysOfWeek = Array.isArray(batch.days_of_week)
@@ -545,11 +549,10 @@ async function removeBatchStudent(batchId, studentId) {
  * Admin uses this to manually fill a new batch.
  */
 async function getUnassignedGroupStudents(societyId, activityId) {
-  // individual_participants with matching society_id, no batch_id, and student_type = group_coaching
+  // All group_coaching students in this society (regardless of existing batch assignment)
   const rows = await prisma.individual_participants.findMany({
     where: {
       society_id: Number(societyId),
-      batch_id:   null,
       students:   { student_type: "group_coaching" },
     },
     include: {
@@ -558,6 +561,9 @@ async function getUnassignedGroupStudents(societyId, activityId) {
           id:   true,
           users: { select: { full_name: true, mobile: true } },
         },
+      },
+      batches: {
+        select: { id: true, batch_name: true },
       },
     },
   });

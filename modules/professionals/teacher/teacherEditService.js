@@ -9,6 +9,7 @@ exports.editTeacher = async (userId, data) => {
     if (data.contactNumber !== undefined) userData.mobile  = data.contactNumber;
     if (data.email         !== undefined) userData.email   = data.email;
     if (data.address       !== undefined) userData.address = data.address;
+    if (data.photo         !== undefined) userData.photo   = data.photo;
 
     // ── professionals table fields ────────────────────────────────────────────
     const professionalData = {};

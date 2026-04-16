@@ -17,6 +17,10 @@ const teacherUploads = upload.fields([
 // teacherUploads must come before verifyMobileUnique so multipart body is parsed first.
 // Validation is handled inside the service (not as route middleware).
 router.post("/", teacherUploads, verifyMobileUnique, controller.createTeacher);
-router.patch("/edit-profile", verifyAccessToken, editController.editTeacher);
+const editUploads = upload.fields([
+  { name: 'photo', maxCount: 1 },
+]);
+
+router.patch("/edit-profile", verifyAccessToken, editUploads, editController.editTeacher);
 
 module.exports = router;
