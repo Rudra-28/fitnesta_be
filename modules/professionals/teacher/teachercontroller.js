@@ -2,6 +2,7 @@ const service = require("./teacherservice");
 
 exports.createTeacher = async (req, res) => {
     try {
+        console.log("[Teacher] createTeacher called");
         const fileData = {};
         if (req.files) {
             if (req.files['panCard'])   fileData.panCard   = req.files['panCard'][0].path;
@@ -12,12 +13,14 @@ exports.createTeacher = async (req, res) => {
         }
 
         const data = { ...req.body, ...fileData };
+        console.log("[Teacher] idToken:", data.idToken ? "present" : "missing", "| name:", data.name, "| files:", Object.keys(fileData));
         const result = await service.createTeacher(data);
+        console.log("[Teacher] Registration complete — userId:", result.userId ?? result.id ?? "unknown");
 
         res.status(201).json(result);
 
     } catch (err) {
-        console.error("Teacher registration error:", err.message);
+        console.error("[Teacher] Registration error:", err.message);
         res.status(400).json({ success: false, error: err.message });
     }
 };
