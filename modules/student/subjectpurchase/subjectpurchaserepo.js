@@ -49,7 +49,7 @@ exports.getStudentByUserId = async (userId) => {
 exports.getActivePersonalTutor = async (studentId) => {
     return prisma.personal_tutors.findFirst({
         where:  { student_id: studentId, is_active: true },
-        select: { id: true },
+        select: { id: true, teacher_for: true, standard: true },
     });
 };
 

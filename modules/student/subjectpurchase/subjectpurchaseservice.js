@@ -33,10 +33,23 @@ exports.getStandards = () => repo.getPersonalTutorStandards();
  *
  * @param {string} standard  e.g. "3RD-4TH"
  */
-exports.getSubjectsForStandard = async (standard) => {
+exports.getSubjectsForStandard = async (standard, userId = null) => {
     if (!standard) throw Object.assign(new Error("standard is required"), { status: 400 });
 
     const feeRows = await repo.getSubjectsForStandard(standard);
+
+    // If the student is already a PT student, exclude subjects they already have
+    let enrolledNames = [];
+    if (userId) {
+        const student = await repo.getStudentByUserId(userId);
+        if (student) {
+            const ptRow = await repo.getActivePersonalTutor(student.id);
+            if (ptRow) {
+                const rawSubjects = (ptRow.teacher_for || "").split(",").map((s) => s.trim()).filter(Boolean);
+                enrolledNames = rawSubjects.map((s) => /^All Subjects/i.test(s) ? "All Subjects" : s);
+            }
+        }
+    }
 
     const activityMap = {};
     for (const row of feeRows) {
@@ -44,6 +57,9 @@ exports.getSubjectsForStandard = async (standard) => {
 
         // "All Subjects" is only for fresh registration — hide it here
         if (/^All Subjects$/i.test(name)) continue;
+
+        // Skip subjects the student is already enrolled in
+        if (enrolledNames.includes(name)) continue;
 
         if (!activityMap[id]) {
             activityMap[id] = { activity_id: id, activity_name: name, standard, terms: [] };
@@ -82,16 +98,22 @@ exports.initiateSubjectPurchase = async (userId, body) => {
     const student = await repo.getStudentByUserId(userId);
     if (!student) throw Object.assign(new Error("Student profile not found"), { status: 404 });
 
-    // Block if they already have an active personal_tutors enrollment
-    const existing = await repo.getActivePersonalTutor(student.id);
-    if (existing) {
-        throw Object.assign(
-            new Error("You are already enrolled in an active personal tutor plan. Use 'Buy Subjects' to add more subjects."),
-            { status: 409 }
-        );
-    }
-
+    // Check if already a PT student — if so, validate they aren't re-buying an existing subject
+    const existingPT = await repo.getActivePersonalTutor(student.id);
     const ids = activity_ids.map((id) => parseInt(id));
+
+    if (existingPT) {
+        const enrolledNames = (existingPT.teacher_for || "")
+            .split(",").map((s) => s.trim()).filter(Boolean);
+        const activityRecordsCheck = await activitiesRepo.getActivitiesByIds(ids);
+        const alreadyOwned = activityRecordsCheck.filter((a) => enrolledNames.includes(a.name));
+        if (alreadyOwned.length > 0) {
+            throw Object.assign(
+                new Error(`You are already enrolled in: ${alreadyOwned.map((a) => a.name).join(", ")}`),
+                { status: 409 }
+            );
+        }
+    }
 
     // Look up fees — personal_tutor fees use standard OR "ANY" (e.g. German is ANY)
     const feeRecords = await prisma.fee_structures.findMany({
@@ -162,18 +184,32 @@ exports.finalizeRegistration = async (tempUuid, razorpayPaymentId, amount) => {
     const studentId  = data.student_id;
 
     await prisma.$transaction(async (tx) => {
-        // Guard: check again inside transaction in case of race condition
         const alreadyActive = await tx.personal_tutors.findFirst({
             where:  { student_id: studentId, is_active: true },
-            select: { id: true },
+            select: { id: true, teacher_for: true },
         });
+
         if (!alreadyActive) {
+            // Fresh enrollment — create the personal_tutors row
             await repo.insertPersonalTutor(tx, studentId, {
                 standard:       data.standard,
                 teacher_for:    data.teacher_for,
                 batch:          data.batch,
                 preferred_time: data.preferred_time,
             }, termMonths);
+        } else {
+            // Already a PT student — append the new subjects to teacher_for
+            const current = (alreadyActive.teacher_for || "")
+                .split(",").map((s) => s.trim()).filter(Boolean);
+            const incoming = (data.teacher_for || "")
+                .split(",").map((s) => s.trim()).filter(Boolean);
+            for (const subj of incoming) {
+                if (!current.includes(subj)) current.push(subj);
+            }
+            await tx.personal_tutors.update({
+                where: { id: alreadyActive.id },
+                data:  { teacher_for: current.join(", ") },
+            });
         }
     });
 

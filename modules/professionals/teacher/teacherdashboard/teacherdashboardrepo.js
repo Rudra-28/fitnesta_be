@@ -14,7 +14,8 @@ const ALL_STANDARDS = ["1ST-2ND", "3RD-4TH", "5TH-6TH", "7TH-8TH", "8TH-10TH", "
 
 exports.ALL_STANDARDS = ALL_STANDARDS;
 
-// Fetch all personal_tutors assigned to this teacher, with student user info
+// Fetch all personal_tutors assigned to this teacher, with student user info.
+// Sessions are NOT fetched here — they are resolved per-subject in the service layer.
 exports.findStudentsByTeacher = async (professionalId, standard) => {
     return await prisma.personal_tutors.findMany({
         where: {
@@ -38,15 +39,45 @@ exports.findStudentsByTeacher = async (professionalId, standard) => {
                             photo: true,
                         },
                     },
-                    sessions: {
-                        where: { professional_id: professionalId },
-                        select: { status: true },
-                    },
                 },
             },
         },
         orderBy: { id: "asc" },
     });
+};
+
+// Fetch sessions for a specific student + teacher filtered by activity name(s).
+// Returns one row per subject card so progress is isolated per subject.
+exports.getSessionsForStudentBySubjects = async (professionalId, studentId, subjectNames) => {
+    // Resolve activity IDs from subject names
+    const activities = await prisma.activities.findMany({
+        where: { name: { in: subjectNames } },
+        select: { id: true, name: true },
+    });
+    const activityIds = activities.map((a) => a.id);
+
+    if (activityIds.length === 0) {
+        // No matching activity — fall back to all sessions for this student+teacher
+        const sessions = await prisma.sessions.findMany({
+            where: { professional_id: professionalId, student_id: studentId },
+            select: { status: true },
+        });
+        return { sessions, activityMap: {} };
+    }
+
+    const sessions = await prisma.sessions.findMany({
+        where: {
+            professional_id: professionalId,
+            student_id:      studentId,
+            activity_id:     { in: activityIds },
+        },
+        select: { status: true },
+    });
+
+    const activityMap = {};
+    for (const a of activities) activityMap[a.name] = a.id;
+
+    return { sessions, activityMap };
 };
 
 // Count students per standard for the summary card
@@ -155,9 +186,11 @@ exports.getSessions = async (professionalId, status) => {
     return prisma.sessions.findMany({
         where: { professional_id: Number(professionalId), ...(whereMap[status] ?? whereMap.upcoming) },
         include: {
-            batches:  { select: { id: true, batch_name: true, batch_type: true, schools: { select: { id: true, school_name: true } }, activities: { select: { id: true, name: true } } } },
-            students: { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
-            _count:   { select: { session_participants: true } },
+            activities: { select: { id: true, name: true, image_url: true } },
+            batches:    { select: { id: true, batch_name: true, batch_type: true, schools: { select: { id: true, school_name: true } }, activities: { select: { id: true, name: true, image_url: true } } } },
+            students:   { select: { id: true, users: { select: { full_name: true, mobile: true } } } },
+            professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
+            _count:     { select: { session_participants: true } },
         },
         orderBy: descOrder
             ? [{ scheduled_date: "desc" }, { start_time: "desc" }]
@@ -169,11 +202,11 @@ exports.getSessionById = async (sessionId, professionalId) => {
     return prisma.sessions.findFirst({
         where: { id: Number(sessionId), professional_id: Number(professionalId) },
         include: {
-            activities: { select: { id: true, name: true } },
+            activities: { select: { id: true, name: true, image_url: true } },
             batches: {
                 select: {
                     id: true, batch_name: true, batch_type: true,
-                    activities: { select: { id: true, name: true } },
+                    activities: { select: { id: true, name: true, image_url: true } },
                     schools:    { select: { id: true, school_name: true } },
                     _count:     { select: { batch_students: true } },
                 },

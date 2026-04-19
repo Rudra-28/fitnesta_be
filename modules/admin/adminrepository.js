@@ -1917,6 +1917,10 @@ exports.getAssignmentSessionExtras = async (assignment) => {
 
     const windowStart = last_settled_at ? new Date(last_settled_at) : new Date(assigned_from);
 
+    // Cycle end = windowStart + 1 month. Sessions beyond this belong to the next cycle.
+    const cycleEnd = new Date(windowStart);
+    cycleEnd.setMonth(cycleEnd.getMonth() + 1);
+
     const sessionType =
         assignment_type === "individual_coaching" ? "individual_coaching" :
         assignment_type === "personal_tutor" ? "personal_tutor" :
@@ -1930,29 +1934,40 @@ exports.getAssignmentSessionExtras = async (assignment) => {
             session_type: sessionType,
             ...(activity_id ? { activity_id } : {}),
         };
-        const [completed, upcoming, absent, sessions] = await Promise.all([
-            prisma.sessions.count({
-                where: { ...baseWhere, status: "completed", scheduled_date: { gte: windowStart, lte: now } },
-            }),
-            prisma.sessions.count({
-                where: { ...baseWhere, status: { in: ["scheduled", "ongoing"] }, scheduled_date: { gte: now } },
-            }),
-            prisma.sessions.count({
-                where: { ...baseWhere, status: "absent", scheduled_date: { gte: windowStart, lte: now } },
-            }),
-            prisma.sessions.findMany({
-                where: {
-                    ...baseWhere,
-                    status: { in: ["completed", "scheduled", "ongoing", "absent"] },
-                    scheduled_date: { gte: windowStart },
-                },
-                select: { student_id: true },
-            }),
-        ]);
-        const total = completed + absent;
 
-        const studentIds = [...new Set(sessions.map((s) => s.student_id).filter(Boolean))];
+        // Fetch only sessions within the current cycle window (windowStart → cycleEnd).
+        // Sessions beyond cycleEnd belong to the next settlement cycle.
+        const allSessions = await prisma.sessions.findMany({
+            where: {
+                ...baseWhere,
+                status: { in: ["completed", "scheduled", "ongoing", "absent"] },
+                scheduled_date: { gte: windowStart, lte: cycleEnd },
+            },
+            select: { student_id: true, status: true, scheduled_date: true },
+        });
+
+        // Aggregate totals for the card header
+        const completed = allSessions.filter((s) => s.status === "completed" && new Date(s.scheduled_date) <= now).length;
+        const absent    = allSessions.filter((s) => s.status === "absent"    && new Date(s.scheduled_date) <= now).length;
+        const upcoming  = allSessions.filter((s) => ["scheduled", "ongoing"].includes(s.status) && new Date(s.scheduled_date) >= now).length;
+        const total     = completed + absent;
+
+        // Build per-student session counts
+        const perStudentMap = {};
+        for (const s of allSessions) {
+            if (!s.student_id) continue;
+            if (!perStudentMap[s.student_id]) {
+                perStudentMap[s.student_id] = { completed: 0, absent: 0, upcoming: 0 };
+            }
+            const d = new Date(s.scheduled_date);
+            if (s.status === "completed" && d <= now)                              perStudentMap[s.student_id].completed++;
+            else if (s.status === "absent" && d <= now)                            perStudentMap[s.student_id].absent++;
+            else if (["scheduled", "ongoing"].includes(s.status) && d >= now)      perStudentMap[s.student_id].upcoming++;
+        }
+
+        const studentIds = Object.keys(perStudentMap).map(Number);
         let students = [];
+
         if (assignment_type === "individual_coaching") {
             const rows = studentIds.length > 0 ? await prisma.individual_participants.findMany({
                 where: { student_id: { in: studentIds } },
@@ -1961,6 +1976,7 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     student_id: true,
                     activity: true,
                     term_months: true,
+                    membership_end_date: true,
                     students: {
                         select: {
                             id: true,
@@ -1970,17 +1986,24 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     },
                 },
             }) : [];
-            students = rows.map((r) => ({
-                student_id:    r.students?.id ?? null,
-                user_id:       r.students?.user_id ?? null,
-                name:          r.students?.users?.full_name ?? "—",
-                mobile:        r.students?.users?.mobile ?? null,
-                activity:      r.activity ?? null,
-                term_months:   r.term_months ?? null,
-                service_type:  "individual_coaching",
-                society_category: null,
-                custom_category_name: null,
-            }));
+            students = rows.map((r) => {
+                const counts = perStudentMap[r.student_id] ?? { completed: 0, absent: 0, upcoming: 0 };
+                return {
+                    student_id:           r.student_id,
+                    user_id:              r.students?.user_id ?? null,
+                    name:                 r.students?.users?.full_name ?? "—",
+                    mobile:               r.students?.users?.mobile ?? null,
+                    activity:             r.activity ?? null,
+                    term_months:          r.term_months ?? null,
+                    membership_end_date:  r.membership_end_date ?? null,
+                    service_type:         "individual_coaching",
+                    society_category:     null,
+                    custom_category_name: null,
+                    sessions_completed:   counts.completed,
+                    sessions_absent:      counts.absent,
+                    sessions_upcoming:    counts.upcoming,
+                };
+            });
         } else {
             const rows = studentIds.length > 0 ? await prisma.personal_tutors.findMany({
                 where: { student_id: { in: studentIds } },
@@ -1989,6 +2012,7 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     student_id: true,
                     teacher_for: true,
                     term_months: true,
+                    membership_end_date: true,
                     students: {
                         select: {
                             id: true,
@@ -1998,24 +2022,36 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     },
                 },
             }) : [];
-            students = rows.map((r) => ({
-                student_id:    r.students?.id ?? null,
-                user_id:       r.students?.user_id ?? null,
-                name:          r.students?.users?.full_name ?? "—",
-                mobile:        r.students?.users?.mobile ?? null,
-                activity:      r.teacher_for ?? null,
-                term_months:   r.term_months ?? null,
-                service_type:  "personal_tutor",
-                society_category: null,
-                custom_category_name: null,
-            }));
+            students = rows.map((r) => {
+                const counts = perStudentMap[r.student_id] ?? { completed: 0, absent: 0, upcoming: 0 };
+                return {
+                    student_id:           r.student_id,
+                    user_id:              r.students?.user_id ?? null,
+                    name:                 r.students?.users?.full_name ?? "—",
+                    mobile:               r.students?.users?.mobile ?? null,
+                    activity:             r.teacher_for ?? null,
+                    term_months:          r.term_months ?? null,
+                    membership_end_date:  r.membership_end_date ?? null,
+                    service_type:         "personal_tutor",
+                    society_category:     null,
+                    custom_category_name: null,
+                    sessions_completed:   counts.completed,
+                    sessions_absent:      counts.absent,
+                    sessions_upcoming:    counts.upcoming,
+                };
+            });
         }
 
+        // Derive the membership end date from the first student (all students in a single
+        // PT/IC assignment share the same professional, so their end dates align).
+        const membershipEndDate = students[0]?.membership_end_date ?? null;
+
         return {
-            upcoming_sessions: upcoming,
-            absent_sessions:   absent,
-            attendance_pct:    total > 0 ? Math.round((completed / total) * 100) : 0,
-            batch_info:        null,
+            upcoming_sessions:   upcoming,
+            absent_sessions:     absent,
+            attendance_pct:      total > 0 ? Math.round((completed / total) * 100) : 0,
+            batch_info:          null,
+            membership_end_date: membershipEndDate,
             students,
         };
     }
@@ -2101,42 +2137,86 @@ exports.getAssignmentSessionExtras = async (assignment) => {
             entity_name:   batch.societies?.society_name ?? batch.schools?.school_name ?? null,
         } : null,
         students: batchId ? await (async () => {
-            const bs = await prisma.batch_students.findMany({
-                where: { batch_id: batchId },
-                select: {
-                    student_id: true,
-                    students: {
-                        select: {
-                            id: true,
-                            user_id: true,
-                            users: { select: { full_name: true, mobile: true } },
-                            individual_participants: {
-                                select: {
-                                    term_months: true,
-                                    activity: true,
-                                    batch_id: true,
-                                    individual_participants_society: {
-                                        select: {
-                                            societies: {
-                                                select: {
-                                                    society_category: true,
-                                                    custom_category_name: true,
+            const isSchool = assignment_type === "group_coaching_school";
+
+            const [bs, batchSessionRows] = await Promise.all([
+                prisma.batch_students.findMany({
+                    where: { batch_id: batchId },
+                    select: {
+                        student_id: true,
+                        students: {
+                            select: {
+                                id: true,
+                                user_id: true,
+                                users: { select: { full_name: true, mobile: true } },
+                                individual_participants: {
+                                    select: {
+                                        term_months: true,
+                                        activity: true,
+                                        batch_id: true,
+                                        individual_participants_society: {
+                                            select: {
+                                                societies: {
+                                                    select: {
+                                                        society_category: true,
+                                                        custom_category_name: true,
+                                                    },
                                                 },
                                             },
                                         },
                                     },
                                 },
-                            },
-                            school_students: {
-                                select: { term_months: true },
+                                school_students: {
+                                    select: { term_months: true },
+                                },
                             },
                         },
                     },
+                }),
+                // Fetch per-student session counts for this batch in the settlement window
+                prisma.sessions.findMany({
+                    where: {
+                        batch_id: batchId,
+                        professional_id,
+                        status: { in: ["completed", "absent", "scheduled", "ongoing"] },
+                        scheduled_date: { gte: windowStart },
+                    },
+                    select: { student_id: true, status: true, scheduled_date: true },
+                }),
+            ]);
+
+            // Build per-student session count map from session_participants
+            // For batch sessions student_id on the session is null — attendance is tracked via session_participants
+            // Fall back to batch-level counts divided equally if session_participants not available
+            const participantRows = await prisma.session_participants.findMany({
+                where: {
+                    sessions: {
+                        batch_id: batchId,
+                        professional_id,
+                        scheduled_date: { gte: windowStart },
+                    },
+                },
+                select: {
+                    student_id: true,
+                    attendance_status: true,
+                    sessions: { select: { scheduled_date: true, status: true } },
                 },
             });
 
+            const perStudentMap = {};
+            for (const p of participantRows) {
+                if (!p.student_id) continue;
+                if (!perStudentMap[p.student_id]) {
+                    perStudentMap[p.student_id] = { completed: 0, absent: 0, upcoming: 0 };
+                }
+                const d = new Date(p.sessions.scheduled_date);
+                const sessionStatus = p.sessions.status;
+                if (p.attendance_status === "present" && d <= now)                              perStudentMap[p.student_id].completed++;
+                else if (p.attendance_status === "absent" && d <= now)                          perStudentMap[p.student_id].absent++;
+                else if (["scheduled", "ongoing"].includes(sessionStatus) && d >= now)          perStudentMap[p.student_id].upcoming++;
+            }
+
             const activityName = batch?.activities?.name ?? null;
-            const isSchool     = assignment_type === "group_coaching_school";
 
             return bs.map((r) => {
                 const ip = isSchool ? null
@@ -2151,6 +2231,8 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     ? (r.students?.school_students?.[0]?.term_months ?? 9)
                     : (ip?.term_months ?? null);
 
+                const counts = perStudentMap[r.student_id] ?? { completed: 0, absent: 0, upcoming: 0 };
+
                 return {
                     student_id:           r.student_id,
                     user_id:              r.students?.user_id ?? null,
@@ -2161,6 +2243,9 @@ exports.getAssignmentSessionExtras = async (assignment) => {
                     service_type:         isSchool ? "school_student" : "group_coaching",
                     society_category:     sc?.society_category ?? null,
                     custom_category_name: sc?.custom_category_name ?? null,
+                    sessions_completed:   counts.completed,
+                    sessions_absent:      counts.absent,
+                    sessions_upcoming:    counts.upcoming,
                 };
             });
         })() : [],

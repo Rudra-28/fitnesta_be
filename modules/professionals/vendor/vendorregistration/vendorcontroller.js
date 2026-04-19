@@ -11,7 +11,7 @@ exports.createVendors = async (req, res) => {
         }
 
         const data = { ...req.body, ...fileData };
-        console.log("[Vendor] idToken:", data.idToken ? "present" : "missing", "| name:", data.name, "| files:", Object.keys(fileData));
+        console.log("[Vendor] idToken:", data.idToken ? "present" : "missing", "| fullName:", data.fullName, "| files:", Object.keys(fileData));
         const result = await service.createVendors(data);
         console.log("[Vendor] Registration complete — userId:", result.userId ?? result.id ?? "unknown");
 

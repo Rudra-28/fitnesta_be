@@ -66,8 +66,10 @@ exports.initiateRegistration = async (formData, serviceType) => {
         }
     }
 
-    // Resolve society_category if group_coaching
+    // Resolve society_category for fee lookup — society students pay group_coaching rates,
+    // but their student_type stays "individual_coaching" (they registered via the IC form).
     let societyCategory = null;
+    let feeCoachingType = coachingType;
     if (coachingType === "individual_coaching" || coachingType === "group_coaching") {
         const societyId = formData.individualcoaching?.society_id;
         if (societyId) {
@@ -76,7 +78,7 @@ exports.initiateRegistration = async (formData, serviceType) => {
                 select: { society_category: true },
             });
             societyCategory = society?.society_category ?? null;
-            if (societyCategory) coachingType = "group_coaching";
+            if (societyCategory) feeCoachingType = "group_coaching";
         }
     }
 
@@ -84,7 +86,7 @@ exports.initiateRegistration = async (formData, serviceType) => {
     const ids = activity_ids.map((id) => parseInt(id));
     const feeRecords = await activitiesRepo.getFeesForActivities(
         ids,
-        coachingType,
+        feeCoachingType,
         parseInt(term_months),
         societyCategory ?? undefined
     );
@@ -95,7 +97,7 @@ exports.initiateRegistration = async (formData, serviceType) => {
         throw err;
     }
 
-    console.log(`[IC] fee records found: ${feeRecords.length}/${ids.length} | coachingType: ${coachingType}`);
+    console.log(`[IC] fee records found: ${feeRecords.length}/${ids.length} | studentType: ${coachingType} | feeCoachingType: ${feeCoachingType}`);
 
     const amount = feeRecords.reduce((sum, r) => sum + parseFloat(r.total_fee), 0);
     const tempUuid = crypto.randomUUID();

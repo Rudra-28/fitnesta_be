@@ -106,7 +106,7 @@ async function getSubjectsReminder(studentId) {
   const sessions = await prisma.sessions.findMany({
     where: { student_id: studentId, session_type: "personal_tutor", scheduled_date: { gte: today, lt: tomorrow }, status: { in: ["scheduled", "ongoing"] } },
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       professionals: { select: { profession_type: true, users: { select: { full_name: true } } } },
     },
     orderBy: { start_time: "asc" },
@@ -121,7 +121,7 @@ async function getSubjectsSessions(studentId, status) {
   return prisma.sessions.findMany({
     where: { student_id: studentId, session_type: "personal_tutor", ...where },
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
     },
     orderBy: [{ scheduled_date: orderDir }, { start_time: orderDir }],
@@ -132,7 +132,7 @@ async function getSubjectsSessionById(studentId, sessionId) {
   return prisma.sessions.findFirst({
     where: { id: sessionId, student_id: studentId, session_type: "personal_tutor" },
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
       session_feedback: { where: { student_id: studentId }, select: { rating: true, comment: true } },
     },
@@ -149,7 +149,7 @@ async function getActivitiesReminder(studentId) {
     prisma.sessions.findMany({
       where: { student_id: studentId, session_type: actTypes, scheduled_date: { gte: today, lt: tomorrow }, status: { in: ["scheduled", "ongoing"] } },
       include: {
-        activities: { select: { id: true, name: true } },
+        activities: { select: { id: true, name: true, image_url: true } },
         professionals: { select: { profession_type: true, users: { select: { full_name: true } } } },
       },
       orderBy: { start_time: "asc" },
@@ -159,7 +159,7 @@ async function getActivitiesReminder(studentId) {
       include: {
         sessions: {
           include: {
-            activities: { select: { id: true, name: true } },
+            activities: { select: { id: true, name: true, image_url: true } },
             professionals: { select: { profession_type: true, users: { select: { full_name: true } } } },
             batches: { select: { id: true, batch_name: true, batch_type: true } },
           },
@@ -185,7 +185,7 @@ async function getActivitiesSessions(studentId, status) {
     prisma.sessions.findMany({
       where: { student_id: studentId, session_type: actTypes, ...where },
       include: {
-        activities: { select: { id: true, name: true } },
+        activities: { select: { id: true, name: true, image_url: true } },
         professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
       },
       orderBy: [{ scheduled_date: orderDir }, { start_time: orderDir }],
@@ -195,7 +195,7 @@ async function getActivitiesSessions(studentId, status) {
       include: {
         sessions: {
           include: {
-            activities: { select: { id: true, name: true } },
+            activities: { select: { id: true, name: true, image_url: true } },
             professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
             batches: { select: { id: true, batch_name: true, batch_type: true, societies: { select: { id: true, society_name: true } }, schools: { select: { id: true, school_name: true } } } },
           },
@@ -217,7 +217,7 @@ async function getActivitiesSessionById(studentId, sessionId) {
   const individual = await prisma.sessions.findFirst({
     where: { id: sessionId, student_id: studentId, session_type: actTypes },
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
       session_feedback: { where: { student_id: studentId }, select: { rating: true, comment: true } },
     },
@@ -229,7 +229,7 @@ async function getActivitiesSessionById(studentId, sessionId) {
     include: {
       sessions: {
         include: {
-          activities: { select: { id: true, name: true } },
+          activities: { select: { id: true, name: true, image_url: true } },
           professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true, mobile: true } } } },
           batches: { select: { id: true, batch_name: true, batch_type: true, societies: { select: { id: true, society_name: true } }, schools: { select: { id: true, school_name: true } } } },
           session_feedback: { where: { student_id: studentId }, select: { rating: true, comment: true } },
@@ -344,7 +344,7 @@ async function getActivitiesWithSessions(studentId) {
     prisma.sessions.findMany({
       where: { student_id: studentId, session_type: actTypes, activity_id: { not: null } },
       include: {
-        activities: { select: { id: true, name: true } },
+        activities: { select: { id: true, name: true, image_url: true } },
         professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
       },
       orderBy: [{ scheduled_date: "asc" }, { start_time: "asc" }],
@@ -354,7 +354,7 @@ async function getActivitiesWithSessions(studentId) {
       include: {
         sessions: {
           include: {
-            activities: { select: { id: true, name: true } },
+            activities: { select: { id: true, name: true, image_url: true } },
             professionals: { select: { id: true, profession_type: true, users: { select: { full_name: true } } } },
             batches: { select: { id: true, batch_name: true, batch_type: true } },
           },

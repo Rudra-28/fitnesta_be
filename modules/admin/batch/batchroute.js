@@ -18,11 +18,13 @@ router.delete("/:batchId/students/:studentId", controller.removeBatchStudent);  
 router.post("/:batchId/generate-sessions", controller.generateSessions);                     // POST   /api/v1/admin/batches/:batchId/generate-sessions
 router.post("/:batchId/sessions", controller.createBatchSession);                            // POST   /api/v1/admin/batches/:batchId/sessions
 router.get("/:batchId/professionals", controller.getAvailableProfessionalsForBatch);            // GET    /api/v1/admin/batches/:batchId/professionals
+router.delete("/:batchId/sessions",            controller.bulkDeleteBatchSessions);          // DELETE /api/v1/admin/batches/:batchId/sessions              — bulk delete scheduled sessions (body: { from_date? })
+router.delete("/:batchId/sessions/:sessionId", controller.deleteBatchSession);               // DELETE /api/v1/admin/batches/:batchId/sessions/:sessionId   — delete single batch session
 router.patch("/:batchId/sessions/:sessionId/reassign", controller.reassignBatchSession);     // PATCH  /api/v1/admin/batches/:batchId/sessions/:sessionId/reassign
 router.post("/:batchId/reassign-all", controller.reassignAllFutureBatchSessions);            // POST   /api/v1/admin/batches/:batchId/reassign-all
 router.post("/:batchId/students/:studentId/extend-term", controller.extendStudentTerm);      // POST   /api/v1/admin/batches/:batchId/students/:studentId/extend-term
 router.get("/:batchId/settlement-preview", controller.getSettlementPreview);                 // GET    /api/v1/admin/batches/:batchId/settlement-preview
-router.post("/:batchId/settle", controller.settleBatchCycle);                                // POST   /api/v1/admin/batches/:batchId/settle
+router.post("/batch-cycles/:cycleId/settle", controller.settleBatchCycle);                   // POST   /api/v1/admin/batches/batch-cycles/:cycleId/settle
 router.get("/:batchId/settlements", controller.listSettlements);                             // GET    /api/v1/admin/batches/:batchId/settlements
 router.patch("/settlements/:settlementId/mark-paid", controller.markSettlementPaid);         // PATCH  /api/v1/admin/batches/settlements/:settlementId/mark-paid
 

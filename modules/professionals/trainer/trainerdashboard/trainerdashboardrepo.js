@@ -39,7 +39,7 @@ async function getTrainerBatches(professionalId) {
   return prisma.batches.findMany({
     where: { professional_id: Number(professionalId), is_active: true },
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       societies: { select: { id: true, society_name: true } },
       schools: { select: { id: true, school_name: true } },
       _count: { select: { batch_students: true, sessions: true } },
@@ -58,7 +58,7 @@ async function getBatchesByLocation(professionalId, location) {
   return prisma.batches.findMany({
     where,
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       societies:  { select: { id: true, society_name: true, address: true } },
       schools:    { select: { id: true, school_name: true, address: true } },
       _count:     { select: { batch_students: true, sessions: true } },
@@ -75,7 +75,7 @@ async function getActivitiesWithBatchStats(professionalId) {
   const batches = await prisma.batches.findMany({
     where: { professional_id: Number(professionalId), is_active: true },
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       societies:  { select: { id: true, society_name: true } },
       schools:    { select: { id: true, school_name: true } },
       _count:     { select: { batch_students: true, sessions: true } },
@@ -193,7 +193,7 @@ async function getAllStudentsWithProgress(professionalId) {
       batches: {
         select: {
           id: true, batch_name: true,
-          activities: { select: { id: true, name: true } },
+          activities: { select: { id: true, name: true, image_url: true } },
           societies:  { select: { id: true, society_name: true } },
           schools:    { select: { id: true, school_name: true } },
         },
@@ -229,7 +229,7 @@ async function getStudentSessions(professionalId, studentId, status) {
   return prisma.sessions.findMany({
     where,
     include: {
-      batches:  { select: { id: true, batch_name: true, batch_type: true, activities: { select: { id: true, name: true } }, societies: { select: { id: true, society_name: true } }, schools: { select: { id: true, school_name: true } } } },
+      batches:  { select: { id: true, batch_name: true, batch_type: true, activities: { select: { id: true, name: true, image_url: true } }, societies: { select: { id: true, society_name: true } }, schools: { select: { id: true, school_name: true } } } },
       _count:   { select: { session_participants: true } },
     },
     orderBy: [{ scheduled_date: "desc" }, { start_time: "desc" }],
@@ -262,11 +262,11 @@ async function getSessionById(sessionId, professionalId) {
   return prisma.sessions.findFirst({
     where: { id: Number(sessionId), professional_id: Number(professionalId) },
     include: {
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       batches: {
         select: {
           id: true, batch_name: true, batch_type: true,
-          activities: { select: { id: true, name: true } },
+          activities: { select: { id: true, name: true, image_url: true } },
           societies:  { select: { id: true, society_name: true } },
           schools:    { select: { id: true, school_name: true } },
           _count:     { select: { batch_students: true } },
@@ -323,7 +323,7 @@ async function getSportsActivities(professionalId) {
     where: { professional_id: Number(professionalId), is_active: true },
     select: {
       activity_id: true,
-      activities: { select: { id: true, name: true } },
+      activities: { select: { id: true, name: true, image_url: true } },
       _count: { select: { sessions: true } },
     },
   });
@@ -400,7 +400,7 @@ async function getSessionsByActivity(professionalId, activityId, activityName, s
         batches: {
           select: {
             id: true, batch_name: true, batch_type: true,
-            activities: { select: { id: true, name: true } },
+            activities: { select: { id: true, name: true, image_url: true } },
             societies:  { select: { id: true, society_name: true } },
             schools:    { select: { id: true, school_name: true } },
             _count:     { select: { batch_students: true } },
@@ -463,7 +463,7 @@ async function getSessionsByActivity(professionalId, activityId, activityName, s
             },
           },
         },
-        activities: { select: { id: true, name: true } },
+        activities: { select: { id: true, name: true, image_url: true } },
         _count: { select: { session_participants: true } },
       },
       orderBy: [{ scheduled_date: "desc" }, { start_time: "asc" }],

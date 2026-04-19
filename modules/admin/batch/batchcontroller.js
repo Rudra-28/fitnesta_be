@@ -19,6 +19,7 @@ const ERROR_MAP = {
   SESSION_CAP_LOCKED: 409,
   INVALID_PROFESSIONAL_TYPE: 400,
   MISSING_FIELDS: 400,
+  DATE_OUTSIDE_CYCLE: 422,
 };
 
 function handleError(res, err) {
@@ -136,7 +137,9 @@ async function getSettlementPreview(req, res) {
 
 async function settleBatchCycle(req, res) {
   try {
-    const result = await service.settleBatchCycle(req.params.batchId);
+    const cycleId = parseInt(req.params.cycleId);
+    if (isNaN(cycleId)) return res.status(400).json({ success: false, error: "cycleId is required" });
+    const result = await service.settleBatchCycle(cycleId);
     return res.json({ success: true, ...result });
   } catch (err) {
     return handleError(res, err);
@@ -213,6 +216,27 @@ async function createBatchSession(req, res) {
   }
 }
 
+async function deleteBatchSession(req, res) {
+  try {
+    const { batchId, sessionId } = req.params;
+    const result = await service.deleteBatchSession(Number(batchId), Number(sessionId));
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function bulkDeleteBatchSessions(req, res) {
+  try {
+    const { batchId } = req.params;
+    const { from_date } = req.body;
+    const result = await service.bulkDeleteBatchSessions(Number(batchId), from_date);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 async function getAvailableProfessionalsForBatch(req, res) {
   try {
     const { batchId } = req.params;
@@ -244,4 +268,6 @@ module.exports = {
   extendStudentTerm,
   createBatchSession,
   getAvailableProfessionalsForBatch,
+  deleteBatchSession,
+  bulkDeleteBatchSessions,
 };

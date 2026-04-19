@@ -36,7 +36,7 @@ exports.getActivities = async (coachingType, societyCategory = null, standard = 
         for (const a of [...ic, ...ss, ...gc]) {
             if (!seen.has(a.id)) {
                 seen.add(a.id);
-                activities.push({ id: a.id, name: a.name, notes: a.notes ?? null });
+                activities.push({ id: a.id, name: a.name, notes: a.notes ?? null, image_url: a.image_url ?? null });
             }
         }
         return { coaching_type: "trainer", activities };
@@ -91,6 +91,7 @@ exports.getActivities = async (coachingType, societyCategory = null, standard = 
         id: activity.id,
         name: activity.name,
         notes: activity.notes ?? null,
+        image_url: activity.image_url ?? null,
         fees: activity.fee_structures.map((f) => {
             const fee = {
                 term_months: f.term_months,

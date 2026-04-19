@@ -8,10 +8,10 @@ const resolveTeacher = async (userId) => {
     return professional.id;
 };
 
-// Normalise a personal_tutors row into a clean student object
-const formatStudent = (row) => {
-    const sessions       = row.students?.sessions ?? [];
-    const totalSessions  = sessions.length;
+// Build one card per subject within a personal_tutors row.
+// sessions must already be filtered to only those belonging to this subject.
+const formatStudentCard = (row, subjectName, sessions) => {
+    const totalSessions     = sessions.length;
     const completedSessions = sessions.filter((s) => s.status === "completed").length;
     const progress = totalSessions > 0 ? Math.round((completedSessions / totalSessions) * 100) : 0;
 
@@ -19,7 +19,7 @@ const formatStudent = (row) => {
         tutorRecordId: row.id,
         standard:      row.standard,
         batch:         row.batch ?? null,
-        subject:       row.teacher_for ?? null,
+        subject:       subjectName,
         dob:           row.dob ?? null,
         studentId:     row.students?.id ?? null,
         fullName:      row.students?.users?.full_name ?? null,
@@ -27,9 +27,9 @@ const formatStudent = (row) => {
         email:         row.students?.users?.email ?? null,
         profilePic:    row.students?.users?.photo ?? null,
         sessionProgress: {
-            completed:    completedSessions,
-            total:        totalSessions,
-            percentage:   progress,
+            completed:  completedSessions,
+            total:      totalSessions,
+            percentage: progress,
         },
     };
 };
@@ -64,46 +64,60 @@ exports.getSummary = async (userId) => {
 };
 
 // ── GET /students ─────────────────────────────────────────────────────────────
-// Returns students, optionally filtered by ?standard=5TH-6TH
-// standard=ALL (or omitted) returns every student
+// Returns one card per subject per student, optionally filtered by ?standard=5TH-6TH
 exports.getStudents = async (userId, standard) => {
     const professionalId = await resolveTeacher(userId);
 
     const VALID = [...repo.ALL_STANDARDS, "ALL"];
     if (standard && !VALID.includes(standard.toUpperCase())) {
-        throw new Error(
-            `Invalid standard. Allowed values: ${VALID.join(", ")}.`
-        );
+        throw new Error(`Invalid standard. Allowed values: ${VALID.join(", ")}.`);
     }
 
     const normalised = standard ? standard.toUpperCase() : "ALL";
     const rows = await repo.findStudentsByTeacher(professionalId, normalised);
-    const students = rows.map(formatStudent);
+
+    // Expand each personal_tutors row into one card per subject with isolated session counts
+    const cards = [];
+    for (const row of rows) {
+        const studentId   = row.students?.id ?? null;
+        const teacherFor  = row.teacher_for ?? "";
+
+        // Split comma-separated subjects — each gets its own card
+        const subjects = teacherFor.split(",").map((s) => s.trim()).filter(Boolean);
+
+        if (subjects.length === 0) {
+            // No subjects recorded — emit one card with empty progress
+            cards.push(formatStudentCard(row, null, []));
+            continue;
+        }
+
+        for (const subjectName of subjects) {
+            let sessions = [];
+            if (studentId) {
+                const result = await repo.getSessionsForStudentBySubjects(
+                    professionalId, studentId, [subjectName]
+                );
+                sessions = result.sessions;
+            }
+            cards.push(formatStudentCard(row, subjectName, sessions));
+        }
+    }
 
     // When fetching ALL, group by standard for convenience
     if (normalised === "ALL") {
         const grouped = {};
         for (const std of repo.ALL_STANDARDS) grouped[std] = [];
 
-        for (const s of students) {
-            const key = s.standard ?? "ANY";
+        for (const card of cards) {
+            const key = card.standard ?? "ANY";
             if (!grouped[key]) grouped[key] = [];
-            grouped[key].push(s);
+            grouped[key].push(card);
         }
 
-        return {
-            success: true,
-            total: students.length,
-            data: grouped,
-        };
+        return { success: true, total: cards.length, data: grouped };
     }
 
-    return {
-        success: true,
-        standard: normalised,
-        total: students.length,
-        data: students,
-    };
+    return { success: true, standard: normalised, total: cards.length, data: cards };
 };
 
 // ── GET /sessions/:id ─────────────────────────────────────────────────────────

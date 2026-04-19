@@ -4,6 +4,9 @@ const guard = require("./adminmiddleware");
 const { superAdminGuard } = require("./adminmiddleware");
 const controller = require("./admincontroller");
 const sessionController = require("./session/sessioncontroller");
+const ptCycleController = require("../commissions/ptcyclecontroller");
+const icCycleController    = require("../commissions/iccyclecontroller");
+const batchCycleController = require("../commissions/batchcyclecontroller");
 const upload = require("../../utils/fileupload");
 const { uploadActivityImage } = require("../../utils/fileupload");
 
@@ -194,6 +197,32 @@ router.get("/professionals/:professionalId/sessions-settle", controller.getSessi
 // GET /api/v1/admin/professionals/:professionalId/payouts
 //   → All commission records for this professional (pending_payout total + list).
 router.get("/professionals/:professionalId/payouts", controller.getProfessionalPayouts);
+
+// ── PT Cycle Settlement ───────────────────────────────────────────────────
+// GET  /api/v1/admin/teachers/:professionalId/pt-settlement
+//   → students[].activities[].cycles[] breakdown for a teacher.
+// POST /api/v1/admin/pt-cycles/:cycleId/settle
+//   → Settle a single pending cycle. Body: { professional_id }
+router.get("/teachers/:professionalId/pt-settlement", ptCycleController.getPTSettlement);
+router.post("/pt-cycles/:cycleId/settle", ptCycleController.settleCycle);
+
+// ── IC Cycle Settlement ───────────────────────────────────────────────────
+// GET  /api/v1/admin/trainers/:professionalId/ic-settlement
+//   → students[].cycles[] breakdown for a trainer's individual coaching students.
+// POST /api/v1/admin/ic-cycles/:cycleId/settle
+//   → Settle a single pending IC cycle. Body: { professional_id }
+router.get("/trainers/:professionalId/ic-settlement",       icCycleController.getICSettlement);
+router.post("/ic-cycles/:cycleId/settle",                   icCycleController.settleCycle);
+
+// ── Batch Cycle Settlement (Society + School) ─────────────────────────────
+// GET  /api/v1/admin/trainers/:professionalId/society-settlement
+//   → entities[society].activities[].batches[].cycles[] breakdown.
+// GET  /api/v1/admin/trainers/:professionalId/school-settlement
+//   → entities[school].activities[].batches[].cycles[] breakdown.
+// POST /api/v1/admin/batches/batch-cycles/:cycleId/settle
+//   → Handled in batchroute.js (batch ownership context).
+router.get("/trainers/:professionalId/society-settlement",  batchCycleController.getSocietySettlement);
+router.get("/trainers/:professionalId/school-settlement",   batchCycleController.getSchoolSettlement);
 
 // ── ME Settlement ─────────────────────────────────────────────────────────
 // GET  /api/v1/admin/professionals/:professionalId/me-settlement-preview

@@ -21,7 +21,7 @@ exports.getStandards = async (_req, res) => {
  */
 exports.getSubjectsForStandard = async (req, res) => {
     try {
-        const subjects = await service.getSubjectsForStandard(req.query.standard);
+        const subjects = await service.getSubjectsForStandard(req.query.standard, req.user.userId);
         return res.status(200).json({ success: true, subjects });
     } catch (err) {
         return res.status(err.status || 500).json({ success: false, error: err.message });

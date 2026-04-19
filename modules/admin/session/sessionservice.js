@@ -2,6 +2,8 @@ const prisma = require("../../../config/prisma");
 const repo = require("./sessionrepo");
 const adminRepo = require("../adminrepository");
 const commissionService = require("../../commissions/commissionservice");
+const ptCycleService = require("../../commissions/ptcycleservice");
+const icCycleService = require("../../commissions/iccycleservice");
 const notify = require("../../../utils/notifications");
 
 function parseTimeString(timeStr) {
@@ -74,6 +76,62 @@ async function createIndividualSession({
     throw Object.assign(new Error("Student already has a session at this date and time"), {
       code: "STUDENT_CONFLICT",
     });
+  }
+
+  // ── Cycle boundary check ────────────────────────────────────────────────────
+  // The session date must fall within one of the pre-created cycle windows.
+  // Block creation if it is outside all cycles — the professional's settlement
+  // has no bucket to receive it.
+  if (session_type === "personal_tutor") {
+    const pt = await adminRepo.findPersonalTutorByStudentId(student_id);
+    if (pt) {
+      const cycles = await prisma.pt_cycle_settlements.findMany({
+        where:   { personal_tutor_id: pt.id },
+        select:  { cycle_start: true, cycle_end: true },
+        orderBy: { cycle_start: "asc" },
+      });
+      if (cycles.length > 0) {
+        const dateOnly = new Date(date); dateOnly.setHours(0, 0, 0, 0);
+        const inACycle = cycles.some((c) => {
+          const s = new Date(c.cycle_start); s.setHours(0, 0, 0, 0);
+          const e = new Date(c.cycle_end);   e.setHours(23, 59, 59, 999);
+          return dateOnly >= s && dateOnly <= e;
+        });
+        if (!inACycle) {
+          const first = new Date(cycles[0].cycle_start).toISOString().slice(0, 10);
+          const last  = new Date(cycles[cycles.length - 1].cycle_end).toISOString().slice(0, 10);
+          throw Object.assign(
+            new Error(`Session date ${scheduled_date} is outside all settlement cycle windows (${first} – ${last}). Extend the student's term first.`),
+            { code: "DATE_OUTSIDE_CYCLE" }
+          );
+        }
+      }
+    }
+  } else if (session_type === "individual_coaching") {
+    const ip = await adminRepo.findIndividualParticipantByStudentId(student_id);
+    if (ip) {
+      const cycles = await prisma.ic_cycle_settlements.findMany({
+        where:   { individual_participant_id: ip.id },
+        select:  { cycle_start: true, cycle_end: true },
+        orderBy: { cycle_start: "asc" },
+      });
+      if (cycles.length > 0) {
+        const dateOnly = new Date(date); dateOnly.setHours(0, 0, 0, 0);
+        const inACycle = cycles.some((c) => {
+          const s = new Date(c.cycle_start); s.setHours(0, 0, 0, 0);
+          const e = new Date(c.cycle_end);   e.setHours(23, 59, 59, 999);
+          return dateOnly >= s && dateOnly <= e;
+        });
+        if (!inACycle) {
+          const first = new Date(cycles[0].cycle_start).toISOString().slice(0, 10);
+          const last  = new Date(cycles[cycles.length - 1].cycle_end).toISOString().slice(0, 10);
+          throw Object.assign(
+            new Error(`Session date ${scheduled_date} is outside all settlement cycle windows (${first} – ${last}). Extend the student's term first.`),
+            { code: "DATE_OUTSIDE_CYCLE" }
+          );
+        }
+      }
+    }
   }
 
   const session = await repo.createSession({
@@ -238,6 +296,8 @@ async function generateIndividualSessions({
         await adminRepo.assignTeacherToStudent(pt.id, Number(professional_id));
         await commissionService.recordTeacherAssignment(pt.id, Number(professional_id));
       }
+      // Pre-create one settlement cycle row per activity per month
+      await ptCycleService.createCyclesForPT(pt.id, startDt, parseInt(term_months), Number(professional_id));
     }
   } else if (session_type === "individual_coaching") {
     const ip = await adminRepo.findIndividualParticipantByStudentId(student_id);
@@ -247,6 +307,8 @@ async function generateIndividualSessions({
         await adminRepo.assignTrainerToStudent(ip.id, Number(professional_id));
         await commissionService.recordTrainerAssignment(ip.id, Number(professional_id));
       }
+      // Pre-create one settlement cycle row per month for this IC participant
+      await icCycleService.createCyclesForIC(ip.id, startDt, parseInt(term_months), Number(professional_id));
     }
   }
 
@@ -662,17 +724,15 @@ async function reassignSingleSession(sessionId, newProfessionalId) {
   const updated = await repo.reassignSingleSession(sessionId, newProfessionalId);
   notify.notifySessionReassigned(session, Number(newProfessionalId)).catch(() => {});
 
-  if (session.session_type === "personal_tutor" && session.student_id) {
-    const pt = await adminRepo.findPersonalTutorByStudentId(session.student_id);
-    if (pt) {
-      await commissionService.recordTeacherAssignment(pt.id, Number(newProfessionalId));
-    }
-  } else if (session.session_type === "individual_coaching" && session.student_id) {
-    const ip = await adminRepo.findIndividualParticipantByStudentId(session.student_id);
-    if (ip) {
-      await commissionService.recordTrainerAssignment(ip.id, Number(newProfessionalId));
-    }
-  }
+  // NOTE: No trainer_assignments record is created here intentionally.
+  // A single-session reassign is a temporary substitution — it does NOT start a new
+  // commission cycle. Commission is credited correctly because buildSettlementItem
+  // counts completed sessions by professional_id on the session row.
+  // Creating an assignment record here would leave orphaned active assignments on the
+  // settlement screen after the sub is done.
+  //
+  // Only reassignAllFutureSessions creates a new assignment (and deactivates the old one),
+  // because that represents a permanent handover with a new commission cycle.
 
   return updated;
 }
@@ -760,6 +820,153 @@ async function reassignAllFutureSessions({ session_type, student_id, new_profess
   return { updated_sessions: updatedCount, new_professional_id: Number(new_professional_id) };
 }
 
+/**
+ * Add a single session inside the current settlement cycle for a PT or IC student.
+ *
+ * POST /api/v1/admin/sessions/add-to-cycle
+ * Body: { session_type, student_id, professional_id, scheduled_date, start_time, end_time, activity_id? }
+ *
+ * Rules:
+ *  - scheduled_date must fall within the current cycle window
+ *    (windowStart = last_settled_at ?? assigned_from, windowEnd = today)
+ *  - If adding this session would push the in-cycle count above standardCap, the session
+ *    is still created but a cap_warning is returned so the admin is informed.
+ *  - Settlement automatically reflects the new count — no extra action needed.
+ */
+async function addSessionToCycle({
+  session_type,
+  student_id,
+  professional_id,
+  scheduled_date,
+  start_time,
+  end_time,
+  activity_id,
+}) {
+  if (!["personal_tutor", "individual_coaching"].includes(session_type)) {
+    throw Object.assign(
+      new Error("session_type must be personal_tutor or individual_coaching"),
+      { code: "INVALID_SESSION_TYPE" }
+    );
+  }
+  if (!student_id || !professional_id || !scheduled_date || !start_time || !end_time) {
+    throw Object.assign(
+      new Error("student_id, professional_id, scheduled_date, start_time, end_time are required"),
+      { code: "MISSING_FIELDS" }
+    );
+  }
+
+  // ── 1. Resolve the assignment to get the cycle window ────────────────────
+  // trainer_assignments has one row per professional+type — not per student.
+  // Verify the student actually belongs to this professional separately.
+  const assignment = await prisma.trainer_assignments.findFirst({
+    where: {
+      professional_id: Number(professional_id),
+      assignment_type: session_type,
+      is_active: true,
+    },
+    select: { id: true, assigned_from: true, last_settled_at: true },
+  });
+
+  if (!assignment) {
+    throw Object.assign(
+      new Error("No active assignment found for this professional"),
+      { code: "NO_MEMBERSHIP" }
+    );
+  }
+
+  // Verify the student is linked to this professional
+  if (session_type === "personal_tutor") {
+    const pt = await prisma.personal_tutors.findFirst({
+      where: { student_id: Number(student_id), teacher_professional_id: Number(professional_id) },
+      select: { id: true },
+    });
+    if (!pt) throw Object.assign(
+      new Error("This student is not assigned to this teacher"),
+      { code: "NO_MEMBERSHIP" }
+    );
+  } else {
+    const ip = await prisma.individual_participants.findFirst({
+      where: { student_id: Number(student_id), trainer_professional_id: Number(professional_id) },
+      select: { id: true },
+    });
+    if (!ip) throw Object.assign(
+      new Error("This student is not assigned to this trainer"),
+      { code: "NO_MEMBERSHIP" }
+    );
+  }
+
+  const windowStart = assignment.last_settled_at
+    ? new Date(assignment.last_settled_at)
+    : new Date(assignment.assigned_from);
+  windowStart.setHours(0, 0, 0, 0);
+
+  const windowEnd = new Date();
+  windowEnd.setHours(23, 59, 59, 999);
+
+  // ── 2. Validate that scheduled_date is inside the cycle ──────────────────
+  const sessionDate = new Date(scheduled_date);
+  sessionDate.setHours(0, 0, 0, 0);
+
+  if (sessionDate < windowStart) {
+    throw Object.assign(
+      new Error(
+        `scheduled_date ${scheduled_date} is before the current cycle start (${windowStart.toISOString().slice(0, 10)}). ` +
+        "Sessions before the cycle window cannot affect settlement."
+      ),
+      { code: "OUTSIDE_CYCLE" }
+    );
+  }
+
+  // ── 3. Check cap — warn but do not block ─────────────────────────────────
+  const capRuleKey = session_type === "personal_tutor"
+    ? "personal_tutor_sessions_cap"
+    : "individual_coaching_sessions_cap";
+  const capRule = await prisma.commission_rules.findUnique({ where: { rule_key: capRuleKey } });
+  const standardCap = capRule ? parseInt(capRule.value) : 18;
+
+  const existingCount = await prisma.sessions.count({
+    where: {
+      professional_id: Number(professional_id),
+      student_id:      Number(student_id),
+      session_type,
+      scheduled_date:  { gte: windowStart, lte: windowEnd },
+      // Scope cap check per-subject so a student with multiple subjects
+      // (e.g. All Subjects + German) gets one cap per subject, not one shared cap.
+      ...(activity_id ? { activity_id: Number(activity_id) } : {}),
+    },
+  });
+
+  const newTotal = existingCount + 1;
+  let cap_warning = null;
+  if (newTotal > standardCap) {
+    cap_warning =
+      `Adding this session brings the cycle total to ${newTotal}, which exceeds the commission cap of ${standardCap}. ` +
+      `The extra session(s) beyond the cap will NOT be counted for settlement. Consider settling first.`;
+  }
+
+  // ── 4. Create the session via existing logic (conflict checks + notification) ──
+  const session = await createIndividualSession({
+    session_type,
+    student_id,
+    professional_id,
+    scheduled_date,
+    start_time,
+    end_time,
+    activity_id,
+  });
+
+  return {
+    session,
+    cycle_window: {
+      start: windowStart.toISOString().slice(0, 10),
+      end:   windowEnd.toISOString().slice(0, 10),
+    },
+    sessions_in_cycle_after: newTotal,
+    standard_cap:            standardCap,
+    cap_warning,
+  };
+}
+
 module.exports = {
   createIndividualSession,
   generateIndividualSessions,
@@ -776,4 +983,5 @@ module.exports = {
   bulkDeleteFutureSessions,
   reassignSingleSession,
   reassignAllFutureSessions,
+  addSessionToCycle,
 };

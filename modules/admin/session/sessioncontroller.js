@@ -186,6 +186,15 @@ async function reassignAllFutureSessions(req, res) {
   }
 }
 
+async function addSessionToCycle(req, res) {
+  try {
+    const result = await service.addSessionToCycle(req.body);
+    return res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
 module.exports = {
   createSession,
   generateIndividualSessions,
@@ -202,4 +211,5 @@ module.exports = {
   bulkDeleteFutureSessions,
   reassignSingleSession,
   reassignAllFutureSessions,
+  addSessionToCycle,
 };

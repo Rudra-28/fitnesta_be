@@ -508,6 +508,7 @@ exports.countGroupStudentsForEntity = async ({ societyId, schoolId }) => {
  * paid     = paid out
  */
 exports.getWalletSummary = async (professionalId) => {
+    // Commission totals from the commissions table
     const rows = await prisma.commissions.groupBy({
         by:    ["status"],
         where: { professional_id: professionalId },
@@ -518,10 +519,22 @@ exports.getWalletSummary = async (professionalId) => {
         rows.map((r) => [r.status, parseFloat(r._sum.commission_amount ?? 0)])
     );
 
+    // Travelling allowance totals — merged into the same pending/paid buckets.
+    // TA has no "approved" state; pending → paid directly via admin.
+    const taRows = await prisma.travelling_allowances.groupBy({
+        by:    ["status"],
+        where: { trainer_professional_id: professionalId },
+        _sum:  { amount: true },
+    });
+
+    const taByStatus = Object.fromEntries(
+        taRows.map((r) => [r.status, parseFloat(r._sum.amount ?? 0)])
+    );
+
     return {
-        pending:   (byStatus.on_hold ?? 0) + (byStatus.pending ?? 0),
-        approved:  byStatus.approved  ?? 0,
-        paid:      byStatus.paid      ?? 0,
+        pending:  (byStatus.on_hold ?? 0) + (byStatus.pending ?? 0) + (taByStatus.pending ?? 0),
+        approved:  byStatus.approved ?? 0,
+        paid:     (byStatus.paid ?? 0) + (taByStatus.paid ?? 0),
     };
 };
 
@@ -553,6 +566,41 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
         },
         orderBy: { created_at: "desc" },
     });
+
+    // Append travelling allowance rows for the matching bucket.
+    // TA only has "pending" and "paid" — no "approved" state.
+    // Map each TA row to the same shape as a commissions row so the Flutter
+    // wallet list renders it without any shape change.
+    const taStatusFilter = bucketStatus === "pending" ? { status: "pending" }
+                         : bucketStatus === "paid"    ? { status: "paid" }
+                         : null; // "approved" bucket has no TA rows
+
+    if (taStatusFilter) {
+        const taRows = await prisma.travelling_allowances.findMany({
+            where:   { trainer_professional_id: professionalId, ...taStatusFilter },
+            select:  { id: true, allowance_date: true, batches_count: true, amount: true, status: true, created_at: true },
+            orderBy: { allowance_date: "desc" },
+        });
+
+        for (const ta of taRows) {
+            rows.push({
+                id:                ta.id,
+                source_type:       "travelling_allowance",   // existing recognised key in Flutter
+                source_id:         ta.id,
+                base_amount:       0,
+                commission_rate:   0,
+                commission_amount: parseFloat(ta.amount),
+                status:            ta.status,                // "pending" | "paid" — same as commissions
+                created_at:        ta.created_at ?? ta.allowance_date,
+                // extra context fields — Flutter ignores unknown fields safely
+                _ta_date:          ta.allowance_date,
+                _ta_batches:       ta.batches_count,
+            });
+        }
+
+        // Re-sort combined list by date descending
+        rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    }
 
     // Enrich rows that reference a trainer_assignment (source_id = assignment id)
     const assignmentSourceTypes = new Set([
@@ -648,8 +696,6 @@ exports.getWalletBreakdown = async (professionalId, bucketStatus) => {
  * Optional filters: status, source_type, page, limit.
  */
 exports.getTransactionHistory = async (professionalId, { status, source_type, page = 1, limit = 20 } = {}) => {
-    const skip = (page - 1) * limit;
-
     const statusFilter = status === "pending"
         ? { status: { in: ["on_hold", "pending"] } }
         : status ? { status } : {};
@@ -660,32 +706,67 @@ exports.getTransactionHistory = async (professionalId, { status, source_type, pa
         ...(source_type && { source_type }),
     };
 
-    const [total, rows] = await Promise.all([
-        prisma.commissions.count({ where }),
-        prisma.commissions.findMany({
-            where,
-            select: {
-                id:                true,
-                source_type:       true,
-                source_id:         true,
-                base_amount:       true,
-                commission_rate:   true,
-                commission_amount: true,
-                status:            true,
-                created_at:        true,
-            },
-            orderBy: { created_at: "desc" },
-            skip,
-            take:  limit,
-        }),
-    ]);
+    // Fetch all matching commission rows (no pagination yet — we merge with TA first)
+    const commissionRows = await prisma.commissions.findMany({
+        where,
+        select: {
+            id:                true,
+            source_type:       true,
+            source_id:         true,
+            base_amount:       true,
+            commission_rate:   true,
+            commission_amount: true,
+            status:            true,
+            created_at:        true,
+        },
+        orderBy: { created_at: "desc" },
+    });
+
+    // Include TA rows unless caller is explicitly filtering by a different source_type.
+    // TA has no "approved" status so skip that bucket.
+    const includeTa = !source_type || source_type === "travelling_allowance";
+    const taStatusMap = { pending: "pending", paid: "paid" };
+    const taStatus    = status ? taStatusMap[status] : null; // null = all
+
+    let taRows = [];
+    if (includeTa && status !== "approved") {
+        const taWhere = {
+            trainer_professional_id: professionalId,
+            ...(taStatus ? { status: taStatus } : {}),
+        };
+        const rawTa = await prisma.travelling_allowances.findMany({
+            where:   taWhere,
+            select:  { id: true, allowance_date: true, batches_count: true, amount: true, status: true, created_at: true },
+            orderBy: { allowance_date: "desc" },
+        });
+
+        taRows = rawTa.map((ta) => ({
+            id:                ta.id,
+            source_type:       "travelling_allowance",
+            source_id:         ta.id,
+            base_amount:       0,
+            commission_rate:   0,
+            commission_amount: parseFloat(ta.amount),
+            status:            ta.status,
+            created_at:        ta.created_at ?? ta.allowance_date,
+            _ta_date:          ta.allowance_date,
+            _ta_batches:       ta.batches_count,
+        }));
+    }
+
+    // Merge, sort by date desc, paginate
+    const all     = [...commissionRows, ...taRows]
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const total      = all.length;
+    const skip       = (page - 1) * limit;
+    const paginated  = all.slice(skip, skip + limit);
 
     return {
         total,
         page,
         limit,
         total_pages: Math.ceil(total / limit),
-        transactions: rows,
+        transactions: paginated,
     };
 };
 

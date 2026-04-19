@@ -595,10 +595,13 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
     const sessionsAttended  = completedSessions.length;
 
     // ── 2. Sum effective monthly fees of students in this assignment ──────
-    let effectiveFeeBase = 0;
-    let commissionRate   = 0;
-    let isFlat           = false;
+    let effectiveFeeBase     = 0;
+    let commissionRate       = 0;
+    let isFlat               = false;
     let flatAmountPerSession = 0;
+    // Per-student fee breakdown — populated in every branch below.
+    // Shape: { student_id, name, mobile, activity, term_months, effective_monthly }
+    const studentFeeBreakdown = [];
 
     if (assignment_type === "group_coaching_society" && society_id) {
         const societyCategory    = societies?.society_category ?? null;
@@ -619,7 +622,9 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
                         student_id: true,
                         students: {
                             select: {
+                                id: true,
                                 user_id: true,
+                                users: { select: { full_name: true, mobile: true } },
                                 individual_participants: {
                                     select: { term_months: true, activity: true, batch_id: true },
                                 },
@@ -651,12 +656,22 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
                     ip?.term_months ?? null,
                     batch.societies?.custom_category_name ?? customCategoryName
                 );
-                if (em) effectiveFeeBase += em;
+                if (em) {
+                    effectiveFeeBase += em;
+                    studentFeeBreakdown.push({
+                        student_id:        bs.student_id,
+                        name:              bs.students?.users?.full_name ?? "—",
+                        mobile:            bs.students?.users?.mobile ?? null,
+                        activity:          activities?.name ?? null,
+                        term_months:       ip?.term_months ?? null,
+                        effective_monthly: parseFloat(em.toFixed(2)),
+                    });
+                }
             }
         }
 
         const studentCount = seenStudents.size;
-        const minStudents = parseFloat(rules.trainer_group_society_min_students?.value ?? 10);
+        const minStudents  = parseFloat(rules.trainer_group_society_min_students?.value ?? 10);
 
         if (studentCount < minStudents) {
             isFlat               = true;
@@ -681,7 +696,9 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
                         student_id: true,
                         students: {
                             select: {
+                                id: true,
                                 user_id: true,
+                                users: { select: { full_name: true, mobile: true } },
                                 school_students: { select: { term_months: true } },
                             },
                         },
@@ -699,7 +716,17 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
                 if (!uid) continue;
                 const termMonths = bs.students?.school_students?.[0]?.term_months ?? 9;
                 const em = await resolveEffectiveMonthly(uid, "school_student", null, null, termMonths);
-                if (em) effectiveFeeBase += em;
+                if (em) {
+                    effectiveFeeBase += em;
+                    studentFeeBreakdown.push({
+                        student_id:        bs.student_id,
+                        name:              bs.students?.users?.full_name ?? "—",
+                        mobile:            bs.students?.users?.mobile ?? null,
+                        activity:          null,
+                        term_months:       termMonths,
+                        effective_monthly: parseFloat(em.toFixed(2)),
+                    });
+                }
             }
         }
 
@@ -717,7 +744,13 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
                     student_id: true,
                     activity: true,
                     term_months: true,
-                    students: { select: { user_id: true } },
+                    students: {
+                        select: {
+                            id: true,
+                            user_id: true,
+                            users: { select: { full_name: true, mobile: true } },
+                        },
+                    },
                 },
             })
             : [];
@@ -726,7 +759,17 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
             const uid = p.students?.user_id;
             if (!uid) continue;
             const em = await resolveEffectiveMonthly(uid, "individual_coaching", p.activity, null, p.term_months ?? null);
-            if (em) effectiveFeeBase += em;
+            if (em) {
+                effectiveFeeBase += em;
+                studentFeeBreakdown.push({
+                    student_id:        p.student_id,
+                    name:              p.students?.users?.full_name ?? "—",
+                    mobile:            p.students?.users?.mobile ?? null,
+                    activity:          p.activity ?? null,
+                    term_months:       p.term_months ?? null,
+                    effective_monthly: parseFloat(em.toFixed(2)),
+                });
+            }
         }
 
         commissionRate = parseFloat(rules.trainer_personal_coaching_rate?.value ?? 80);
@@ -736,15 +779,54 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
         const tutors = studentIds.length > 0
             ? await prisma.personal_tutors.findMany({
                 where: { student_id: { in: studentIds } },
-                select: { term_months: true, students: { select: { user_id: true } } },
+                select: {
+                    student_id: true,
+                    teacher_for: true,
+                    term_months: true,
+                    students: {
+                        select: {
+                            id: true,
+                            user_id: true,
+                            users: { select: { full_name: true, mobile: true } },
+                        },
+                    },
+                },
             })
             : [];
 
         for (const t of tutors) {
             const uid = t.students?.user_id;
             if (!uid) continue;
-            const em = await resolveEffectiveMonthly(uid, "personal_tutor", null, null, t.term_months ?? null);
-            if (em) effectiveFeeBase += em;
+
+            // teacher_for is comma-separated (e.g. "All Subjects, German")
+            // Sum the fee for each subject individually so multi-subject students
+            // contribute the correct total base (not whichever row sorts first).
+            const subjects = (t.teacher_for || "")
+                .split(",").map((s) => s.trim()).filter(Boolean);
+
+            let studentTotal = 0;
+            if (subjects.length > 0) {
+                for (const subjectName of subjects) {
+                    const em = await resolveEffectiveMonthly(uid, "personal_tutor", subjectName, null, t.term_months ?? null);
+                    if (em) studentTotal += em;
+                }
+            } else {
+                // No subject recorded — fall back to payment amount
+                const em = await resolveEffectiveMonthly(uid, "personal_tutor", null, null, t.term_months ?? null);
+                if (em) studentTotal = em;
+            }
+
+            if (studentTotal > 0) {
+                effectiveFeeBase += studentTotal;
+                studentFeeBreakdown.push({
+                    student_id:        t.student_id,
+                    name:              t.students?.users?.full_name ?? "—",
+                    mobile:            t.students?.users?.mobile ?? null,
+                    activity:          t.teacher_for ?? null,
+                    term_months:       t.term_months ?? null,
+                    effective_monthly: parseFloat(studentTotal.toFixed(2)),
+                });
+            }
         }
 
         commissionRate = parseFloat(rules.teacher_personal_tutor_rate?.value ?? 80);
@@ -753,13 +835,17 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
     // ── 3. Calculate commission ───────────────────────────────────────────
     //
     // Commission is ALWAYS calculated on a per-month basis:
-    //   per_session_rate = (monthly_fee_base × rate%) ÷ monthly_standard_cap
+    //   per_session_rate = (monthly_fee_base × rate%) ÷ effective_cap
     //   commission       = sessions_attended_this_month × per_session_rate
     //
-    // To protect against late settlements spanning multiple months accidentally
-    // crediting more than one month's worth, sessions_attended is clamped to
-    // standard_cap. If the window genuinely spans >1 month admin should settle
-    // monthly — but the clamp ensures we can never mathematically overpay.
+    // effective_cap for IC/PT: count of all sessions that existed in this window
+    // (completed + scheduled + absent + cancelled). If admin deleted sessions, those
+    // are gone from DB so the count is automatically lower. Clamped to standardCap
+    // so a full month always uses the standard denominator.
+    // Next cycle: last_settled_at resets the window, so the count starts fresh and
+    // naturally returns to standardCap if no sessions were deleted.
+    //
+    // For group batches: always use standardCap (no per-student session tracking).
     const standardCap = resolveStandardCap(assignment_type, activities?.activity_category ?? null, rules);
 
     // Clamp raw attended count to the monthly cap so a late settlement (e.g. 2-month
@@ -767,10 +853,37 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
     // a safety net, not the primary mechanism.
     const sessionsAttendedClamped = Math.min(sessionsAttended, standardCap);
 
-    // For IC/PT: allow admin to override the denominator if fewer sessions were completed
     const isIndividual = assignment_type === "individual_coaching" || assignment_type === "personal_tutor";
-    const capOverrideAvailable = isIndividual && sessionsAttendedClamped < standardCap && sessionsAttendedClamped > 0;
-    const effectiveCap = (isIndividual && capOverride != null) ? capOverride : standardCap;
+
+    // For IC/PT: auto-detect reduced cap from deleted sessions.
+    // Count all sessions in the window (any non-deleted status) for this trainer.
+    // Deleted sessions are absent from DB so their absence lowers the denominator
+    // automatically for this cycle only.
+    // Next cycle: window resets from last_settled_at so count is fresh each month.
+    // Group batches always use standardCap (no per-trainer session tracking needed).
+    let autoCap = standardCap;
+    if (isIndividual) {
+        const sessionType = getAssignmentSessionType(assignment_type);
+        const totalInWindow = await prisma.sessions.count({
+            where: {
+                professional_id: professional_id,
+                session_type:    sessionType,
+                scheduled_date:  { gte: windowStart, lte: windowEnd },
+                // Exclude cancelled sessions from denominator.
+                // Deleted sessions are gone from DB — they lower this count automatically.
+                // Cancelled sessions are explicitly excluded: admin chose to cancel them
+                // so they should not count against the denominator.
+                status: { notIn: ["cancelled"] },
+            },
+        });
+        // Use actual non-cancelled session count as denominator, clamped to standardCap.
+        // Never go below 1 to avoid division by zero.
+        autoCap = Math.min(Math.max(totalInWindow, 1), standardCap);
+    }
+
+    // Admin capOverride still takes explicit precedence (e.g. manual correction)
+    const capOverrideAvailable = isIndividual && autoCap < standardCap;
+    const effectiveCap = (isIndividual && capOverride != null) ? capOverride : autoCap;
 
     let commissionPerSession, commissionAmount;
 
@@ -812,6 +925,8 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
         flat_amount_per_session:  isFlat ? flatAmountPerSession : null,
         commission_per_session:   commissionPerSession,
         commission_amount:        commissionAmount,
+        // Per-student fee breakdown: each entry = { student_id, name, mobile, activity, term_months, effective_monthly }
+        student_fee_breakdown:    studentFeeBreakdown,
     };
 }
 

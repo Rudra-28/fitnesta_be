@@ -16,11 +16,13 @@ model activities {
   activity_category   activities_activity_category @default(sports)
   image_url           String?                     @db.VarChar(255)
   created_at          DateTime?                   @default(now()) @db.Timestamp(0)
-  fee_structures      fee_structures[]
-  trainer_batches     trainer_batches[]
-  batches             batches[]
-  sessions            sessions[]
-  trainer_assignments trainer_assignments[]
+  fee_structures        fee_structures[]
+  trainer_batches       trainer_batches[]
+  batches               batches[]
+  sessions              sessions[]
+  trainer_assignments   trainer_assignments[]
+  pt_cycle_settlements  pt_cycle_settlements[]
+  ic_cycle_settlements  ic_cycle_settlements[]
 }
 
 model admins {
@@ -92,10 +94,11 @@ model individual_participants {
   session_start_time      DateTime?      @db.Time(0)
   session_end_time        DateTime?      @db.Time(0)
   is_active               Boolean        @default(true)
-  students                students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
-  societies               societies?     @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
-  professionals           professionals? @relation(fields: [trainer_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_3")
-  batches                 batches?       @relation(fields: [batch_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "fk_ip_batch")
+  students                students?             @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_1")
+  societies               societies?            @relation(fields: [society_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_2")
+  professionals           professionals?        @relation(fields: [trainer_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "individual_participants_ibfk_3")
+  batches                 batches?              @relation(fields: [batch_id], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "fk_ip_batch")
+  ic_cycle_settlements    ic_cycle_settlements[]
 
   @@index([student_id], map: "student_id")
   @@index([society_id], map: "society_id")
@@ -181,8 +184,9 @@ model personal_tutors {
   session_start_time      DateTime?      @db.Time(0)
   session_end_time        DateTime?      @db.Time(0)
   is_active               Boolean        @default(true)
-  students                students?      @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_1")
-  professionals           professionals? @relation(fields: [teacher_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_2")
+  students                students?             @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_1")
+  professionals           professionals?        @relation(fields: [teacher_professional_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "personal_tutors_ibfk_2")
+  pt_cycle_settlements    pt_cycle_settlements[]
 
   @@index([student_id], map: "student_id")
   @@index([teacher_professional_id], map: "teacher_professional_id")
@@ -893,6 +897,79 @@ model batch_cycle_settlements {
 }
 
 enum batch_cycle_settlements_status {
+  pending
+  settled
+  paid
+}
+
+// ── PT Cycle Settlements ──────────────────────────────────────────────────────
+// One row per (personal_tutor × activity × month-cycle).
+// Pre-created when sessions are bulk-generated. Pending cycles are recomputed
+// from live sessions on GET. Settled/paid cycles are frozen.
+model pt_cycle_settlements {
+  id                 Int                          @id @default(autoincrement())
+  personal_tutor_id  Int
+  activity_id        Int
+  cycle_start        DateTime                     @db.Date
+  cycle_end          DateTime                     @db.Date
+  sessions_allocated Int                          @default(0) @db.SmallInt
+  sessions_attended  Int                          @default(0) @db.SmallInt
+  sessions_absent    Int                          @default(0) @db.SmallInt
+  sessions_upcoming  Int                          @default(0) @db.SmallInt
+  base_amount        Decimal                      @default(0.00) @db.Decimal(10, 2)
+  commission_rate    Decimal                      @default(0.00) @db.Decimal(5, 2)
+  commission_amount  Decimal                      @default(0.00) @db.Decimal(10, 2)
+  status             pt_cycle_settlements_status  @default(pending)
+  settled_at         DateTime?                    @db.Timestamp(0)
+  paid_at            DateTime?                    @db.Timestamp(0)
+  created_at         DateTime                     @default(now()) @db.Timestamp(0)
+
+  personal_tutors    personal_tutors              @relation(fields: [personal_tutor_id], references: [id], onDelete: Cascade,  onUpdate: NoAction)
+  activities         activities                   @relation(fields: [activity_id],       references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([personal_tutor_id, activity_id, cycle_start], map: "uq_pt_cycle")
+  @@index([personal_tutor_id], map: "idx_ptcs_pt_id")
+  @@index([activity_id],       map: "idx_ptcs_act_id")
+  @@index([status],            map: "idx_ptcs_status")
+}
+
+enum pt_cycle_settlements_status {
+  pending
+  settled
+  paid
+}
+
+// ── IC Cycle Settlements ──────────────────────────────────────────────────────
+// One row per (individual_participant × month-cycle).
+// activity_id resolved from individual_participants.activity name at creation time.
+model ic_cycle_settlements {
+  id                        Int                         @id @default(autoincrement())
+  individual_participant_id Int
+  activity_id               Int
+  cycle_start               DateTime                    @db.Date
+  cycle_end                 DateTime                    @db.Date
+  sessions_allocated        Int                         @default(0) @db.SmallInt
+  sessions_attended         Int                         @default(0) @db.SmallInt
+  sessions_absent           Int                         @default(0) @db.SmallInt
+  sessions_upcoming         Int                         @default(0) @db.SmallInt
+  base_amount               Decimal                     @default(0.00) @db.Decimal(10, 2)
+  commission_rate           Decimal                     @default(0.00) @db.Decimal(5, 2)
+  commission_amount         Decimal                     @default(0.00) @db.Decimal(10, 2)
+  status                    ic_cycle_settlements_status @default(pending)
+  settled_at                DateTime?                   @db.Timestamp(0)
+  paid_at                   DateTime?                   @db.Timestamp(0)
+  created_at                DateTime                    @default(now()) @db.Timestamp(0)
+
+  individual_participants   individual_participants     @relation(fields: [individual_participant_id], references: [id], onDelete: Cascade,  onUpdate: NoAction)
+  activities                activities                  @relation(fields: [activity_id],               references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([individual_participant_id, activity_id, cycle_start], map: "uq_ic_cycle")
+  @@index([individual_participant_id], map: "idx_iccs_ip_id")
+  @@index([activity_id],              map: "idx_iccs_act_id")
+  @@index([status],                   map: "idx_iccs_status")
+}
+
+enum ic_cycle_settlements_status {
   pending
   settled
   paid

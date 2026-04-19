@@ -681,18 +681,183 @@ exports.assignTrainer = async (individualParticipantId, trainerProfessionalId) =
 exports.getSessionsAndSettlePreview = async (professionalId) => {
     const pid = Number(professionalId);
     const items = await commissionService.previewSettlement(pid);
+    const prisma = require("../../config/prisma");
 
     const formatDate = (d) =>
-        d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+        new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 
-    // Enrich each item with session extras (upcoming, absent, students, batch_info)
     const results = [];
+
     for (const item of items) {
+        const isIndividual = item.assignment_type === "personal_tutor" || item.assignment_type === "individual_coaching";
+
         const cycleStart = item.last_settled_at
             ? new Date(item.last_settled_at)
             : new Date(item.assigned_from);
-        const cycleEnd = new Date();
 
+        // Cycle window: windowStart → windowStart + 1 month (same as buildSettlementItem)
+        const cycleWindowEnd = new Date(cycleStart);
+        cycleWindowEnd.setMonth(cycleWindowEnd.getMonth() + 1);
+
+        const sessionType = item.assignment_type === "personal_tutor"     ? "personal_tutor"
+                          : item.assignment_type === "individual_coaching" ? "individual_coaching"
+                          : null;
+
+        // ── For PT/IC: split into one card per activity_id ───────────────
+        // Sessions carry activity_id; the personal_tutors record holds teacher_for as a
+        // comma-separated string. We group by activity_id directly from the sessions table.
+        if (isIndividual && sessionType) {
+            // Fetch all sessions in this cycle window grouped by activity_id
+            const cycleSessions = await prisma.sessions.findMany({
+                where: {
+                    professional_id: pid,
+                    session_type:    sessionType,
+                    scheduled_date:  { gte: cycleStart, lte: cycleWindowEnd },
+                },
+                select: { activity_id: true, status: true, scheduled_date: true, student_id: true },
+            });
+
+            // Group by activity_id (null treated as its own group)
+            const activityGroups = {};
+            for (const s of cycleSessions) {
+                const key = s.activity_id ?? "null";
+                if (!activityGroups[key]) activityGroups[key] = [];
+                activityGroups[key].push(s);
+            }
+
+            // Fetch activity names for all activity_ids in one query
+            const activityIds = Object.keys(activityGroups)
+                .filter((k) => k !== "null")
+                .map(Number);
+            const activityRows = activityIds.length > 0
+                ? await prisma.activities.findMany({ where: { id: { in: activityIds } }, select: { id: true, name: true } })
+                : [];
+            const activityNameMap = Object.fromEntries(activityRows.map((a) => [a.id, a.name]));
+
+            // Fetch student info for display (PT or IC)
+            const now = new Date();
+            const studentIds = [...new Set(cycleSessions.map((s) => s.student_id).filter(Boolean))];
+
+            let studentInfoMap = {}; // student_id → { name, mobile, membership_end_date, effective_monthly }
+            if (item.assignment_type === "personal_tutor" && studentIds.length > 0) {
+                const ptRows = await prisma.personal_tutors.findMany({
+                    where: { student_id: { in: studentIds } },
+                    select: { student_id: true, membership_end_date: true, term_months: true,
+                              students: { select: { users: { select: { full_name: true, mobile: true } } } } },
+                });
+                const feeMap = new Map((item.student_fee_breakdown ?? []).map((s) => [s.student_id, s]));
+                for (const r of ptRows) {
+                    studentInfoMap[r.student_id] = {
+                        name:               r.students?.users?.full_name ?? "—",
+                        mobile:             r.students?.users?.mobile ?? null,
+                        membership_end_date: r.membership_end_date ?? null,
+                        effective_monthly:  feeMap.get(r.student_id)?.effective_monthly ?? null,
+                        term_months:        r.term_months ?? null,
+                    };
+                }
+            } else if (item.assignment_type === "individual_coaching" && studentIds.length > 0) {
+                const icRows = await prisma.individual_participants.findMany({
+                    where: { student_id: { in: studentIds } },
+                    select: { student_id: true, membership_end_date: true, term_months: true,
+                              students: { select: { users: { select: { full_name: true, mobile: true } } } } },
+                });
+                const feeMap = new Map((item.student_fee_breakdown ?? []).map((s) => [s.student_id, s]));
+                for (const r of icRows) {
+                    studentInfoMap[r.student_id] = {
+                        name:               r.students?.users?.full_name ?? "—",
+                        mobile:             r.students?.users?.mobile ?? null,
+                        membership_end_date: r.membership_end_date ?? null,
+                        effective_monthly:  feeMap.get(r.student_id)?.effective_monthly ?? null,
+                        term_months:        r.term_months ?? null,
+                    };
+                }
+            }
+
+            // Resolve membership_end_date for cycle display (first student)
+            const membershipEndDate = studentIds.length > 0
+                ? (studentInfoMap[studentIds[0]]?.membership_end_date ?? null)
+                : null;
+            const cycleEnd = membershipEndDate ? new Date(membershipEndDate) : cycleWindowEnd;
+
+            // Commission rules for per-session calculation
+            const commissionRate = item.commission_rate ?? 80;
+            const standardCap   = item.standard_sessions_cap ?? 18;
+
+            // Build one card per activity group
+            for (const [actKey, sessions] of Object.entries(activityGroups)) {
+                const activityId   = actKey === "null" ? null : Number(actKey);
+                const activityName = activityId ? (activityNameMap[activityId] ?? `Activity ${activityId}`) : "General";
+
+                const completed = sessions.filter((s) => s.status === "completed" && new Date(s.scheduled_date) <= now).length;
+                const absent    = sessions.filter((s) => s.status === "absent"    && new Date(s.scheduled_date) <= now).length;
+                const upcoming  = sessions.filter((s) => ["scheduled", "ongoing"].includes(s.status) && new Date(s.scheduled_date) >= now).length;
+                const totalInWindow = sessions.length;
+
+                // autoCap: actual session count in window, clamped to standardCap
+                const autoCap = Math.min(Math.max(totalInWindow, 1), standardCap);
+
+                // Per-activity fee base: divide the total fee base proportionally by activity count
+                const activityCount = Object.keys(activityGroups).length;
+                const effectiveFeeBase = parseFloat(((item.effective_fee_base ?? 0) / activityCount).toFixed(2));
+
+                const totalCommissionPool  = parseFloat(((effectiveFeeBase * commissionRate) / 100).toFixed(2));
+                const commissionPerSession = autoCap > 0 ? parseFloat((totalCommissionPool / autoCap).toFixed(2)) : 0;
+                const sessionsAttended     = Math.min(completed, standardCap);
+                const trainerEarns         = parseFloat((sessionsAttended * commissionPerSession).toFixed(2));
+
+                // Students involved in this activity's sessions
+                const actStudentIds = [...new Set(sessions.map((s) => s.student_id).filter(Boolean))];
+                const students = actStudentIds.map((sid) => {
+                    const info = studentInfoMap[sid] ?? {};
+                    return {
+                        student_id:         sid,
+                        name:               info.name ?? "—",
+                        mobile:             info.mobile ?? null,
+                        activity:           activityName,
+                        term_months:        info.term_months ?? null,
+                        effective_monthly:  info.effective_monthly ?? null,
+                        sessions_completed: sessions.filter((s) => s.student_id === sid && s.status === "completed" && new Date(s.scheduled_date) <= now).length,
+                        sessions_absent:    sessions.filter((s) => s.student_id === sid && s.status === "absent"    && new Date(s.scheduled_date) <= now).length,
+                        sessions_upcoming:  sessions.filter((s) => s.student_id === sid && ["scheduled","ongoing"].includes(s.status) && new Date(s.scheduled_date) >= now).length,
+                    };
+                });
+
+                results.push({
+                    assignment_id:   item.assignment_id,
+                    assignment_type: item.assignment_type,
+                    card_type:       item.assignment_type,
+                    activity_id:     activityId,
+                    professional_id:   pid,
+                    professional_name: item.professional_name,
+                    professional_type: item.professional_type,
+                    entity_name:       null,
+                    activity_name:     activityName,
+                    batch_info:        null,
+                    session_cycle:     `${formatDate(cycleStart)} – ${formatDate(cycleEnd)}`,
+                    last_settled_at:   item.last_settled_at ?? null,
+                    monthly_cap:       standardCap,
+                    effective_cap:     autoCap,
+                    sessions_completed:  sessionsAttended,
+                    sessions_completed_raw: completed,
+                    sessions_upcoming:  upcoming,
+                    sessions_absent:    absent,
+                    attendance_pct:     (completed + absent) > 0 ? Math.round((completed / (completed + absent)) * 100) : 0,
+                    student_count:      actStudentIds.length,
+                    effective_fee_base: effectiveFeeBase,
+                    commission_rate:    commissionRate,
+                    is_flat_rate:       false,
+                    flat_amount_per_session: null,
+                    commission_per_session:  commissionPerSession,
+                    trainer_earns:      trainerEarns,
+                    overdue_warning:    null,
+                    students,
+                });
+            }
+
+            continue; // skip the generic push below for this item
+        }
+
+        // ── Group coaching (society / school): one card as before ────────
         const wasClamped = item.sessions_attended_raw > item.sessions_attended;
 
         const assignment = {
@@ -707,80 +872,70 @@ exports.getSessionsAndSettlePreview = async (professionalId) => {
         };
         const extras = await adminRepo.getAssignmentSessionExtras(assignment);
 
-        // Resolve effective_monthly per student card
-        const isGroup = item.assignment_type === "group_coaching_society" ||
-                        item.assignment_type === "group_coaching_school";
+        const cycleEnd = extras.membership_end_date
+            ? new Date(extras.membership_end_date)
+            : new Date();
 
-        const enrichedStudents = await Promise.all(
-            (extras.students ?? []).map(async (s) => {
-                const em = s.user_id
-                    ? await commissionService.resolveEffectiveMonthly(
-                        s.user_id,
-                        s.service_type,
-                        s.activity ?? null,
-                        s.society_category ?? null,
-                        s.term_months ?? null,
-                        s.custom_category_name ?? null,
-                      )
-                    : null;
+        const feeMap    = new Map((item.student_fee_breakdown ?? []).map((s) => [s.student_id, s]));
+        const extrasMap = new Map((extras.students ?? []).map((s) => [s.student_id, s]));
+        const allStudentIds = new Set([...feeMap.keys(), ...extrasMap.keys()]);
+        const mergedStudents = [...allStudentIds].map((sid) => {
+            const fee    = feeMap.get(sid)    ?? {};
+            const counts = extrasMap.get(sid) ?? {};
+            return {
+                student_id:           sid,
+                name:                 fee.name              ?? counts.name              ?? "—",
+                mobile:               fee.mobile            ?? counts.mobile            ?? null,
+                activity:             fee.activity          ?? counts.activity          ?? null,
+                term_months:          fee.term_months       ?? counts.term_months       ?? null,
+                service_type:         counts.service_type   ?? null,
+                society_category:     counts.society_category     ?? null,
+                custom_category_name: counts.custom_category_name ?? null,
+                effective_monthly:    fee.effective_monthly ?? null,
+                sessions_completed:   counts.sessions_completed ?? 0,
+                sessions_absent:      counts.sessions_absent    ?? 0,
+                sessions_upcoming:    counts.sessions_upcoming  ?? 0,
+            };
+        });
 
-                return {
-                    student_id:        s.student_id,
-                    name:              s.name,
-                    mobile:            s.mobile,
-                    activity:          s.activity,
-                    term_months:       s.term_months,
-                    effective_monthly: em ?? null,
-                };
-            })
-        );
-
-        // For group coaching, also expose the total fee_base sum so admin
-        // can see: sum of all student effective_monthly = the fee pool used
-        const feeBaseSum = isGroup
-            ? parseFloat(
-                enrichedStudents
-                    .reduce((acc, s) => acc + (s.effective_monthly ?? 0), 0)
-                    .toFixed(2)
-              )
-            : null;
+        const cardType =
+            item.assignment_type === "group_coaching_society" ? "society"  :
+            item.assignment_type === "group_coaching_school"  ? "school"   :
+            "other";
 
         results.push({
-            assignment_id:            item.assignment_id,
-            assignment_type:          item.assignment_type,
-            professional_id:          item.professional_id,
-            professional_name:        item.professional_name,
-            professional_type:        item.professional_type,
-            entity_name:              extras.batch_info?.entity_name ?? item.entity_name,
-            activity_name:            extras.batch_info?.activity_name ?? item.activity_name,
-            batch_info:               extras.batch_info,
-            session_cycle:            `${formatDate(cycleStart)} – ${formatDate(cycleEnd)}`,
-            sessions_allocated:       item.sessions_allocated,
-            total_sessions_allocated: item.standard_sessions_cap,
-            sessions_completed:       item.sessions_attended,
-            sessions_completed_raw:   item.sessions_attended_raw,
-            session_cap:              item.standard_sessions_cap,
-            effective_sessions_cap:   item.effective_sessions_cap,
-            upcoming_sessions:        extras.upcoming_sessions ?? 0,
-            absent_sessions:          extras.absent_sessions ?? 0,
-            attendance_pct:           extras.attendance_pct ?? 0,
-            commission_rate:          item.commission_rate,
-            is_flat_rate:             item.is_flat_rate,
-            flat_amount_per_session:  item.flat_amount_per_session,
-            commission_per_session:   item.commission_per_session,
-            effective_fee_base:       item.effective_fee_base,
-            // For group: student-level fee breakdown that sums to effective_fee_base
-            students_fee_sum:         feeBaseSum,
-            trainer_earns:            item.commission_amount,
-            already_settled:          false,
-            last_settled_at:          item.last_settled_at ?? null,
-            overdue_warning:          wasClamped
+            assignment_id:   item.assignment_id,
+            assignment_type: item.assignment_type,
+            card_type:       cardType,
+            professional_id:   pid,
+            professional_name: item.professional_name,
+            professional_type: item.professional_type,
+            entity_name:   extras.batch_info?.entity_name   ?? item.entity_name   ?? null,
+            activity_name: extras.batch_info?.activity_name ?? item.activity_name ?? null,
+            batch_info:    extras.batch_info ?? null,
+            session_cycle:   `${formatDate(cycleStart)} – ${formatDate(cycleEnd)}`,
+            last_settled_at: item.last_settled_at ?? null,
+            monthly_cap:            item.standard_sessions_cap,
+            effective_cap:          item.effective_sessions_cap,
+            sessions_completed:     item.sessions_attended,
+            sessions_completed_raw: item.sessions_attended_raw,
+            sessions_upcoming:      extras.upcoming_sessions ?? 0,
+            sessions_absent:        extras.absent_sessions   ?? 0,
+            attendance_pct:         extras.attendance_pct    ?? 0,
+            student_count:      mergedStudents.length,
+            effective_fee_base: item.effective_fee_base,
+            commission_rate:         item.commission_rate,
+            is_flat_rate:            item.is_flat_rate,
+            flat_amount_per_session: item.flat_amount_per_session,
+            commission_per_session:  item.commission_per_session,
+            trainer_earns:           item.commission_amount,
+            overdue_warning: wasClamped
                 ? `${item.sessions_attended_raw} sessions completed but capped at ${item.sessions_attended} (monthly cap). Settle monthly to avoid missing sessions.`
                 : null,
-            // Each student card has: student_id, name, mobile, activity, term_months, effective_monthly
-            students:                 enrichedStudents,
+            students: mergedStudents,
         });
     }
+
     return results;
 };
 
@@ -1302,26 +1457,7 @@ exports.getStudentSubjects = async (studentId) => {
     const capRule = await prisma.commission_rules.findUnique({ where: { rule_key: "personal_tutor_sessions_cap" } });
     const session_cap_per_month = capRule ? parseInt(capRule.value) : 18;
 
-    // If "All Subjects" — expand to all activities with a personal_tutor fee for this standard
-    const hasAllSubjects = subjectNames.includes("All Subjects");
-    if (hasAllSubjects) {
-        const feeRows = await prisma.fee_structures.findMany({
-            where: {
-                coaching_type: "personal_tutor",
-                standard: { in: [standard, "ANY"].filter(Boolean) },
-            },
-            include: { activities: { select: { id: true, name: true } } },
-            distinct: ["activity_id"],
-        });
-        return {
-            student_id:           Number(studentId),
-            standard,
-            term_months:          tutor.term_months,
-            session_cap_per_month,
-            subjects: feeRows.map((f) => ({ activity_id: f.activity_id, activity_name: f.activities.name })),
-        };
-    }
-
+    // Return exactly what the student purchased — no expansion of "All Subjects" into individual subjects
     return {
         student_id:           Number(studentId),
         standard,
@@ -1762,7 +1898,11 @@ exports.getEnrichedSettlementPreview = async (professionalId) => {
         const extras = await adminRepo.getAssignmentSessionExtras(assignment);
 
         const cycleStart = item.last_settled_at ? new Date(item.last_settled_at) : new Date(item.assigned_from);
-        const cycleEnd   = new Date();
+        // For IC/PT: show membership end date as the cycle end (the full term window).
+        // For group assignments membership_end_date is not available — fall back to today.
+        const cycleEnd = extras.membership_end_date
+            ? new Date(extras.membership_end_date)
+            : new Date();
 
         const wasClamped = item.sessions_attended_raw > item.sessions_attended;
 
