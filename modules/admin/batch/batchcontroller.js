@@ -230,9 +230,20 @@ async function deleteBatchSession(req, res) {
 async function bulkDeleteBatchSessions(req, res) {
   try {
     const { batchId } = req.params;
-    const { from_date } = req.body;
+    const { from_date } = req.body ?? {};
     const result = await service.bulkDeleteBatchSessions(Number(batchId), from_date);
     return res.json({ success: true, data: result });
+  } catch (err) {
+    return handleError(res, err);
+  }
+}
+
+async function getUnassignedSchoolStudents(req, res) {
+  try {
+    const { school_id, batch_id } = req.query;
+    if (!school_id) return res.status(400).json({ success: false, message: "school_id is required" });
+    const data = await service.getUnassignedSchoolStudents(school_id, batch_id);
+    return res.json({ success: true, data });
   } catch (err) {
     return handleError(res, err);
   }
@@ -267,6 +278,7 @@ module.exports = {
   reassignBatchSession,
   reassignAllFutureBatchSessions,
   extendStudentTerm,
+  getUnassignedSchoolStudents,
   createBatchSession,
   getAvailableProfessionalsForBatch,
   deleteBatchSession,

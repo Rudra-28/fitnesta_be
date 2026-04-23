@@ -651,6 +651,38 @@ async function getUnassignedGroupStudents(societyId, activityId) {
   return rows;
 }
 
+/**
+ * Returns school_student records for a given school who are not yet assigned to the given batch.
+ * Admin uses this to manually add students to a school batch.
+ */
+async function getUnassignedSchoolStudents(schoolId, batchId) {
+  // All school_students for this school
+  const rows = await prisma.school_students.findMany({
+    where: {
+      school_id: Number(schoolId),
+    },
+    include: {
+      students: {
+        select: {
+          id:    true,
+          users: { select: { full_name: true, mobile: true } },
+        },
+      },
+    },
+  });
+
+  if (!batchId) return rows;
+
+  // Filter out students already in this batch
+  const batchStudents = await prisma.batch_students.findMany({
+    where: { batch_id: Number(batchId) },
+    select: { student_id: true },
+  });
+  const assignedIds = new Set(batchStudents.map(bs => bs.student_id));
+
+  return rows.filter(r => r.students?.id && !assignedIds.has(r.students.id));
+}
+
 // ── Batch Detail (admin card view) ───────────────────────────────────────────
 
 async function getBatchDetail(batchId) {
@@ -704,8 +736,27 @@ async function getBatchDetail(batchId) {
     ? await computeSettlementPreview(batch)
     : null;
 
+  // If there are no upcoming sessions, the stored cycle_end_date may be stale
+  // (e.g. all future sessions were deleted). Use the last completed/absent session
+  // date as the effective floor so "+ Add Session" doesn't block dates after the
+  // last real session.
+  let effectiveCycleEndDate = batch.cycle_end_date;
+  if (upcomingSessions.length === 0 && batch.cycle_end_date) {
+    const lastDone = await prisma.sessions.findFirst({
+      where: {
+        batch_id: batch.id,
+        status:   { in: ["completed", "absent"] },
+      },
+      orderBy: { scheduled_date: "desc" },
+      select:  { scheduled_date: true },
+    });
+    if (lastDone) {
+      effectiveCycleEndDate = lastDone.scheduled_date;
+    }
+  }
+
   return {
-    batch,
+    batch:             { ...batch, cycle_end_date: effectiveCycleEndDate },
     students:          batch.batch_students,
     past_sessions:     pastSessions,
     upcoming_sessions: upcomingSessions,
@@ -1267,7 +1318,9 @@ async function extendStudentTerm(batchId, studentId, extraMonths) {
  * Adds all current batch_students as session_participants automatically.
  */
 async function createBatchSession(batchId, { scheduled_date, start_time, end_time, professional_id }) {
-  const batch = await repo.getBatchById(Number(batchId));
+  const id = Number(batchId);
+  if (!batchId || isNaN(id)) throw Object.assign(new Error("batchId is required"), { code: "MISSING_FIELDS" });
+  const batch = await repo.getBatchById(id);
   if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
   if (!batch.is_active) throw Object.assign(new Error("Batch is inactive"), { code: "BATCH_INACTIVE" });
 
@@ -1406,6 +1459,7 @@ async function getAvailableProfessionalsForBatch(batchId, type) {
  * - Blocks deletion of completed sessions.
  */
 async function deleteBatchSession(batchId, sessionId) {
+  if (!batchId || isNaN(batchId)) throw Object.assign(new Error("batchId is required"), { code: "MISSING_FIELDS" });
   const session = await prisma.sessions.findUnique({ where: { id: sessionId } });
   if (!session || session.batch_id !== batchId) {
     throw Object.assign(new Error("Session not found in this batch"), { code: "BATCH_NOT_FOUND" });
@@ -1426,6 +1480,7 @@ async function deleteBatchSession(batchId, sessionId) {
  * Completed sessions are never deleted.
  */
 async function bulkDeleteBatchSessions(batchId, fromDate) {
+  if (!batchId || isNaN(batchId)) throw Object.assign(new Error("batchId is required"), { code: "MISSING_FIELDS" });
   const batch = await repo.getBatchById(batchId);
   if (!batch) throw Object.assign(new Error("Batch not found"), { code: "BATCH_NOT_FOUND" });
 
@@ -1465,4 +1520,5 @@ module.exports = {
   getAvailableProfessionalsForBatch,
   deleteBatchSession,
   bulkDeleteBatchSessions,
+  getUnassignedSchoolStudents,
 };

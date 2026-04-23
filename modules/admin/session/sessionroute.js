@@ -18,6 +18,7 @@ router.get("/:sessionId",           controller.getSession);                     
 router.patch("/:sessionId/reschedule", controller.rescheduleSession);                   // PATCH  /api/v1/admin/sessions/:sessionId/reschedule
 router.patch("/:sessionId/reassign", controller.reassignSingleSession);                 // PATCH  /api/v1/admin/sessions/:sessionId/reassign   — reassign single session to new professional
 router.put("/:sessionId/status",    controller.updateSessionStatus);                    // PUT    /api/v1/admin/sessions/:sessionId/status
+router.patch("/:sessionId/cancel",  controller.cancelSession);                          // PATCH  /api/v1/admin/sessions/:sessionId/cancel     — cancel with reason
 router.delete("/:sessionId",        controller.deleteSession);                          // DELETE /api/v1/admin/sessions/:sessionId          — hard delete (not cancel)
 router.get("/:sessionId/feedback",  controller.getSessionFeedback);                     // GET    /api/v1/admin/sessions/:sessionId/feedback
 

@@ -7,6 +7,7 @@ router.use(guard);
 
 router.get("/professionals", controller.getAvailableProfessionalsForBatch);                     // GET    /api/v1/admin/batches/professionals?type=trainer|teacher
 router.get("/unassigned-students", controller.getUnassignedGroupStudents);                   // GET    /api/v1/admin/batches/unassigned-students?society_id=&activity_id=
+router.get("/unassigned-school-students", controller.getUnassignedSchoolStudents);           // GET    /api/v1/admin/batches/unassigned-school-students?school_id=&batch_id=
 router.post("/", controller.createBatch);                                                    // POST   /api/v1/admin/batches
 router.get("/", controller.listBatches);                                                     // GET    /api/v1/admin/batches?batch_type=&society_id=&school_id=&activity_id=
 router.get("/:batchId/detail", controller.getBatchDetail);                                   // GET    /api/v1/admin/batches/:batchId/detail
