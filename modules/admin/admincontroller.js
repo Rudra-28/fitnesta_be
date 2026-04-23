@@ -75,8 +75,23 @@ exports.getProfessional = async (req, res) => {
 };
 
 exports.proxyDocument = async (req, res) => {
-    const { url } = req.query;
+    const { url, token } = req.query;
     if (!url) return res.status(400).json({ success: false, error: "url query param required" });
+
+    // Allow token via query param so the browser can open the URL directly in a
+    // new tab (window.open cannot set custom headers). Validate it here the same
+    // way the middleware does, but only when the Authorization header is absent.
+    if (token && !req.headers.authorization) {
+        const jwt = require("jsonwebtoken");
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+            if (decoded.role !== "admin") {
+                return res.status(403).json({ success: false, error: "Access denied." });
+            }
+        } catch {
+            return res.status(401).json({ success: false, error: "Invalid or expired token." });
+        }
+    }
 
     // Only allow proxying Cloudinary URLs to prevent SSRF abuse
     let parsed;
@@ -103,14 +118,23 @@ exports.proxyDocument = async (req, res) => {
         // Derive Content-Type from the file extension in the URL.
         // Do NOT trust Cloudinary's upstream Content-Type — for raw resources
         // it returns "image/gif" as a placeholder regardless of actual file type.
+        //
+        // Raw PDFs uploaded via our app have no extension in the URL (the upload
+        // code strips it), so we fall back based on the Cloudinary resource type
+        // segment in the path (/raw/upload/ → PDF, /image/upload/ → check ext).
         const MIME = {
             pdf:  "application/pdf",
             jpg:  "image/jpeg",
             jpeg: "image/jpeg",
             png:  "image/png",
         };
-        const ext = fetchUrl.split("?")[0].split(".").pop().toLowerCase();
-        const contentType = MIME[ext] || "application/octet-stream";
+        const urlPath = fetchUrl.split("?")[0];
+        const ext = urlPath.split(".").pop().toLowerCase();
+        let contentType = MIME[ext];
+        if (!contentType) {
+            // No recognised extension — infer from Cloudinary path segment
+            contentType = urlPath.includes("/raw/upload/") ? "application/pdf" : "application/octet-stream";
+        }
 
         log.info("[document-proxy] fetching", { url: fetchUrl, contentType });
         const upstream = await axios.get(fetchUrl, { responseType: "stream" });
@@ -1036,6 +1060,20 @@ exports.getProfessionalsForSession = async (req, res) => {
     }
 };
 
+exports.getProfessionalsAvailability = async (req, res) => {
+    try {
+        const { type, day_of_week, start_time, end_time } = req.query;
+        console.log('[availability] query:', { type, day_of_week, start_time, end_time });
+        if (!type) return res.status(400).json({ success: false, error: "type is required (teacher | trainer)" });
+        const data = await service.getProfessionalsAvailability(type, { dayOfWeek: day_of_week, startTime: start_time, endTime: end_time });
+        console.log('[availability] result count:', data.length, 'busy:', data.filter(d=>!d.is_available).map(d=>d.id));
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        const status = err.message === "INVALID_TYPE" ? 400 : 500;
+        res.status(status).json({ success: false, error: err.message });
+    }
+};
+
 exports.getStudentActivities = async (req, res) => {
     try {
         const { studentId } = req.params;
@@ -1563,5 +1601,52 @@ exports.settleVendorOrder = async (req, res) => {
     } catch (err) {
         const status = err.status || 500;
         res.status(status).json({ success: false, error: err.message });
+    }
+};
+
+// ── Bulk session deletion ─────────────────────────────────────────────────
+
+exports.deleteSessionsByStudent = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const { activity_id } = req.query;
+        const result = await service.deleteSessionsByStudent(studentId, activity_id);
+        auditLog(req, "bulk_delete_sessions", { entity_type: "student", entity_id: Number(studentId), details: result });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.deleteSessionsByBatch = async (req, res) => {
+    try {
+        const { batchId } = req.params;
+        const result = await service.deleteSessionsByBatch(batchId);
+        auditLog(req, "bulk_delete_sessions", { entity_type: "batch", entity_id: Number(batchId), details: result });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.deleteSessionsBySociety = async (req, res) => {
+    try {
+        const { societyId } = req.params;
+        const result = await service.deleteSessionsBySociety(societyId);
+        auditLog(req, "bulk_delete_sessions", { entity_type: "society", entity_id: Number(societyId), details: result });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
+    }
+};
+
+exports.deleteSessionsBySchool = async (req, res) => {
+    try {
+        const { schoolId } = req.params;
+        const result = await service.deleteSessionsBySchool(schoolId);
+        auditLog(req, "bulk_delete_sessions", { entity_type: "school", entity_id: Number(schoolId), details: result });
+        res.json({ success: true, ...result });
+    } catch (err) {
+        res.status(err.status || 500).json({ success: false, error: err.message });
     }
 };

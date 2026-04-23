@@ -21,6 +21,9 @@ const handleUpload = (req, res, next) => {
     });
 };
 
+// ── Document proxy — auth handled inside controller (supports ?token= for direct browser tab opens) ──
+router.get("/document-proxy", controller.proxyDocument);
+
 router.use(guard); // every route below requires a valid admin JWT
 
 // ── Audit logs ────────────────────────────────────────────────────────────
@@ -138,10 +141,9 @@ router.get("/sessions/student-info", controller.getSessionStudentInfo);
 // ── Professionals for session creation (with busy/available flag) ─────────
 // GET /api/v1/admin/professionals/for-session?type=teacher|trainer&date=&start_time=&end_time=&subject=&activity=
 router.get("/professionals/for-session", controller.getProfessionalsForSession);
+// GET /api/v1/admin/professionals/availability?type=trainer|teacher&day_of_week=monday&start_time=&end_time=
+router.get("/professionals/availability", controller.getProfessionalsAvailability);
 
-// ── Document proxy (streams Cloudinary files through the backend so the JWT is validated first) ──
-// NOTE: must be declared before any /:param wildcards to avoid being shadowed
-router.get("/document-proxy", controller.proxyDocument);  // GET /api/v1/admin/document-proxy?url=https://res.cloudinary.com/...
 
 // ── Single professional profile (with documents) ──────────────────────────
 // NOTE: must be declared after all /professionals/<literal> routes to avoid shadowing them
@@ -259,5 +261,15 @@ router.get("/users/:userId",                superAdminGuard, controller.getUser)
 router.patch("/users/:userId",              superAdminGuard, controller.editUser);
 router.patch("/users/:userId/suspend",      superAdminGuard, controller.suspendUser);
 router.patch("/users/:userId/unsuspend",    superAdminGuard, controller.unsuspendUser);
+
+// ── Bulk session deletion ─────────────────────────────────────────────────
+// DELETE /api/v1/admin/students/:studentId/sessions?activity_id=
+// DELETE /api/v1/admin/batches/:batchId/sessions
+// DELETE /api/v1/admin/societies/:societyId/sessions
+// DELETE /api/v1/admin/schools/:schoolId/sessions
+router.delete("/students/:studentId/sessions",  controller.deleteSessionsByStudent);
+router.delete("/batches/:batchId/sessions",      controller.deleteSessionsByBatch);
+router.delete("/societies/:societyId/sessions",  controller.deleteSessionsBySociety);
+router.delete("/schools/:schoolId/sessions",     controller.deleteSessionsBySchool);
 
 module.exports = router;

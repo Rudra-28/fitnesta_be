@@ -201,14 +201,16 @@ exports.createCyclesForPT = async (personalTutorId, membershipStart, termMonths,
 
             await prisma.pt_cycle_settlements.upsert({
                 where: {
-                    personal_tutor_id_activity_id_cycle_start: {
+                    personal_tutor_id_professional_id_activity_id_cycle_start: {
                         personal_tutor_id: personalTutorId,
+                        professional_id:   professionalId,
                         activity_id:       activity.id,
                         cycle_start:       cycleStart,
                     },
                 },
                 create: {
                     personal_tutor_id:  personalTutorId,
+                    professional_id:    professionalId,
                     activity_id:        activity.id,
                     cycle_start:        cycleStart,
                     cycle_end:          cycleEnd,
@@ -244,33 +246,39 @@ exports.createCyclesForPT = async (personalTutorId, membershipStart, termMonths,
  * @param {number} professionalId  – teacher professionals.id
  */
 exports.syncPendingCycles = async (professionalId) => {
-    // Find all PT records for this teacher
-    const ptRecords = await prisma.personal_tutors.findMany({
-        where:  { teacher_professional_id: professionalId },
-        select: { id: true, student_id: true, term_months: true, students: { select: { user_id: true } } },
-    });
-    if (ptRecords.length === 0) return;
-
-    const ptIds = ptRecords.map((p) => p.id);
-    const ptMap = Object.fromEntries(ptRecords.map((p) => [p.id, p]));
-
-    // Load all pending cycles for these PT records
+    // Query pending cycles directly by professional_id — this works correctly even after
+    // reassignment because the cycle row owns its professional_id independently of who
+    // personal_tutors.teacher_professional_id currently points to.
     const pendingCycles = await prisma.pt_cycle_settlements.findMany({
-        where:  { personal_tutor_id: { in: ptIds }, status: "pending" },
+        where:  { professional_id: professionalId, status: "pending" },
         select: {
             id: true, personal_tutor_id: true, activity_id: true,
             cycle_start: true, cycle_end: true, base_amount: true, commission_rate: true,
+            personal_tutors: { select: { student_id: true } },
         },
     });
+    if (pendingCycles.length === 0) return;
 
     const commissionRate = await resolveCommissionRate();
 
     for (const cycle of pendingCycles) {
-        const pt        = ptMap[cycle.personal_tutor_id];
-        const studentId = pt?.student_id;
+        const studentId = cycle.personal_tutors?.student_id;
         if (!studentId) continue;
 
-        const [completed, absent, upcoming] = await Promise.all([
+        // sessions_allocated = ALL sessions for this student in the cycle window,
+        // regardless of which teacher conducted them. This is the shared denominator
+        // that all teachers in this cycle use — so when a teacher is reassigned mid-cycle,
+        // both old and new teacher divide by the same number.
+        const [allocated, completedByMe, absentByMe, upcomingByMe] = await Promise.all([
+            prisma.sessions.count({
+                where: {
+                    student_id:     studentId,
+                    activity_id:    cycle.activity_id,
+                    session_type:   "personal_tutor",
+                    status:         { notIn: ["cancelled"] },
+                    scheduled_date: { gte: cycle.cycle_start, lte: cycle.cycle_end },
+                },
+            }),
             prisma.sessions.count({
                 where: {
                     student_id:      studentId,
@@ -303,20 +311,19 @@ exports.syncPendingCycles = async (professionalId) => {
             }),
         ]);
 
-        const allocated     = completed + absent + upcoming;
         const baseAmt       = parseFloat(cycle.base_amount);
         const rate          = parseFloat(cycle.commission_rate) || commissionRate;
-        const commissionAmt = baseAmt > 0
-            ? parseFloat(((baseAmt * rate / 100) / Math.max(allocated, 1) * completed).toFixed(2))
+        const commissionAmt = baseAmt > 0 && allocated > 0
+            ? parseFloat(((baseAmt * rate / 100) / allocated * completedByMe).toFixed(2))
             : 0;
 
         await prisma.pt_cycle_settlements.update({
             where: { id: cycle.id },
             data: {
                 sessions_allocated: allocated,
-                sessions_attended:  completed,
-                sessions_absent:    absent,
-                sessions_upcoming:  upcoming,
+                sessions_attended:  completedByMe,
+                sessions_absent:    absentByMe,
+                sessions_upcoming:  upcomingByMe,
                 commission_rate:    rate,
                 commission_amount:  commissionAmt,
             },
@@ -337,98 +344,97 @@ exports.getPTSettlement = async (professionalId) => {
     // Step 1: live-sync
     await exports.syncPendingCycles(professionalId);
 
-    // Step 2: load PT records with cycles and activity info
-    const ptRecords = await prisma.personal_tutors.findMany({
-        where: { teacher_professional_id: professionalId },
+    // Step 2: load cycles directly by professional_id so Teacher A still sees their
+    // settled cycles even after personal_tutors.teacher_professional_id moved to Teacher B.
+    const cycles = await prisma.pt_cycle_settlements.findMany({
+        where:   { professional_id: professionalId },
+        orderBy: { cycle_start: "asc" },
         select: {
-            id:          true,
-            student_id:  true,
-            teacher_for: true,
-            term_months: true,
-            membership_start_date: true,
-            membership_end_date:   true,
-            students: {
+            id:                 true,
+            personal_tutor_id:  true,
+            activity_id:        true,
+            cycle_start:        true,
+            cycle_end:          true,
+            sessions_allocated: true,
+            sessions_attended:  true,
+            sessions_absent:    true,
+            sessions_upcoming:  true,
+            base_amount:        true,
+            commission_rate:    true,
+            commission_amount:  true,
+            status:             true,
+            settled_at:         true,
+            paid_at:            true,
+            activities:         { select: { id: true, name: true } },
+            personal_tutors: {
                 select: {
-                    id: true,
-                    users: { select: { full_name: true, mobile: true, email: true, photo: true } },
-                },
-            },
-            pt_cycle_settlements: {
-                orderBy: { cycle_start: "asc" },
-                select: {
-                    id:                 true,
-                    activity_id:        true,
-                    cycle_start:        true,
-                    cycle_end:          true,
-                    sessions_allocated: true,
-                    sessions_attended:  true,
-                    sessions_absent:    true,
-                    sessions_upcoming:  true,
-                    base_amount:        true,
-                    commission_rate:    true,
-                    commission_amount:  true,
-                    status:             true,
-                    settled_at:         true,
-                    paid_at:            true,
-                    activities: { select: { id: true, name: true } },
+                    id:                    true,
+                    student_id:            true,
+                    term_months:           true,
+                    membership_start_date: true,
+                    membership_end_date:   true,
+                    students: {
+                        select: {
+                            id:    true,
+                            users: { select: { full_name: true, mobile: true, email: true, photo: true } },
+                        },
+                    },
                 },
             },
         },
     });
 
     // Step 3: group by student → activity → cycles
-    // One PT record = one student, but a student can have multiple activity rows in pt_cycle_settlements
     const studentMap = {};
 
-    for (const pt of ptRecords) {
-        const sid = pt.student_id;
+    for (const cycle of cycles) {
+        const pt  = cycle.personal_tutors;
+        const sid = pt?.student_id;
+        if (!sid) continue;
+
         if (!studentMap[sid]) {
             studentMap[sid] = {
-                student_id:    sid,
-                name:          pt.students?.users?.full_name ?? "—",
-                mobile:        pt.students?.users?.mobile ?? null,
-                email:         pt.students?.users?.email ?? null,
-                photo:         pt.students?.users?.photo ?? null,
-                activities:    {},
+                student_id: sid,
+                name:       pt.students?.users?.full_name ?? "—",
+                mobile:     pt.students?.users?.mobile    ?? null,
+                email:      pt.students?.users?.email     ?? null,
+                photo:      pt.students?.users?.photo     ?? null,
+                activities: {},
             };
         }
 
-        // Group cycles by activity
-        for (const cycle of pt.pt_cycle_settlements) {
-            const actId   = cycle.activity_id;
-            const actName = cycle.activities?.name ?? "Unknown";
+        const actId   = cycle.activity_id;
+        const actName = cycle.activities?.name ?? "Unknown";
 
-            if (!studentMap[sid].activities[actId]) {
-                studentMap[sid].activities[actId] = {
-                    activity_id:       actId,
-                    activity_name:     actName,
-                    personal_tutor_id: pt.id,
-                    term_months:       pt.term_months,
-                    membership_start:  pt.membership_start_date,
-                    membership_end:    pt.membership_end_date,
-                    cycles:            [],
-                };
-            }
-
-            studentMap[sid].activities[actId].cycles.push({
-                cycle_id:           cycle.id,
-                cycle_start:        cycle.cycle_start,
-                cycle_end:          cycle.cycle_end,
-                sessions_allocated: cycle.sessions_allocated,
-                sessions_attended:  cycle.sessions_attended,
-                sessions_absent:    cycle.sessions_absent,
-                sessions_upcoming:  cycle.sessions_upcoming,
-                base_amount:        parseFloat(cycle.base_amount),
-                commission_rate:    parseFloat(cycle.commission_rate),
-                commission_amount:  parseFloat(cycle.commission_amount),
-                status:             cycle.status,
-                settled_at:         cycle.settled_at,
-                paid_at:            cycle.paid_at,
-            });
+        if (!studentMap[sid].activities[actId]) {
+            studentMap[sid].activities[actId] = {
+                activity_id:       actId,
+                activity_name:     actName,
+                personal_tutor_id: pt.id,
+                term_months:       pt.term_months,
+                membership_start:  pt.membership_start_date,
+                membership_end:    pt.membership_end_date,
+                cycles:            [],
+            };
         }
+
+        studentMap[sid].activities[actId].cycles.push({
+            cycle_id:           cycle.id,
+            cycle_start:        cycle.cycle_start,
+            cycle_end:          cycle.cycle_end,
+            sessions_allocated: cycle.sessions_allocated,
+            sessions_attended:  cycle.sessions_attended,
+            sessions_absent:    cycle.sessions_absent,
+            sessions_upcoming:  cycle.sessions_upcoming,
+            base_amount:        parseFloat(cycle.base_amount),
+            commission_rate:    parseFloat(cycle.commission_rate),
+            commission_amount:  parseFloat(cycle.commission_amount),
+            status:             cycle.status,
+            settled_at:         cycle.settled_at,
+            paid_at:            cycle.paid_at,
+        });
     }
 
-    // Flatten activities map → array
     const students = Object.values(studentMap).map((s) => ({
         ...s,
         activities: Object.values(s.activities),
@@ -437,6 +443,98 @@ exports.getPTSettlement = async (professionalId) => {
     return { success: true, professional_id: professionalId, students };
 };
 
+/**
+ * Called when a teacher is reassigned mid-cycle (reassignAllFutureSessions).
+ *
+ * Finds the cycle row that covers the reassignment date for the OLD teacher and
+ * creates a new cycle row for the NEW teacher covering reassignDate → same cycle_end.
+ * Both rows share the same sessions_allocated (the student's full cycle denominator).
+ *
+ * @param {number} personalTutorId    – personal_tutors.id
+ * @param {number} newProfessionalId  – new teacher's professionals.id
+ * @param {Date}   reassignDate       – date from which new teacher takes over
+ */
+exports.splitCycleOnReassignment = async (personalTutorId, newProfessionalId, reassignDate) => {
+    const pt = await prisma.personal_tutors.findUnique({
+        where:  { id: personalTutorId },
+        select: {
+            student_id:  true,
+            teacher_for: true,
+            term_months: true,
+            students:    { select: { user_id: true } },
+        },
+    });
+    if (!pt) return;
+
+    const reassign = new Date(reassignDate);
+    reassign.setHours(0, 0, 0, 0);
+
+    const subjectNames = (pt.teacher_for || "").split(",").map((s) => s.trim()).filter(Boolean);
+    const activities   = subjectNames.length > 0
+        ? await prisma.activities.findMany({ where: { name: { in: subjectNames } }, select: { id: true } })
+        : [];
+
+    const commissionRate = await resolveCommissionRate();
+
+    for (const activity of activities) {
+        // Find the existing cycle row that covers the reassignment date
+        const existingCycle = await prisma.pt_cycle_settlements.findFirst({
+            where: {
+                personal_tutor_id: personalTutorId,
+                activity_id:       activity.id,
+                cycle_start:       { lte: reassign },
+                cycle_end:         { gte: reassign },
+                status:            "pending",
+            },
+        });
+        if (!existingCycle) continue;
+
+        const em = parseFloat(existingCycle.base_amount);
+
+        // The new teacher's partial cycle runs from reassignDate → same cycle_end
+        const partialStart = reassign;
+        const partialEnd   = existingCycle.cycle_end;
+
+        // sessions_allocated = ALL student sessions in the FULL original cycle window
+        // (same denominator the old teacher uses — shared across both teachers)
+        const allocated = existingCycle.sessions_allocated;
+
+        await prisma.pt_cycle_settlements.upsert({
+            where: {
+                personal_tutor_id_professional_id_activity_id_cycle_start: {
+                    personal_tutor_id: personalTutorId,
+                    professional_id:   newProfessionalId,
+                    activity_id:       activity.id,
+                    cycle_start:       partialStart,
+                },
+            },
+            create: {
+                personal_tutor_id:  personalTutorId,
+                professional_id:    newProfessionalId,
+                activity_id:        activity.id,
+                cycle_start:        partialStart,
+                cycle_end:          partialEnd,
+                sessions_allocated: allocated,
+                sessions_attended:  0,
+                sessions_absent:    0,
+                sessions_upcoming:  0,
+                base_amount:        em,
+                commission_rate:    commissionRate,
+                commission_amount:  0,
+                status:             "pending",
+            },
+            update: {
+                cycle_end:          partialEnd,
+                sessions_allocated: allocated,
+                base_amount:        em,
+                commission_rate:    commissionRate,
+            },
+        });
+    }
+
+    // Sync the new teacher's cycles so session counts are live immediately
+    await exports.syncPendingCycles(newProfessionalId);
+};
 /**
  * Settle a single cycle by its ID.
  * - Marks status = 'settled', sets settled_at.
@@ -450,22 +548,20 @@ exports.settleCycle = async (cycleId, professionalId) => {
     const cycle = await prisma.pt_cycle_settlements.findUnique({
         where:  { id: cycleId },
         select: {
-            id:               true,
+            id:                true,
             personal_tutor_id: true,
-            activity_id:      true,
-            status:           true,
+            professional_id:   true,
+            activity_id:       true,
+            status:            true,
             sessions_attended: true,
-            base_amount:      true,
-            commission_rate:  true,
+            base_amount:       true,
+            commission_rate:   true,
             commission_amount: true,
-            personal_tutors: {
-                select: { teacher_professional_id: true },
-            },
         },
     });
 
     if (!cycle) throw Object.assign(new Error("Cycle not found"), { statusCode: 404 });
-    if (cycle.personal_tutors?.teacher_professional_id !== professionalId) {
+    if (cycle.professional_id !== professionalId) {
         throw Object.assign(new Error("This cycle does not belong to this teacher"), { statusCode: 403 });
     }
     if (cycle.status !== "pending") {

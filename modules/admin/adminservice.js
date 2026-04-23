@@ -237,7 +237,21 @@ exports.getProfessional = async (professionalId) => {
     const r = await adminRepo.getProfessionalById(professionalId);
     if (!r) throw Object.assign(new Error("PROFESSIONAL_NOT_FOUND"), { status: 404 });
 
-    const typeDetails = r.trainers?.[0] ?? r.teachers?.[0] ?? r.marketing_executives?.[0] ?? r.vendors?.[0] ?? null;
+    const rawDetails = r.trainers?.[0] ?? r.teachers?.[0] ?? r.marketing_executives?.[0] ?? r.vendors?.[0] ?? null;
+    const typeDetails = rawDetails ? { ...rawDetails } : null;
+
+    // Resolve specified_game IDs → activity names for trainers
+    if (typeDetails?.specified_game && Array.isArray(typeDetails.specified_game)) {
+        const ids = typeDetails.specified_game.filter((v) => typeof v === "number");
+        if (ids.length > 0) {
+            const activities = await prisma.activities.findMany({
+                where: { id: { in: ids } },
+                select: { id: true, name: true },
+            });
+            const activityMap = Object.fromEntries(activities.map((a) => [a.id, a.name]));
+            typeDetails.specified_game = typeDetails.specified_game.map((id) => activityMap[id] ?? String(id));
+        }
+    }
 
     // Build a structured documents map: { label, url } — only include uploaded ones
     const docs = [];
@@ -273,22 +287,45 @@ exports.getProfessional = async (professionalId) => {
 
 exports.listProfessionals = async (type) => {
     const rows = await adminRepo.getApprovedProfessionals(type);
-    return rows.map((r) => ({
-        professional_id: r.id,
-        profession_type: r.profession_type,
-        referral_code: r.referral_code,
-        place: r.place,
-        date: r.date,
-        own_two_wheeler: r.own_two_wheeler,
-        communication_languages: r.communication_languages,
-        pan_card: r.pan_card,
-        adhar_card: r.adhar_card,
-        relative_name: r.relative_name,
-        relative_contact: r.relative_contact,
-        wallet_balance: r.wallets?.balance ?? 0,
-        user: r.users,
-        details: r.trainers?.[0] ?? r.teachers?.[0] ?? r.marketing_executives?.[0] ?? r.vendors?.[0] ?? null,
-    }));
+
+    // Collect all unique game IDs across all trainers in one query
+    const allGameIds = new Set();
+    for (const r of rows) {
+        const games = r.trainers?.[0]?.specified_game;
+        if (Array.isArray(games)) games.forEach((id) => typeof id === "number" && allGameIds.add(id));
+    }
+    let activityMap = {};
+    if (allGameIds.size > 0) {
+        const activities = await prisma.activities.findMany({
+            where: { id: { in: [...allGameIds] } },
+            select: { id: true, name: true },
+        });
+        activityMap = Object.fromEntries(activities.map((a) => [a.id, a.name]));
+    }
+
+    return rows.map((r) => {
+        const rawDetails = r.trainers?.[0] ?? r.teachers?.[0] ?? r.marketing_executives?.[0] ?? r.vendors?.[0] ?? null;
+        const details = rawDetails ? { ...rawDetails } : null;
+        if (details?.specified_game && Array.isArray(details.specified_game)) {
+            details.specified_game = details.specified_game.map((id) => activityMap[id] ?? String(id));
+        }
+        return {
+            professional_id: r.id,
+            profession_type: r.profession_type,
+            referral_code: r.referral_code,
+            place: r.place,
+            date: r.date,
+            own_two_wheeler: r.own_two_wheeler,
+            communication_languages: r.communication_languages,
+            pan_card: r.pan_card,
+            adhar_card: r.adhar_card,
+            relative_name: r.relative_name,
+            relative_contact: r.relative_contact,
+            wallet_balance: r.wallets?.balance ?? 0,
+            user: r.users,
+            details,
+        };
+    });
 };
 
 exports.listPending = async (serviceType) => {
@@ -1465,6 +1502,11 @@ exports.getProfessionalsForSession = async (type, filters) => {
     return await adminRepo.getProfessionalsForSession(type, filters);
 };
 
+exports.getProfessionalsAvailability = async (type, filters) => {
+    if (type !== "teacher" && type !== "trainer") throw new Error("INVALID_TYPE");
+    return await adminRepo.getProfessionalsAvailability(type, filters);
+};
+
 // ── Personal tutor session creation helpers ───────────────────────────────
 
 // Returns the subjects a personal_tutor student is enrolled in, as a clean list
@@ -2264,4 +2306,26 @@ exports.updateStudentDetail = async (studentId, body) => {
 
     await Promise.all(updates);
     return adminRepo.getStudentDetail(studentId);
+};
+
+// ── Bulk session deletion ─────────────────────────────────────────────────
+
+exports.deleteSessionsByStudent = async (studentId, activityId) => {
+    const deleted = await adminRepo.deleteSessionsByStudent(studentId, activityId);
+    return { deleted };
+};
+
+exports.deleteSessionsByBatch = async (batchId) => {
+    const deleted = await adminRepo.deleteSessionsByBatch(batchId);
+    return { deleted };
+};
+
+exports.deleteSessionsBySociety = async (societyId) => {
+    const deleted = await adminRepo.deleteSessionsBySociety(societyId);
+    return { deleted };
+};
+
+exports.deleteSessionsBySchool = async (schoolId) => {
+    const deleted = await adminRepo.deleteSessionsBySchool(schoolId);
+    return { deleted };
 };

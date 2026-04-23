@@ -1550,28 +1550,59 @@ exports.getIndividualParticipantForSession = async (id) => {
 
 // Professionals for session creation with busy/available at the given slot
 exports.getProfessionalsForSession = async (professionType, { date, startTime, endTime, subject, activityId } = {}) => {
+    // Prisma returns TIME columns as Date objects anchored to 1970-01-01 UTC
+    // (e.g. 08:54 stored in DB → "1970-01-01T08:54:00.000Z").
+    // So we must also build our comparison times in UTC to match.
     const parseTime = (t) => {
         if (!t) return undefined;
         const [h, m, s = "0"] = String(t).split(":");
-        return new Date(1970, 0, 1, Number(h), Number(m), Number(s));
+        return new Date(Date.UTC(1970, 0, 1, Number(h), Number(m), Number(s)));
+    };
+    // Parse date as local midnight to avoid UTC offset shifting the day
+    const parseLocalDate = (d) => {
+        if (!d) return undefined;
+        const [y, mo, day] = String(d).split("-").map(Number);
+        return new Date(y, mo - 1, day);
     };
     const st = parseTime(startTime);
     const et = parseTime(endTime);
 
-    let busyIds = new Set();
+    // conflictMap: professional_id → first conflicting session info
+    let conflictMap = {};
     if (date && st && et) {
+        // Use a gte/lt range for the date so timezone conversion never shifts the day:
+        // e.g. 2026-04-24 local → gte 2026-04-24T00:00 local, lt 2026-04-25T00:00 local
+        const dayStart = parseLocalDate(date);
+        const dayEnd   = new Date(dayStart.getFullYear(), dayStart.getMonth(), dayStart.getDate() + 1);
         const conflicts = await prisma.sessions.findMany({
             where: {
-                scheduled_date: new Date(date),
+                scheduled_date: { gte: dayStart, lt: dayEnd },
                 status: { notIn: ["cancelled"] },
                 AND: [{ start_time: { lt: et } }, { end_time: { gt: st } }],
                 professionals: { profession_type: professionType },
             },
-            select: { professional_id: true },
-            distinct: ["professional_id"],
+            select: {
+                professional_id: true,
+                start_time: true,
+                end_time: true,
+                session_type: true,
+                students: { select: { users: { select: { full_name: true } } } },
+                batches: { select: { batch_name: true } },
+            },
         });
-        busyIds = new Set(conflicts.map((r) => r.professional_id));
+        for (const c of conflicts) {
+            if (conflictMap[c.professional_id]) continue; // keep first conflict only
+            const studentName = c.students?.users?.full_name ?? null;
+            const batchName = c.batches?.batch_name ?? null;
+            conflictMap[c.professional_id] = {
+                session_type: c.session_type,
+                assigned_to: studentName ?? batchName ?? "another session",
+                start_time: c.start_time,
+                end_time: c.end_time,
+            };
+        }
     }
+    const busyIds = new Set(Object.keys(conflictMap).map(Number));
 
     const baseWhere = { profession_type: professionType, users: { approval_status: "approved" } };
 
@@ -1614,7 +1645,107 @@ exports.getProfessionalsForSession = async (professionType, { date, startTime, e
         });
     }
 
-    return rows.map((r) => ({ ...r, is_available: !busyIds.has(r.id) }));
+    return rows.map((r) => ({
+        ...r,
+        is_available: !busyIds.has(r.id),
+        conflict: conflictMap[r.id] ?? null,
+    }));
+};
+
+// ── Professional availability against a recurring day+time slot ────────────
+// Used when assigning a trainer/teacher to a batch (recurring schedule).
+// Checks all future scheduled sessions on the given day_of_week that overlap
+// the requested time window.
+exports.getProfessionalsAvailability = async (professionType, { dayOfWeek, startTime, endTime } = {}) => {
+    // Prisma returns TIME columns as 1970-01-01T HH:MM:SS UTC — match that format
+    // Frontend sends HH:MM in local IST. DB stores TIME as UTC.
+    // Convert by subtracting the server's local UTC offset so the millisecond values match.
+    const TZ_OFFSET_MS = new Date().getTimezoneOffset() * 60 * 1000; // e.g. -330*60*1000 for IST
+    const parseTime = (t) => {
+        if (!t) return undefined;
+        const [h, m, s = "0"] = String(t).split(":");
+        const localMs = Date.UTC(1970, 0, 1, Number(h), Number(m), Number(s));
+        return new Date(localMs + TZ_OFFSET_MS); // shift to UTC equivalent
+    };
+    const st = parseTime(startTime);
+    const et = parseTime(endTime);
+
+    // Day-of-week index: Sunday=0 … Saturday=6
+    const DOW = { sunday:0, monday:1, tuesday:2, wednesday:3, thursday:4, friday:5, saturday:6 };
+    const dowIndex = DOW[String(dayOfWeek).toLowerCase().trim()];
+    console.log('[availability repo] dayOfWeek:', dayOfWeek, '→ dowIndex:', dowIndex, 'startTime:', startTime, 'endTime:', endTime, 'st:', st, 'et:', et);
+
+    let conflictMap = {};
+    if (dowIndex !== undefined && st && et) {
+        // Fetch all future non-cancelled sessions for this profession type.
+        // We do NOT filter by time in Prisma because TIME(0) columns returned as
+        // 1970-01-01T HH:MM:SS UTC objects don't compare reliably via Prisma queries.
+        // Time overlap and day-of-week checks are done in JS below.
+        const todayUTC = new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()));
+        const conflicts = await prisma.sessions.findMany({
+            where: {
+                status: { notIn: ["cancelled"] },
+                scheduled_date: { gte: todayUTC },
+                professionals: { profession_type: professionType },
+            },
+            select: {
+                professional_id: true,
+                scheduled_date: true,
+                start_time: true,
+                end_time: true,
+                session_type: true,
+                students: { select: { users: { select: { full_name: true } } } },
+                batches: { select: { batch_name: true } },
+            },
+        });
+        console.log('[availability repo] raw sessions found:', conflicts.length);
+        for (const c of conflicts) {
+            // Use toISOString() — String(Date) gives locale string which can't be split on '-'
+            const iso = c.scheduled_date instanceof Date ? c.scheduled_date.toISOString() : String(c.scheduled_date);
+            const [y, mo, day] = iso.slice(0, 10).split('-').map(Number);
+            const localDate = new Date(y, mo - 1, day);
+            if (localDate.getDay() !== dowIndex) continue;
+
+            // Time overlap check in JS — Prisma returns TIME(0) as 1970-01-01T HH:MM:SS.000Z
+            const cSt = c.start_time instanceof Date ? c.start_time.getTime() : new Date(c.start_time).getTime();
+            const cEt = c.end_time   instanceof Date ? c.end_time.getTime()   : new Date(c.end_time).getTime();
+            const overlaps = cSt < et.getTime() && cEt > st.getTime();
+            console.log('[availability repo] prof_id:', c.professional_id, 'date:', String(c.scheduled_date).slice(0,10), 'day:', localDate.getDay(), '/', dowIndex, 'cSt:', cSt, 'cEt:', cEt, 'st:', st.getTime(), 'et:', et.getTime(), 'overlaps:', overlaps);
+            if (!overlaps) continue;
+            if (conflictMap[c.professional_id]) continue;
+            const fmtTime = (t) => {
+                const iso = t instanceof Date ? t.toISOString() : String(t);
+                return iso.slice(11, 16); // "HH:MM"
+            };
+            conflictMap[c.professional_id] = {
+                session_type: c.session_type,
+                assigned_to: c.students?.users?.full_name ?? c.batches?.batch_name ?? "another session",
+                start_time: fmtTime(c.start_time),
+                end_time: fmtTime(c.end_time),
+            };
+        }
+    }
+    const busyIds = new Set(Object.keys(conflictMap).map(Number));
+
+    const baseWhere = { profession_type: professionType, users: { approval_status: "approved" } };
+    const rows = await prisma.professionals.findMany({
+        where: professionType === "teacher"
+            ? { ...baseWhere, teachers: { some: {} } }
+            : { ...baseWhere, trainers: { some: {} } },
+        select: {
+            id: true, place: true,
+            users: { select: { full_name: true, mobile: true } },
+            ...(professionType === "teacher"
+                ? { teachers: { select: { subject: true } } }
+                : { trainers: { select: { category: true, specified_game: true } } }),
+        },
+    });
+
+    return rows.map((r) => ({
+        ...r,
+        is_available: !busyIds.has(r.id),
+        conflict: conflictMap[r.id] ?? null,
+    }));
 };
 
 // ── Batches per society or school ──────────────────────────────────────────
@@ -1699,6 +1830,48 @@ exports.getAuditLogs = async ({ adminUserId, action, from, to, limit, offset }) 
     ]);
 
     return { total, rows };
+};
+
+// ── Bulk session deletion ─────────────────────────────────────────────────
+
+exports.deleteSessionsByStudent = async (studentId, activityId) => {
+    const where = {
+        student_id: Number(studentId),
+        status: { notIn: ["completed", "absent"] },
+    };
+    if (activityId) where.activity_id = Number(activityId);
+    const { count } = await prisma.sessions.deleteMany({ where });
+    return count;
+};
+
+exports.deleteSessionsByBatch = async (batchId) => {
+    const { count } = await prisma.sessions.deleteMany({
+        where: {
+            batch_id: Number(batchId),
+            status: { notIn: ["completed", "absent"] },
+        },
+    });
+    return count;
+};
+
+exports.deleteSessionsBySociety = async (societyId) => {
+    const { count } = await prisma.sessions.deleteMany({
+        where: {
+            batches: { society_id: Number(societyId) },
+            status: { notIn: ["completed", "absent"] },
+        },
+    });
+    return count;
+};
+
+exports.deleteSessionsBySchool = async (schoolId) => {
+    const { count } = await prisma.sessions.deleteMany({
+        where: {
+            batches: { school_id: Number(schoolId) },
+            status: { notIn: ["completed", "absent"] },
+        },
+    });
+    return count;
 };
 
 // ── Sub-admin management ───────────────────────────────────────────────────

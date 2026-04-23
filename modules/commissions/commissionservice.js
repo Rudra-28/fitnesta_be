@@ -855,30 +855,48 @@ async function buildSettlementItem(assignment, rules, capOverride = null) {
 
     const isIndividual = assignment_type === "individual_coaching" || assignment_type === "personal_tutor";
 
-    // For IC/PT: auto-detect reduced cap from deleted sessions.
-    // Count all sessions in the window (any non-deleted status) for this trainer.
-    // Deleted sessions are absent from DB so their absence lowers the denominator
-    // automatically for this cycle only.
-    // Next cycle: window resets from last_settled_at so count is fresh each month.
-    // Group batches always use standardCap (no per-trainer session tracking needed).
+    // For IC/PT: the denominator is the total sessions that exist in the student's
+    // monthly cycle — regardless of which trainer conducted them.
+    //
+    // Why: when a trainer is reassigned mid-month, both trainers share the same
+    // denominator (the full month's session count for that student). This ensures
+    // the per-session rate is fair and consistent — neither trainer is overpaid
+    // or underpaid due to the timing of the switch.
+    //
+    // If admin deleted sessions, those are gone from DB so the count automatically
+    // reflects the reduced schedule. The denominator stays the same across all
+    // trainers in the same cycle.
+    //
+    // Cycle window for denominator: windowStart → windowStart + 1 month.
+    // This is the student's monthly billing cycle, independent of trainer windows.
+    //
+    // Group batches always use standardCap.
     let autoCap = standardCap;
     if (isIndividual) {
         const sessionType = getAssignmentSessionType(assignment_type);
-        const totalInWindow = await prisma.sessions.count({
+
+        // One month forward from windowStart = the student's cycle boundary
+        const cycleEnd = new Date(windowStart);
+        cycleEnd.setMonth(cycleEnd.getMonth() + 1);
+
+        // Count all non-cancelled sessions for this student in the cycle window,
+        // across ALL professionals (not just this trainer).
+        // This gives the denominator that both old and new trainer share.
+        const studentSessionsInCycle = await prisma.sessions.count({
             where: {
-                professional_id: professional_id,
-                session_type:    sessionType,
-                scheduled_date:  { gte: windowStart, lte: windowEnd },
-                // Exclude cancelled sessions from denominator.
-                // Deleted sessions are gone from DB — they lower this count automatically.
-                // Cancelled sessions are explicitly excluded: admin chose to cancel them
-                // so they should not count against the denominator.
-                status: { notIn: ["cancelled"] },
+                session_type:   sessionType,
+                scheduled_date: { gte: windowStart, lte: cycleEnd },
+                status:         { notIn: ["cancelled"] },
+                // student_id is on IC/PT sessions directly
+                ...(completedSessions.length > 0 && completedSessions[0].student_id
+                    ? { student_id: completedSessions[0].student_id }
+                    : { professional_id: professional_id }  // fallback if no sessions yet
+                ),
             },
         });
-        // Use actual non-cancelled session count as denominator, clamped to standardCap.
-        // Never go below 1 to avoid division by zero.
-        autoCap = Math.min(Math.max(totalInWindow, 1), standardCap);
+
+        // Clamp to standardCap; never below 1 to avoid division by zero.
+        autoCap = Math.min(Math.max(studentSessionsInCycle, 1), standardCap);
     }
 
     // Admin capOverride still takes explicit precedence (e.g. manual correction)

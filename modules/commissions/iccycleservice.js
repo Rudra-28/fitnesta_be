@@ -119,12 +119,11 @@ exports.createCyclesForIC = async (ipId, membershipStart, termMonths, profession
     const activityName = (ip.activity ?? "").trim();
     if (!activityName) return;
 
-    // Resolve activity name → activity_id
     const activity = await prisma.activities.findFirst({
         where:  { name: activityName },
         select: { id: true, name: true },
     });
-    if (!activity) return; // activity not found in master list — skip
+    if (!activity) return;
 
     const commissionRate = await resolveCommissionRate();
     const em             = await resolveEffectiveMonthly(userId, activity.id, termMonths);
@@ -171,25 +170,27 @@ exports.createCyclesForIC = async (ipId, membershipStart, termMonths, profession
 
         await prisma.ic_cycle_settlements.upsert({
             where: {
-                individual_participant_id_activity_id_cycle_start: {
+                individual_participant_id_professional_id_activity_id_cycle_start: {
                     individual_participant_id: ipId,
-                    activity_id:              activity.id,
-                    cycle_start:              cycleStart,
+                    professional_id:           professionalId,
+                    activity_id:               activity.id,
+                    cycle_start:               cycleStart,
                 },
             },
             create: {
                 individual_participant_id: ipId,
-                activity_id:              activity.id,
-                cycle_start:              cycleStart,
-                cycle_end:                cycleEnd,
-                sessions_allocated:       allocated,
-                sessions_attended:        completed,
-                sessions_absent:          absent,
-                sessions_upcoming:        upcoming,
-                base_amount:              em,
-                commission_rate:          commissionRate,
-                commission_amount:        commissionAmt,
-                status:                   "pending",
+                professional_id:           professionalId,
+                activity_id:               activity.id,
+                cycle_start:               cycleStart,
+                cycle_end:                 cycleEnd,
+                sessions_allocated:        allocated,
+                sessions_attended:         completed,
+                sessions_absent:           absent,
+                sessions_upcoming:         upcoming,
+                base_amount:               em,
+                commission_rate:           commissionRate,
+                commission_amount:         commissionAmt,
+                status:                    "pending",
             },
             update: {
                 cycle_end:          cycleEnd,
@@ -213,31 +214,37 @@ exports.createCyclesForIC = async (ipId, membershipStart, termMonths, profession
  * @param {number} professionalId – trainer professionals.id
  */
 exports.syncPendingCycles = async (professionalId) => {
-    const ipRecords = await prisma.individual_participants.findMany({
-        where:  { trainer_professional_id: professionalId },
-        select: { id: true, student_id: true, term_months: true, students: { select: { user_id: true } } },
-    });
-    if (ipRecords.length === 0) return;
-
-    const ipIds = ipRecords.map((p) => p.id);
-    const ipMap = Object.fromEntries(ipRecords.map((p) => [p.id, p]));
-
+    // Query pending cycles directly by professional_id — survives reassignment because
+    // the cycle row owns its professional_id independently of trainer_professional_id.
     const pendingCycles = await prisma.ic_cycle_settlements.findMany({
-        where:  { individual_participant_id: { in: ipIds }, status: "pending" },
+        where:  { professional_id: professionalId, status: "pending" },
         select: {
             id: true, individual_participant_id: true, activity_id: true,
             cycle_start: true, cycle_end: true, base_amount: true, commission_rate: true,
+            individual_participants: { select: { student_id: true } },
         },
     });
+    if (pendingCycles.length === 0) return;
 
     const commissionRate = await resolveCommissionRate();
 
     for (const cycle of pendingCycles) {
-        const ip        = ipMap[cycle.individual_participant_id];
-        const studentId = ip?.student_id;
+        const studentId = cycle.individual_participants?.student_id;
         if (!studentId) continue;
 
-        const [completed, absent, upcoming] = await Promise.all([
+        // sessions_allocated = ALL sessions for this student in the cycle window,
+        // across all trainers. This is the shared denominator so that when a trainer
+        // is reassigned mid-cycle, both old and new trainer divide by the same number.
+        const [allocated, completedByMe, absentByMe, upcomingByMe] = await Promise.all([
+            prisma.sessions.count({
+                where: {
+                    student_id:     studentId,
+                    activity_id:    cycle.activity_id,
+                    session_type:   "individual_coaching",
+                    status:         { notIn: ["cancelled"] },
+                    scheduled_date: { gte: cycle.cycle_start, lte: cycle.cycle_end },
+                },
+            }),
             prisma.sessions.count({
                 where: {
                     student_id:      studentId,
@@ -270,20 +277,19 @@ exports.syncPendingCycles = async (professionalId) => {
             }),
         ]);
 
-        const allocated = completed + absent + upcoming;
-        const baseAmt   = parseFloat(cycle.base_amount);
-        const rate      = parseFloat(cycle.commission_rate) || commissionRate;
-        const commAmt   = baseAmt > 0
-            ? parseFloat(((baseAmt * rate / 100) / Math.max(allocated, 1) * completed).toFixed(2))
+        const baseAmt = parseFloat(cycle.base_amount);
+        const rate    = parseFloat(cycle.commission_rate) || commissionRate;
+        const commAmt = baseAmt > 0 && allocated > 0
+            ? parseFloat(((baseAmt * rate / 100) / allocated * completedByMe).toFixed(2))
             : 0;
 
         await prisma.ic_cycle_settlements.update({
             where: { id: cycle.id },
             data: {
                 sessions_allocated: allocated,
-                sessions_attended:  completed,
-                sessions_absent:    absent,
-                sessions_upcoming:  upcoming,
+                sessions_attended:  completedByMe,
+                sessions_absent:    absentByMe,
+                sessions_upcoming:  upcomingByMe,
                 commission_rate:    rate,
                 commission_amount:  commAmt,
             },
@@ -303,75 +309,89 @@ exports.syncPendingCycles = async (professionalId) => {
 exports.getICSettlement = async (professionalId) => {
     await exports.syncPendingCycles(professionalId);
 
-    const ipRecords = await prisma.individual_participants.findMany({
-        where: { trainer_professional_id: professionalId },
+    // Load cycles directly by professional_id so Trainer A still sees their cycles
+    // even after individual_participants.trainer_professional_id moved to Trainer B.
+    const cycles = await prisma.ic_cycle_settlements.findMany({
+        where:   { professional_id: professionalId },
+        orderBy: { cycle_start: "asc" },
         select: {
-            id:           true,
-            student_id:   true,
-            activity:     true,
-            term_months:  true,
-            membership_start_date: true,
-            membership_end_date:   true,
-            students: {
+            id:                       true,
+            individual_participant_id: true,
+            activity_id:              true,
+            cycle_start:              true,
+            cycle_end:                true,
+            sessions_allocated:       true,
+            sessions_attended:        true,
+            sessions_absent:          true,
+            sessions_upcoming:        true,
+            base_amount:              true,
+            commission_rate:          true,
+            commission_amount:        true,
+            status:                   true,
+            settled_at:               true,
+            paid_at:                  true,
+            activities:               { select: { id: true, name: true } },
+            individual_participants: {
                 select: {
-                    id:   true,
-                    users: { select: { full_name: true, mobile: true, email: true, photo: true } },
-                },
-            },
-            ic_cycle_settlements: {
-                orderBy: { cycle_start: "asc" },
-                select: {
-                    id:                 true,
-                    activity_id:        true,
-                    cycle_start:        true,
-                    cycle_end:          true,
-                    sessions_allocated: true,
-                    sessions_attended:  true,
-                    sessions_absent:    true,
-                    sessions_upcoming:  true,
-                    base_amount:        true,
-                    commission_rate:    true,
-                    commission_amount:  true,
-                    status:             true,
-                    settled_at:         true,
-                    paid_at:            true,
-                    activities: { select: { id: true, name: true } },
+                    id:                    true,
+                    student_id:            true,
+                    activity:              true,
+                    term_months:           true,
+                    membership_start_date: true,
+                    membership_end_date:   true,
+                    students: {
+                        select: {
+                            id:    true,
+                            users: { select: { full_name: true, mobile: true, email: true, photo: true } },
+                        },
+                    },
                 },
             },
         },
     });
 
-    // Shape: each IP record = one student with one activity and N cycles
-    const students = ipRecords.map((ip) => ({
-        student_id:       ip.student_id,
-        name:             ip.students?.users?.full_name ?? "—",
-        mobile:           ip.students?.users?.mobile ?? null,
-        email:            ip.students?.users?.email ?? null,
-        photo:            ip.students?.users?.photo ?? null,
-        activity_name:    ip.activity ?? null,
-        term_months:      ip.term_months,
-        membership_start: ip.membership_start_date,
-        membership_end:   ip.membership_end_date,
-        cycles: ip.ic_cycle_settlements.map((c) => ({
-            cycle_id:           c.id,
-            activity_id:        c.activity_id,
-            activity_name:      c.activities?.name ?? ip.activity ?? null,
-            cycle_start:        c.cycle_start,
-            cycle_end:          c.cycle_end,
-            sessions_allocated: c.sessions_allocated,
-            sessions_attended:  c.sessions_attended,
-            sessions_absent:    c.sessions_absent,
-            sessions_upcoming:  c.sessions_upcoming,
-            base_amount:        parseFloat(c.base_amount),
-            commission_rate:    parseFloat(c.commission_rate),
-            commission_amount:  parseFloat(c.commission_amount),
-            status:             c.status,
-            settled_at:         c.settled_at,
-            paid_at:            c.paid_at,
-        })),
-    }));
+    // Group by student (one IP record = one student, but may have partial + full cycles)
+    const studentMap = {};
+    for (const cycle of cycles) {
+        const ip  = cycle.individual_participants;
+        const sid = ip?.student_id;
+        if (!sid) continue;
 
-    return { success: true, professional_id: professionalId, students };
+        if (!studentMap[sid]) {
+            studentMap[sid] = {
+                student_id:       sid,
+                name:             ip.students?.users?.full_name ?? "—",
+                mobile:           ip.students?.users?.mobile    ?? null,
+                email:            ip.students?.users?.email     ?? null,
+                photo:            ip.students?.users?.photo     ?? null,
+                activity_name:    ip.activity ?? null,
+                term_months:      ip.term_months,
+                membership_start: ip.membership_start_date,
+                membership_end:   ip.membership_end_date,
+                cycles:           [],
+            };
+        }
+
+        studentMap[sid].cycles.push({
+            cycle_id:           cycle.id,
+            activity_id:        cycle.activity_id,
+            activity_name:      cycle.activities?.name ?? ip.activity ?? null,
+            cycle_start:        cycle.cycle_start,
+            cycle_end:          cycle.cycle_end,
+            sessions_allocated: cycle.sessions_allocated,
+            sessions_attended:  cycle.sessions_attended,
+            sessions_absent:    cycle.sessions_absent,
+            sessions_upcoming:  cycle.sessions_upcoming,
+            base_amount:        parseFloat(cycle.base_amount),
+            commission_rate:    parseFloat(cycle.commission_rate),
+            commission_amount:  parseFloat(cycle.commission_amount),
+            status:             cycle.status,
+            settled_at:         cycle.settled_at,
+            paid_at:            cycle.paid_at,
+        });
+    }
+
+    return { success: true, professional_id: professionalId, students: Object.values(studentMap) };
 };
 
 /**
@@ -387,17 +407,17 @@ exports.settleCycle = async (cycleId, professionalId) => {
         select: {
             id:                       true,
             individual_participant_id: true,
+            professional_id:          true,
             activity_id:              true,
             status:                   true,
             commission_amount:        true,
             base_amount:              true,
             commission_rate:          true,
-            individual_participants:  { select: { trainer_professional_id: true } },
         },
     });
 
     if (!cycle) throw Object.assign(new Error("IC cycle not found"), { statusCode: 404 });
-    if (cycle.individual_participants?.trainer_professional_id !== professionalId) {
+    if (cycle.professional_id !== professionalId) {
         throw Object.assign(new Error("This cycle does not belong to this trainer"), { statusCode: 403 });
     }
     if (cycle.status !== "pending") {
@@ -439,4 +459,89 @@ exports.settleCycle = async (cycleId, professionalId) => {
         commission_amount: parseFloat(cycle.commission_amount),
         settled_at:        now,
     };
+};
+
+/**
+ * Called when a trainer is reassigned mid-cycle (reassignAllFutureSessions).
+ *
+ * Finds the cycle row covering the reassignment date and creates a new cycle row
+ * for the new trainer covering reassignDate → same cycle_end, using the same
+ * sessions_allocated denominator as the original cycle (the student's full month).
+ *
+ * @param {number} ipId               – individual_participants.id
+ * @param {number} newProfessionalId  – new trainer's professionals.id
+ * @param {Date}   reassignDate       – date from which new trainer takes over
+ */
+exports.splitCycleOnReassignment = async (ipId, newProfessionalId, reassignDate) => {
+    const ip = await prisma.individual_participants.findUnique({
+        where:  { id: ipId },
+        select: {
+            student_id:  true,
+            activity:    true,
+            term_months: true,
+            students:    { select: { user_id: true } },
+        },
+    });
+    if (!ip || !ip.activity) return;
+
+    const activity = await prisma.activities.findFirst({
+        where:  { name: ip.activity.trim() },
+        select: { id: true },
+    });
+    if (!activity) return;
+
+    const reassign = new Date(reassignDate);
+    reassign.setHours(0, 0, 0, 0);
+
+    const commissionRate = await resolveCommissionRate();
+
+    const existingCycle = await prisma.ic_cycle_settlements.findFirst({
+        where: {
+            individual_participant_id: ipId,
+            activity_id:               activity.id,
+            cycle_start:               { lte: reassign },
+            cycle_end:                 { gte: reassign },
+            status:                    "pending",
+        },
+    });
+    if (!existingCycle) return;
+
+    const em           = parseFloat(existingCycle.base_amount);
+    const partialStart = reassign;
+    const partialEnd   = existingCycle.cycle_end;
+    const allocated    = existingCycle.sessions_allocated;
+
+    await prisma.ic_cycle_settlements.upsert({
+        where: {
+            individual_participant_id_professional_id_activity_id_cycle_start: {
+                individual_participant_id: ipId,
+                professional_id:           newProfessionalId,
+                activity_id:               activity.id,
+                cycle_start:               partialStart,
+            },
+        },
+        create: {
+            individual_participant_id: ipId,
+            professional_id:           newProfessionalId,
+            activity_id:               activity.id,
+            cycle_start:               partialStart,
+            cycle_end:                 partialEnd,
+            sessions_allocated:        allocated,
+            sessions_attended:         0,
+            sessions_absent:           0,
+            sessions_upcoming:         0,
+            base_amount:               em,
+            commission_rate:           commissionRate,
+            commission_amount:         0,
+            status:                    "pending",
+        },
+        update: {
+            cycle_end:          partialEnd,
+            sessions_allocated: allocated,
+            base_amount:        em,
+            commission_rate:    commissionRate,
+        },
+    });
+
+    await exports.syncPendingCycles(newProfessionalId);
 };

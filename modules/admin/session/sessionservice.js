@@ -795,6 +795,7 @@ async function reassignAllFutureSessions({ session_type, student_id, new_profess
       }
       await adminRepo.assignTeacherToStudent(pt.id, Number(new_professional_id));
       await commissionService.recordTeacherAssignment(pt.id, Number(new_professional_id));
+      await ptCycleService.splitCycleOnReassignment(pt.id, Number(new_professional_id), today);
     }
   } else {
     const ip = await adminRepo.findIndividualParticipantByStudentId(student_id);
@@ -812,6 +813,7 @@ async function reassignAllFutureSessions({ session_type, student_id, new_profess
       }
       await adminRepo.assignTrainerToStudent(ip.id, Number(new_professional_id));
       await commissionService.recordTrainerAssignment(ip.id, Number(new_professional_id));
+      await icCycleService.splitCycleOnReassignment(ip.id, Number(new_professional_id), today);
     }
   }
 

@@ -230,6 +230,8 @@ model professionals {
   sessions                 sessions[]
   trainer_assignments      trainer_assignments[]
   visiting_forms           visiting_forms[]
+  pt_cycle_settlements     pt_cycle_settlements[]
+  ic_cycle_settlements     ic_cycle_settlements[]
 
   @@index([user_id], map: "user_id")
 }
@@ -909,6 +911,7 @@ enum batch_cycle_settlements_status {
 model pt_cycle_settlements {
   id                 Int                          @id @default(autoincrement())
   personal_tutor_id  Int
+  professional_id    Int
   activity_id        Int
   cycle_start        DateTime                     @db.Date
   cycle_end          DateTime                     @db.Date
@@ -925,10 +928,12 @@ model pt_cycle_settlements {
   created_at         DateTime                     @default(now()) @db.Timestamp(0)
 
   personal_tutors    personal_tutors              @relation(fields: [personal_tutor_id], references: [id], onDelete: Cascade,  onUpdate: NoAction)
+  professionals      professionals                @relation(fields: [professional_id],   references: [id], onDelete: Restrict, onUpdate: NoAction)
   activities         activities                   @relation(fields: [activity_id],       references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@unique([personal_tutor_id, activity_id, cycle_start], map: "uq_pt_cycle")
+  @@unique([personal_tutor_id, professional_id, activity_id, cycle_start], map: "uq_pt_cycle")
   @@index([personal_tutor_id], map: "idx_ptcs_pt_id")
+  @@index([professional_id],   map: "idx_ptcs_prof_id")
   @@index([activity_id],       map: "idx_ptcs_act_id")
   @@index([status],            map: "idx_ptcs_status")
 }
@@ -945,6 +950,7 @@ enum pt_cycle_settlements_status {
 model ic_cycle_settlements {
   id                        Int                         @id @default(autoincrement())
   individual_participant_id Int
+  professional_id           Int
   activity_id               Int
   cycle_start               DateTime                    @db.Date
   cycle_end                 DateTime                    @db.Date
@@ -961,10 +967,12 @@ model ic_cycle_settlements {
   created_at                DateTime                    @default(now()) @db.Timestamp(0)
 
   individual_participants   individual_participants     @relation(fields: [individual_participant_id], references: [id], onDelete: Cascade,  onUpdate: NoAction)
-  activities                activities                  @relation(fields: [activity_id],               references: [id], onDelete: Restrict, onUpdate: NoAction)
+  professionals             professionals               @relation(fields: [professional_id],          references: [id], onDelete: Restrict, onUpdate: NoAction)
+  activities                activities                  @relation(fields: [activity_id],              references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@unique([individual_participant_id, activity_id, cycle_start], map: "uq_ic_cycle")
+  @@unique([individual_participant_id, professional_id, activity_id, cycle_start], map: "uq_ic_cycle")
   @@index([individual_participant_id], map: "idx_iccs_ip_id")
+  @@index([professional_id],          map: "idx_iccs_prof_id")
   @@index([activity_id],              map: "idx_iccs_act_id")
   @@index([status],                   map: "idx_iccs_status")
 }
