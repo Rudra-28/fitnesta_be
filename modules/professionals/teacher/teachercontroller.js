@@ -1,8 +1,9 @@
 const service = require("./teacherservice");
+const log = require("../../../utils/logger");
 
 exports.createTeacher = async (req, res) => {
     try {
-        console.log("[Teacher] createTeacher called");
+        log.info("[teacher] registration started", { name: req.body?.name, mobile: req.body?.mobile });
         const fileData = {};
         if (req.files) {
             if (req.files['panCard'])   fileData.panCard   = req.files['panCard'][0].path;
@@ -13,14 +14,15 @@ exports.createTeacher = async (req, res) => {
         }
 
         const data = { ...req.body, ...fileData };
-        console.log("[Teacher] idToken:", data.idToken ? "present" : "missing", "| name:", data.name, "| files:", Object.keys(fileData));
+        log.info("[teacher] form data assembled", { hasToken: !!data.idToken, filesUploaded: Object.keys(fileData) });
         const result = await service.createTeacher(data);
-        console.log("[Teacher] Registration complete — userId:", result.userId ?? result.id ?? "unknown");
+        const userId = result.userId ?? result.id ?? null;
+        log.info("[teacher] registration complete — pending admin approval", { userId });
 
         res.status(201).json(result);
 
     } catch (err) {
-        console.error("[Teacher] Registration error:", err.message);
+        log.error("[teacher] registration failed", err);
         res.status(400).json({ success: false, error: err.message });
     }
 };

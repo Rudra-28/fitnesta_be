@@ -2,6 +2,7 @@
 
 const service    = require("./batchcycleservice");
 const batchSvc   = require("../admin/batch/batchservice");
+const log        = require("../../utils/logger");
 
 /**
  * GET /api/v1/admin/trainers/:professionalId/society-settlement
@@ -14,7 +15,7 @@ exports.getSocietySettlement = async (req, res) => {
         const data = await service.getSocietySettlement(professionalId);
         return res.status(200).json(data);
     } catch (err) {
-        console.error("[BatchCycle] getSocietySettlement error:", err.message);
+        log.error("[batch-cycle] getSocietySettlement failed", err);
         return res.status(err.statusCode || 500).json({ success: false, error: err.message });
     }
 };
@@ -30,7 +31,7 @@ exports.getSchoolSettlement = async (req, res) => {
         const data = await service.getSchoolSettlement(professionalId);
         return res.status(200).json(data);
     } catch (err) {
-        console.error("[BatchCycle] getSchoolSettlement error:", err.message);
+        log.error("[batch-cycle] getSchoolSettlement failed", err);
         return res.status(err.statusCode || 500).json({ success: false, error: err.message });
     }
 };

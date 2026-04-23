@@ -1,5 +1,6 @@
 const service = require("./otherareaservice");
 const { validateOtherArea } = require("./otherareavalidate");
+const log = require("../../../utils/logger");
 
 const handleErr = (err, res) => {
     const status = err.statusCode
@@ -11,6 +12,7 @@ const handleErr = (err, res) => {
 
 exports.registerOtherArea = async (req, res) => {
     try {
+        log.info("[other-area] registerOtherArea", { area_name: req.body?.areaName ?? req.body?.area_name });
         const data = { ...req.body };
 
         if (req.files?.activityAgreementPdf?.[0]) {
@@ -20,14 +22,17 @@ exports.registerOtherArea = async (req, res) => {
         data.hasSignedAgreement = data.hasSignedAgreement === 'true' || data.hasSignedAgreement === true;
 
         const errors = validateOtherArea(data);
-        if (errors.length > 0)
+        if (errors.length > 0) {
+            log.warn("[other-area] registerOtherArea — validation failed", { errors });
             return res.status(400).json({ success: false, errors });
+        }
 
         const result = await service.registerOtherArea(data);
+        log.info("[other-area] registration submitted");
         return res.status(201).json(result);
 
     } catch (err) {
-        console.error("Other Area Registration Error:", err);
+        log.error("[other-area] registerOtherArea failed", err);
         handleErr(err, res);
     }
 };
@@ -43,14 +48,18 @@ exports.listPendingRequests = async (_req, res) => {
 
 exports.approveRequest = async (req, res) => {
     try {
+        log.info("[other-area] approveRequest", { pendingId: req.params.id, adminId: req.admin?.userId });
         const result = await service.approveRequestByAdmin(req.params.id, req.admin.userId, req.body?.note);
+        log.info("[other-area] request approved", { pendingId: req.params.id });
         res.json({ success: true, ...result });
     } catch (err) { handleErr(err, res); }
 };
 
 exports.rejectRequest = async (req, res) => {
     try {
+        log.info("[other-area] rejectRequest", { pendingId: req.params.id, adminId: req.admin?.userId });
         const result = await service.rejectRequestByAdmin(req.params.id, req.admin.userId, req.body?.note);
+        log.info("[other-area] request rejected", { pendingId: req.params.id });
         res.json({ success: true, ...result });
     } catch (err) { handleErr(err, res); }
 };

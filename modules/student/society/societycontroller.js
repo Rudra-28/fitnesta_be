@@ -1,6 +1,7 @@
 const service = require("./societyservice");
 const { validateSociety } = require("./validatesociety");
 const adminRepo = require("../../admin/adminrepository");
+const log = require("../../../utils/logger");
 
 const handleErr = (err, res) => {
     const status = err.statusCode
@@ -10,14 +11,18 @@ const handleErr = (err, res) => {
 
 exports.registerSociety = async (req, res) => {
     try {
+        log.info("[society] registerSociety", { society_name: req.body?.societyName ?? req.body?.society_name });
         const errors = validateSociety(req.body);
-        if (errors.length > 0)
+        if (errors.length > 0) {
+            log.warn("[society] registerSociety — validation failed", { errors });
             return res.status(400).json({ success: false, errors });
+        }
 
         const result = await service.registerSociety(req.body);
+        log.info("[society] society registration submitted", { society_name: req.body?.societyName });
         return res.status(201).json(result);
     } catch (error) {
-        console.error("Society Registration Error:", error);
+        log.error("[society] registerSociety failed", error);
         return res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || "Failed to register society"
@@ -56,7 +61,9 @@ exports.assignMeToRequest = async (req, res) => {
 
 exports.approveRequest = async (req, res) => {
     try {
+        log.info("[society] approveRequest", { pendingId: req.params.id, adminId: req.admin?.userId });
         const result = await service.approveRequestByAdmin(Number(req.params.id), req.admin.userId, req.body?.note);
+        log.info("[society] society request approved", { pendingId: req.params.id });
 
         // Notify the student
         try {
@@ -88,7 +95,9 @@ exports.approveRequest = async (req, res) => {
 
 exports.rejectRequest = async (req, res) => {
     try {
+        log.info("[society] rejectRequest", { pendingId: req.params.id, adminId: req.admin?.userId });
         const result = await service.rejectRequestByAdmin(Number(req.params.id), req.admin.userId, req.body?.note);
+        log.info("[society] society request rejected", { pendingId: req.params.id });
 
         // Notify the student
         try {

@@ -1,4 +1,5 @@
 const service = require("./batchservice");
+const log = require("../../../utils/logger");
 
 const ERROR_MAP = {
   BATCH_NOT_FOUND: 404,
@@ -24,7 +25,7 @@ const ERROR_MAP = {
 
 function handleError(res, err) {
   const status = ERROR_MAP[err.code] || 500;
-  if (status === 500) console.error('[BatchController]', err);
+  if (status === 500) log.error("[batch] unhandled error", err);
   return res.status(status).json({ success: false, message: err.message, code: err.code });
 }
 

@@ -1081,6 +1081,14 @@ exports.getSchoolAdminById = async (id) => {
     });
 };
 
+exports.getActivitiesByIds = async (ids) => {
+    if (!ids.length) return [];
+    return await prisma.activities.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true },
+    });
+};
+
 exports.adminInsertSchool = async (data, meProfessionalId) => {
     const school = await prisma.schools.create({
         data: {

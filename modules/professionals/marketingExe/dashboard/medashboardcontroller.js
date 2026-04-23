@@ -3,6 +3,7 @@ const { validateMeSociety, validateMeSchool, validateVisitingForm } = require(".
 const cloudinary = require("../../../../config/cloudinary");
 const prisma = require("../../../../config/prisma");
 const fs = require("fs");
+const log = require("../../../../utils/logger");
 
 const handleErr = (err, res) => {
     res.status(err.statusCode || 500).json({
@@ -59,11 +60,11 @@ exports.getTransactionHistory = async (req, res) => {
 
 exports.getSummary = async (req, res) => {
     try {
-        console.log(`[ME] getSummary — userId: ${req.me.userId}`);
+        log.info(`[ME] getSummary — userId: ${req.me.userId}`);
         const data = await service.getSummary(req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getSummary error: ${err.message}`);
+        log.error(`[ME] getSummary error: ${err.message}`);
         handleErr(err, res);
     }
 };
@@ -72,7 +73,7 @@ exports.getSummary = async (req, res) => {
 
 exports.registerSociety = async (req, res) => {
     try {
-        console.log(`[ME] registerSociety called — userId: ${req.me.userId}`);
+        log.info(`[ME] registerSociety called — userId: ${req.me.userId}`);
         const data = { ...req.body };
 
         let localFilePath = null;
@@ -87,12 +88,12 @@ exports.registerSociety = async (req, res) => {
 
         const errors = validateMeSociety(data);
         if (errors.length > 0) {
-            console.warn(`[ME] registerSociety validation failed — userId: ${req.me.userId}:`, errors);
+            log.warn(`[ME] registerSociety validation failed — userId: ${req.me.userId}:`, errors);
             return res.status(400).json({ success: false, errors });
         }
 
         const result = await service.registerSociety(data, req.me.userId);
-        console.log(`[ME] Society registered — userId: ${req.me.userId}, society: ${data.societyName || data.name}`);
+        log.info(`[ME] Society registered — userId: ${req.me.userId}, society: ${data.societyName || data.name}`);
         
         // Respond to user right away to prevent timeout
         res.status(201).json(result);
@@ -101,7 +102,7 @@ exports.registerSociety = async (req, res) => {
         if (localFilePath) {
             (async () => {
                 try {
-                    console.log(`[ME] Uploading society document to Cloudinary in background for societyId: ${result.societyId}`);
+                    log.info(`[ME] Uploading society document to Cloudinary in background for societyId: ${result.societyId}`);
                     const uploadResult = await cloudinary.uploader.upload(localFilePath, {
                         folder: "fitnesta/documents",
                         resource_type: "auto",
@@ -110,40 +111,40 @@ exports.registerSociety = async (req, res) => {
                         where: { id: result.societyId },
                         data: { activity_agreement_pdf: uploadResult.secure_url }
                     });
-                    console.log(`[ME] Cloudinary upload successful for societyId: ${result.societyId}`);
+                    log.info(`[ME] Cloudinary upload successful for societyId: ${result.societyId}`);
                     if (fs.existsSync(localFilePath)) {
                         fs.unlinkSync(localFilePath);
                     }
                 } catch (bgErr) {
-                    console.error(`[ME] Background upload error for societyId: ${result.societyId}:`, bgErr.message);
+                    log.error(`[ME] Background upload error for societyId: ${result.societyId}:`, bgErr.message);
                 }
             })();
         }
 
     } catch (err) {
-        console.error(`[ME] registerSociety error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] registerSociety error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getMySocieties = async (req, res) => {
     try {
-        console.log(`[ME] getMySocieties — userId: ${req.me.userId}`);
+        log.info(`[ME] getMySocieties — userId: ${req.me.userId}`);
         const data = await service.getMySocieties(req.me.userId);
         res.json({ success: true, count: data.length, data });
     } catch (err) {
-        console.error(`[ME] getMySocieties error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] getMySocieties error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getSocietyById = async (req, res) => {
     try {
-        console.log(`[ME] getSocietyById — userId: ${req.me.userId}, societyId: ${req.params.id}`);
+        log.info(`[ME] getSocietyById — userId: ${req.me.userId}, societyId: ${req.params.id}`);
         const data = await service.getSocietyById(Number(req.params.id), req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getSocietyById error — userId: ${req.me.userId}, societyId: ${req.params.id}: ${err.message}`);
+        log.error(`[ME] getSocietyById error — userId: ${req.me.userId}, societyId: ${req.params.id}: ${err.message}`);
         handleErr(err, res);
     }
 };
@@ -152,7 +153,7 @@ exports.getSocietyById = async (req, res) => {
 
 exports.registerSchool = async (req, res) => {
     try {
-        console.log(`[ME] registerSchool called — userId: ${req.me.userId}`);
+        log.info(`[ME] registerSchool called — userId: ${req.me.userId}`);
         const data = { ...req.body };
 
         let localFilePath = null;
@@ -166,19 +167,19 @@ exports.registerSchool = async (req, res) => {
 
         const errors = validateMeSchool(data);
         if (errors.length > 0) {
-            console.warn(`[ME] registerSchool validation failed — userId: ${req.me.userId}:`, errors);
+            log.warn(`[ME] registerSchool validation failed — userId: ${req.me.userId}:`, errors);
             return res.status(400).json({ success: false, errors });
         }
 
         const result = await service.registerSchool(data, req.me.userId);
-        console.log(`[ME] School registered — userId: ${req.me.userId}, school: ${data.schoolName || data.name}`);
+        log.info(`[ME] School registered — userId: ${req.me.userId}, school: ${data.schoolName || data.name}`);
         res.status(201).json(result);
 
         // Upload to Cloudinary in background
         if (localFilePath) {
             (async () => {
                 try {
-                    console.log(`[ME] Uploading school document to Cloudinary in background for schoolId: ${result.schoolId}`);
+                    log.info(`[ME] Uploading school document to Cloudinary in background for schoolId: ${result.schoolId}`);
                     const uploadResult = await cloudinary.uploader.upload(localFilePath, {
                         folder: "fitnesta/documents",
                         resource_type: "auto",
@@ -187,40 +188,40 @@ exports.registerSchool = async (req, res) => {
                         where: { id: result.schoolId },
                         data: { activity_agreement_pdf: uploadResult.secure_url }
                     });
-                    console.log(`[ME] Cloudinary upload successful for schoolId: ${result.schoolId}`);
+                    log.info(`[ME] Cloudinary upload successful for schoolId: ${result.schoolId}`);
                     if (fs.existsSync(localFilePath)) {
                         fs.unlinkSync(localFilePath);
                     }
                 } catch (bgErr) {
-                    console.error(`[ME] Background upload error for schoolId: ${result.schoolId}:`, bgErr.message);
+                    log.error(`[ME] Background upload error for schoolId: ${result.schoolId}:`, bgErr.message);
                 }
             })();
         }
 
     } catch (err) {
-        console.error(`[ME] registerSchool error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] registerSchool error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getMySchools = async (req, res) => {
     try {
-        console.log(`[ME] getMySchools — userId: ${req.me.userId}`);
+        log.info(`[ME] getMySchools — userId: ${req.me.userId}`);
         const data = await service.getMySchools(req.me.userId);
         res.json({ success: true, count: data.length, data });
     } catch (err) {
-        console.error(`[ME] getMySchools error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] getMySchools error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getMySchoolsEnrollment = async (req, res) => {
     try {
-        console.log(`[ME] getMySchoolsEnrollment — userId: ${req.me.userId}`);
+        log.info(`[ME] getMySchoolsEnrollment — userId: ${req.me.userId}`);
         const data = await service.getMySchoolsEnrollment(req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getMySchoolsEnrollment error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] getMySchoolsEnrollment error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
@@ -229,66 +230,66 @@ exports.getMySchoolsEnrollment = async (req, res) => {
 
 exports.getSchoolStudents = async (req, res) => {
     try {
-        console.log(`[ME] getSchoolStudents — userId: ${req.me.userId}`);
+        log.info(`[ME] getSchoolStudents — userId: ${req.me.userId}`);
         const data = await service.getSchoolStudents(req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getSchoolStudents error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] getSchoolStudents error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getSocietyStudents = async (req, res) => {
     try {
-        console.log(`[ME] getSocietyStudents — userId: ${req.me.userId}`);
+        log.info(`[ME] getSocietyStudents — userId: ${req.me.userId}`);
         const data = await service.getSocietyStudents(req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getSocietyStudents error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] getSocietyStudents error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getStudentsBySchool = async (req, res) => {
     try {
-        console.log(`[ME] getStudentsBySchool — userId: ${req.me.userId}, schoolId: ${req.params.schoolId}`);
+        log.info(`[ME] getStudentsBySchool — userId: ${req.me.userId}, schoolId: ${req.params.schoolId}`);
         const data = await service.getStudentsBySchool(Number(req.params.schoolId), req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getStudentsBySchool error — userId: ${req.me.userId}, schoolId: ${req.params.schoolId}: ${err.message}`);
+        log.error(`[ME] getStudentsBySchool error — userId: ${req.me.userId}, schoolId: ${req.params.schoolId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getSchoolStudentById = async (req, res) => {
     try {
-        console.log(`[ME] getSchoolStudentById — userId: ${req.me.userId}, studentId: ${req.params.id}`);
+        log.info(`[ME] getSchoolStudentById — userId: ${req.me.userId}, studentId: ${req.params.id}`);
         const data = await service.getSchoolStudentById(Number(req.params.id), req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getSchoolStudentById error — userId: ${req.me.userId}, studentId: ${req.params.id}: ${err.message}`);
+        log.error(`[ME] getSchoolStudentById error — userId: ${req.me.userId}, studentId: ${req.params.id}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getStudentsBySociety = async (req, res) => {
     try {
-        console.log(`[ME] getStudentsBySociety — userId: ${req.me.userId}, societyId: ${req.params.societyId}`);
+        log.info(`[ME] getStudentsBySociety — userId: ${req.me.userId}, societyId: ${req.params.societyId}`);
         const data = await service.getStudentsBySociety(Number(req.params.societyId), req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getStudentsBySociety error — userId: ${req.me.userId}, societyId: ${req.params.societyId}: ${err.message}`);
+        log.error(`[ME] getStudentsBySociety error — userId: ${req.me.userId}, societyId: ${req.params.societyId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getSchoolById = async (req, res) => {
     try {
-        console.log(`[ME] getSchoolById — userId: ${req.me.userId}, schoolId: ${req.params.id}`);
+        log.info(`[ME] getSchoolById — userId: ${req.me.userId}, schoolId: ${req.params.id}`);
         const data = await service.getSchoolById(Number(req.params.id), req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getSchoolById error — userId: ${req.me.userId}, schoolId: ${req.params.id}: ${err.message}`);
+        log.error(`[ME] getSchoolById error — userId: ${req.me.userId}, schoolId: ${req.params.id}: ${err.message}`);
         handleErr(err, res);
     }
 };
@@ -306,42 +307,42 @@ exports.getMeReferralCodes = async (req, res) => {
 
 exports.submitVisitingForm = async (req, res) => {
     try {
-        console.log(`[ME] submitVisitingForm — userId: ${req.me.userId}`);
+        log.info(`[ME] submitVisitingForm — userId: ${req.me.userId}`);
         const data = { ...req.body };
 
         const errors = validateVisitingForm(data);
         if (errors.length > 0) {
-            console.warn(`[ME] submitVisitingForm validation failed — userId: ${req.me.userId}:`, errors);
+            log.warn(`[ME] submitVisitingForm validation failed — userId: ${req.me.userId}:`, errors);
             return res.status(400).json({ success: false, errors });
         }
 
         const result = await service.submitVisitingForm(data, req.me.userId);
-        console.log(`[ME] Visiting form submitted — userId: ${req.me.userId}, formId: ${result.formId}`);
+        log.info(`[ME] Visiting form submitted — userId: ${req.me.userId}, formId: ${result.formId}`);
         res.status(201).json(result);
     } catch (err) {
-        console.error(`[ME] submitVisitingForm error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] submitVisitingForm error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getMyVisitingForms = async (req, res) => {
     try {
-        console.log(`[ME] getMyVisitingForms — userId: ${req.me.userId}`);
+        log.info(`[ME] getMyVisitingForms — userId: ${req.me.userId}`);
         const data = await service.getMyVisitingForms(req.me.userId);
         res.json({ success: true, count: data.length, data });
     } catch (err) {
-        console.error(`[ME] getMyVisitingForms error — userId: ${req.me.userId}: ${err.message}`);
+        log.error(`[ME] getMyVisitingForms error — userId: ${req.me.userId}: ${err.message}`);
         handleErr(err, res);
     }
 };
 
 exports.getVisitingFormById = async (req, res) => {
     try {
-        console.log(`[ME] getVisitingFormById — userId: ${req.me.userId}, formId: ${req.params.id}`);
+        log.info(`[ME] getVisitingFormById — userId: ${req.me.userId}, formId: ${req.params.id}`);
         const data = await service.getVisitingFormById(Number(req.params.id), req.me.userId);
         res.json({ success: true, data });
     } catch (err) {
-        console.error(`[ME] getVisitingFormById error — userId: ${req.me.userId}, formId: ${req.params.id}: ${err.message}`);
+        log.error(`[ME] getVisitingFormById error — userId: ${req.me.userId}, formId: ${req.params.id}: ${err.message}`);
         handleErr(err, res);
     }
 };

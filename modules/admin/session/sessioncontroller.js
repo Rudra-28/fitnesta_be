@@ -1,4 +1,5 @@
 const service = require("./sessionservice");
+const log = require("../../../utils/logger");
 
 const ERROR_MAP = {
   SESSION_NOT_FOUND:        404,
@@ -24,9 +25,12 @@ function handleError(res, err) {
 
 async function createSession(req, res) {
   try {
+    log.info("[session] createSession", { session_type: req.body?.session_type, student_id: req.body?.student_id, professional_id: req.body?.professional_id });
     const session = await service.createIndividualSession(req.body);
+    log.info("[session] createSession — created", { sessionId: session?.id });
     return res.status(201).json({ success: true, data: session });
   } catch (err) {
+    log.error("[session] createSession — failed", err);
     return handleError(res, err);
   }
 }
@@ -54,9 +58,12 @@ async function updateSessionStatus(req, res) {
   try {
     const { status, cancel_reason } = req.body;
     if (!status) return res.status(400).json({ success: false, message: "status is required" });
+    log.info("[session] updateSessionStatus", { sessionId: req.params.sessionId, status, cancel_reason });
     const session = await service.updateSessionStatus(req.params.sessionId, status, cancel_reason);
+    log.info("[session] updateSessionStatus — done", { sessionId: req.params.sessionId, newStatus: status });
     return res.json({ success: true, data: session });
   } catch (err) {
+    log.error("[session] updateSessionStatus — failed", err);
     return handleError(res, err);
   }
 }
@@ -65,18 +72,24 @@ async function cancelSession(req, res) {
   try {
     const { cancel_reason } = req.body;
     if (!cancel_reason) return res.status(400).json({ success: false, message: "cancel_reason is required" });
+    log.info("[session] cancelSession", { sessionId: req.params.sessionId, cancel_reason });
     const session = await service.cancelSession(req.params.sessionId, cancel_reason);
+    log.info("[session] cancelSession — cancelled", { sessionId: req.params.sessionId });
     return res.json({ success: true, data: session });
   } catch (err) {
+    log.error("[session] cancelSession — failed", err);
     return handleError(res, err);
   }
 }
 
 async function generateIndividualSessions(req, res) {
   try {
+    log.info("[session] generateIndividualSessions", { student_id: req.body?.student_id, session_type: req.body?.session_type, start_date: req.body?.start_date });
     const result = await service.generateIndividualSessions(req.body);
+    log.info("[session] generateIndividualSessions — done", { count: result?.sessions?.length ?? result?.count ?? "?" });
     return res.status(201).json({ success: true, data: result });
   } catch (err) {
+    log.error("[session] generateIndividualSessions — failed", err);
     return handleError(res, err);
   }
 }
@@ -93,9 +106,12 @@ async function extendMembership(req, res) {
 async function rescheduleSession(req, res) {
   try {
     const { scheduled_date, start_time, end_time } = req.body;
+    log.info("[session] rescheduleSession", { sessionId: req.params.sessionId, scheduled_date, start_time, end_time });
     const session = await service.rescheduleSession(req.params.sessionId, { scheduled_date, start_time, end_time });
+    log.info("[session] rescheduleSession — rescheduled", { sessionId: req.params.sessionId, scheduled_date });
     return res.json({ success: true, data: session });
   } catch (err) {
+    log.error("[session] rescheduleSession — failed", err);
     return handleError(res, err);
   }
 }
@@ -137,9 +153,12 @@ async function previewSessionGeneration(req, res) {
  */
 async function deleteSession(req, res) {
   try {
+    log.info("[session] deleteSession", { sessionId: req.params.sessionId });
     await service.deleteSession(req.params.sessionId);
+    log.info("[session] deleteSession — deleted", { sessionId: req.params.sessionId });
     return res.json({ success: true, message: "Session deleted successfully" });
   } catch (err) {
+    log.error("[session] deleteSession — failed", err);
     return handleError(res, err);
   }
 }
@@ -155,9 +174,12 @@ async function bulkDeleteFutureSessions(req, res) {
     if (!student_id || !session_type) {
       return res.status(400).json({ success: false, message: "student_id and session_type are required" });
     }
+    log.info("[session] bulkDeleteFutureSessions", { student_id, session_type, from_date });
     const result = await service.bulkDeleteFutureSessions({ student_id, session_type, from_date });
+    log.info("[session] bulkDeleteFutureSessions — deleted", { student_id, session_type, deleted_count: result?.count ?? "?" });
     return res.json({ success: true, data: result });
   } catch (err) {
+    log.error("[session] bulkDeleteFutureSessions — failed", err);
     return handleError(res, err);
   }
 }
@@ -169,9 +191,12 @@ async function reassignSingleSession(req, res) {
     if (!new_professional_id) {
       return res.status(400).json({ success: false, message: "new_professional_id is required" });
     }
+    log.info("[session] reassignSingleSession", { sessionId, new_professional_id });
     const result = await service.reassignSingleSession(sessionId, new_professional_id);
+    log.info("[session] reassignSingleSession — done", { sessionId, new_professional_id });
     return res.json({ success: true, data: result });
   } catch (err) {
+    log.error("[session] reassignSingleSession — failed", err);
     return handleError(res, err);
   }
 }
@@ -179,18 +204,24 @@ async function reassignSingleSession(req, res) {
 async function reassignAllFutureSessions(req, res) {
   try {
     const { session_type, student_id, new_professional_id } = req.body;
+    log.info("[session] reassignAllFutureSessions", { session_type, student_id, new_professional_id });
     const result = await service.reassignAllFutureSessions({ session_type, student_id, new_professional_id });
+    log.info("[session] reassignAllFutureSessions — done", { session_type, student_id, new_professional_id, count: result?.count ?? "?" });
     return res.json({ success: true, data: result });
   } catch (err) {
+    log.error("[session] reassignAllFutureSessions — failed", err);
     return handleError(res, err);
   }
 }
 
 async function addSessionToCycle(req, res) {
   try {
+    log.info("[session] addSessionToCycle", { student_id: req.body?.student_id, session_type: req.body?.session_type });
     const result = await service.addSessionToCycle(req.body);
+    log.info("[session] addSessionToCycle — added", { sessionId: result?.id });
     return res.status(201).json({ success: true, data: result });
   } catch (err) {
+    log.error("[session] addSessionToCycle — failed", err);
     return handleError(res, err);
   }
 }

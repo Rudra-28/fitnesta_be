@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const log = require("../../utils/logger");
 const { verifyWebhookSignature } = require("../../utils/razorpay");
 const { sendNotification } = require("../../utils/fcm");
 const paymentsRepo    = require("./paymentsrepo");
@@ -44,6 +45,8 @@ exports.verifyPayment = async (req, res) => {
             return res.status(400).json({ success: false, message: "Missing required payment fields" });
         }
 
+        log.info("[payment] verifyPayment — received", { temp_uuid, razorpay_order_id, razorpay_payment_id });
+
         // Verify signature
         const expected = crypto
             .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -56,23 +59,31 @@ exports.verifyPayment = async (req, res) => {
         );
 
         if (!isValid) {
+            log.warn("[payment] verifyPayment — invalid Razorpay signature", { temp_uuid, razorpay_order_id });
             return res.status(400).json({ success: false, message: "Invalid payment signature" });
         }
+
+        log.info("[payment] verifyPayment — signature valid, looking up pending registration", { temp_uuid });
 
         // Look up service_type from the pending registration
         const pending = await paymentsRepo.getPendingRegistration(temp_uuid);
         if (!pending) {
+            log.warn("[payment] verifyPayment — pending registration not found", { temp_uuid });
             return res.status(404).json({ success: false, message: "Registration not found for this temp_uuid" });
         }
 
         if (pending.status === "approved") {
+            log.info("[payment] verifyPayment — already finalized, skipping", { temp_uuid });
             return res.status(200).json({ success: true, message: "Already finalized" });
         }
 
         const service = SERVICE_MAP[pending.service_type];
         if (!service) {
+            log.warn("[payment] verifyPayment — unknown service_type", { temp_uuid, service_type: pending.service_type });
             return res.status(400).json({ success: false, message: `Unknown service_type: ${pending.service_type}` });
         }
+
+        log.info("[payment] verifyPayment — finalizing registration", { temp_uuid, service_type: pending.service_type });
 
         const formDataParsed = typeof pending.form_data === "string"
             ? JSON.parse(pending.form_data)
@@ -106,7 +117,7 @@ exports.verifyPayment = async (req, res) => {
                     }
                 }
             } catch(e) {
-                console.error("Failed to personalize payment notification:", e.message);
+                log.warn("[payment] failed to personalize notification", { error: e.message });
             }
 
             const fcmToken = formDataParsed?.fcmToken || formDataParsed?.fcm_token || null;
@@ -118,9 +129,10 @@ exports.verifyPayment = async (req, res) => {
             }
         }
 
+        log.info("[payment] verifyPayment — complete", { temp_uuid, service_type: pending.service_type });
         return res.status(200).json({ success: true, message: "Payment verified and registration finalized", receipt });
     } catch (error) {
-        console.error("Payment verify error:", error);
+        log.error("[payment] verifyPayment — unexpected error", error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -140,17 +152,20 @@ exports.devFinalize = async (req, res) => {
     try {
         const { temp_uuid } = req.params;
 
+        log.warn("[payment] devFinalize — DEV skip payment invoked", { temp_uuid });
         const pending = await paymentsRepo.getPendingRegistration(temp_uuid);
         if (!pending) {
             return res.status(404).json({ success: false, message: "No pending registration found for this temp_uuid" });
         }
 
         if (pending.status === "approved") {
+            log.info("[payment] devFinalize — already finalized", { temp_uuid });
             return res.status(200).json({ success: true, message: "Already finalized" });
         }
 
         const service = SERVICE_MAP[pending.service_type];
         if (!service) {
+            log.warn("[payment] devFinalize — unknown service_type", { temp_uuid, service_type: pending.service_type });
             return res.status(400).json({ success: false, message: `Unknown service_type: ${pending.service_type}` });
         }
 
@@ -160,6 +175,7 @@ exports.devFinalize = async (req, res) => {
         const amount = formDataParsed?.calculated_amount ?? 0;
 
         await service.finalizeRegistration(temp_uuid, `dev_payment_${Date.now()}`, amount);
+        log.info("[payment] devFinalize — registration finalized", { temp_uuid, service_type: pending.service_type });
 
         return res.status(200).json({
             success: true,
@@ -167,7 +183,7 @@ exports.devFinalize = async (req, res) => {
             temp_uuid,
         });
     } catch (error) {
-        console.error("[DEV] devFinalize error:", error);
+        log.error("[payment] devFinalize — error", error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };
@@ -191,6 +207,7 @@ exports.handlePaymentWebhook = async (req, res) => {
 
         // Silently ack any event that isn't payment.captured
         if (req.body.event !== "payment.captured") {
+            log.info("[payment] webhook — ignoring event", { event: req.body.event });
             return res.status(200).json({ received: true });
         }
 
@@ -198,26 +215,30 @@ exports.handlePaymentWebhook = async (req, res) => {
         const temp_uuid    = entity?.notes?.temp_uuid;
         const service_type = entity?.notes?.service_type;
 
+        log.info("[payment] webhook — payment.captured received", { temp_uuid, service_type, payment_id: entity?.id, amount_paise: entity?.amount });
+
         if (!temp_uuid) {
-            console.error("Webhook missing temp_uuid in notes:", entity?.notes);
+            log.warn("[payment] webhook — missing temp_uuid in notes", { notes: entity?.notes });
             return res.status(200).json({ received: true });
         }
 
         const service = SERVICE_MAP[service_type];
         if (!service) {
-            console.error("Webhook received unknown service_type:", service_type);
+            log.warn("[payment] webhook — unknown service_type", { temp_uuid, service_type });
             return res.status(200).json({ received: true });
         }
 
         const paymentId = entity.id;
         const amount    = entity.amount / 100; // paise → INR
 
+        log.info("[payment] webhook — finalizing registration", { temp_uuid, service_type, paymentId, amount });
         await service.finalizeRegistration(temp_uuid, paymentId, amount);
+        log.info("[payment] webhook — finalization complete", { temp_uuid, service_type });
         return res.status(200).json({ success: true });
 
     } catch (error) {
         // Always return 200 so Razorpay stops retrying — log for manual review
-        console.error("Unified webhook error:", error);
+        log.error("[payment] webhook — unhandled error", error);
         return res.status(200).json({ received: true });
     }
 };
@@ -232,7 +253,7 @@ exports.listReceipts = async (req, res) => {
         const receipts = await paymentsService.listReceipts(req.user.userId);
         return res.status(200).json({ success: true, receipts });
     } catch (error) {
-        console.error("listReceipts error:", error);
+        log.error("[payment] listReceipts failed", error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };

@@ -3,6 +3,7 @@ const { sendNotification } = require("../../utils/fcm");
 const prisma = require("../../config/prisma");
 const auditLog = require("../../utils/auditLog");
 const axios = require("axios");
+const log = require("../../utils/logger");
 
 exports.listFeeStructures = async (req, res) => {
     try {
@@ -111,7 +112,7 @@ exports.proxyDocument = async (req, res) => {
         const ext = fetchUrl.split("?")[0].split(".").pop().toLowerCase();
         const contentType = MIME[ext] || "application/octet-stream";
 
-        console.log("[document-proxy] fetching:", fetchUrl, "→", contentType);
+        log.info("[document-proxy] fetching", { url: fetchUrl, contentType });
         const upstream = await axios.get(fetchUrl, { responseType: "stream" });
 
         res.setHeader("Content-Type", contentType);
@@ -120,40 +121,44 @@ exports.proxyDocument = async (req, res) => {
         upstream.data.pipe(res);
     } catch (err) {
         const status = err?.response?.status ?? 502;
-        console.error("[document-proxy] error:", status, err?.response?.data ?? err?.message);
+        log.error("[document-proxy] upstream fetch failed", { status, error: err?.response?.data ?? err?.message });
         res.status(502).json({ success: false, error: `Upstream ${status}: failed to fetch document` });
     }
 };
 
 exports.listProfessionals = async (req, res) => {
     try {
-        const { type } = req.query; // optional: ?type=trainer|teacher|marketing_executive|vendor
+        const { type } = req.query;
+        log.info("[admin] listProfessionals", { type: type ?? "all" });
         const data = await service.listProfessionals(type);
         res.json({ success: true, count: data.length, data });
     } catch (err) {
-        console.error("List professionals error:", err.message);
+        log.error("[admin] listProfessionals — failed", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
 exports.listPending = async (req, res) => {
     try {
-        const { type } = req.query; // optional: ?type=trainer
+        const { type } = req.query;
+        log.info("[admin] listPending", { type: type ?? "all" });
         const data = await service.listPending(type);
         res.json({ success: true, count: data.length, data });
     } catch (err) {
-        console.error("List pending error:", err.message);
+        log.error("[admin] listPending — failed", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
 
 exports.approve = async (req, res) => {
     try {
+        log.info("[admin] approve registration", { pendingId: req.params.id, adminId: req.admin?.userId });
         const result = await service.approveRegistration(
             req.params.id,
             req.admin.userId,
             req.body?.note
         );
+        log.info("[admin] registration approved", { pendingId: req.params.id });
 
         auditLog(req, "approve_registration", {
             entity_type: "pending_registration",
@@ -190,7 +195,7 @@ exports.approve = async (req, res) => {
 
         res.json({ success: true, ...result });
     } catch (err) {
-        console.error("Approve error:", err.message);
+        log.error("[admin] approve registration — failed", { pendingId: req.params.id, error: err.message });
         const status = err.message === "PENDING_NOT_FOUND" ? 404
                      : err.message === "ALREADY_REVIEWED"  ? 409
                      : 500;
@@ -340,8 +345,6 @@ exports.adminRegisterSociety = async (req, res) => {
     }
 };
 
-exports.getAllSchoolsAdmin = exports.getApprovedSchools;
-
 exports.getSchoolAdminById = async (req, res) => {
     try {
         const data = await service.getSchoolAdminById(req.params.id);
@@ -423,6 +426,7 @@ exports.assignTeacher = async (req, res) => {
         if (!personal_tutor_id || !teacher_professional_id) {
             return res.status(400).json({ success: false, error: "personal_tutor_id and teacher_professional_id are required" });
         }
+        log.info("[admin] assignTeacher", { personal_tutor_id, teacher_professional_id, adminId: req.admin?.userId });
         const result = await service.assignTeacher(
             Number(personal_tutor_id),
             Number(teacher_professional_id)
@@ -454,8 +458,10 @@ exports.assignTeacher = async (req, res) => {
             details:     { teacher_professional_id: Number(req.body.teacher_professional_id) },
         });
 
+        log.info("[admin] teacher assigned", { personal_tutor_id, teacher_professional_id });
         res.json({ success: true, ...result });
     } catch (err) {
+        log.error("[admin] assignTeacher — failed", { personal_tutor_id: req.body?.personal_tutor_id, error: err.message });
         const status = err.message === "PERSONAL_TUTOR_NOT_FOUND" ? 404
                      : err.message === "TEACHER_NOT_FOUND"        ? 404
                      : 500;
@@ -469,6 +475,7 @@ exports.assignTrainer = async (req, res) => {
         if (!individual_participant_id || !trainer_professional_id) {
             return res.status(400).json({ success: false, error: "individual_participant_id and trainer_professional_id are required" });
         }
+        log.info("[admin] assignTrainer", { individual_participant_id, trainer_professional_id, adminId: req.admin?.userId });
         const result = await service.assignTrainer(
             Number(individual_participant_id),
             Number(trainer_professional_id)
@@ -500,8 +507,10 @@ exports.assignTrainer = async (req, res) => {
             details:     { trainer_professional_id: Number(req.body.trainer_professional_id) },
         });
 
+        log.info("[admin] trainer assigned", { individual_participant_id, trainer_professional_id });
         res.json({ success: true, ...result });
     } catch (err) {
+        log.error("[admin] assignTrainer — failed", { individual_participant_id: req.body?.individual_participant_id, error: err.message });
         const status = err.message === "INDIVIDUAL_PARTICIPANT_NOT_FOUND" ? 404
                      : err.message === "TRAINER_NOT_FOUND"                ? 404
                      : 500;
@@ -523,6 +532,7 @@ exports.getSettlementPreview = async (req, res) => {
 
 exports.confirmSettlement = async (req, res) => {
     try {
+        log.info("[admin] confirmSettlement", { assignment_ids: req.body.assignment_ids ?? "all", adminId: req.admin?.userId });
         // assignment_ids: optional array — if omitted, settles all active assignments
         const assignmentIds = Array.isArray(req.body.assignment_ids)
             ? req.body.assignment_ids.map(Number)
@@ -543,8 +553,10 @@ exports.confirmSettlement = async (req, res) => {
             },
         });
 
+        log.info("[admin] settlement confirmed", { settled_count: data.length });
         res.json({ success: true, count: data.length, data });
     } catch (err) {
+        log.error("[admin] confirmSettlement — failed", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };
@@ -728,6 +740,7 @@ exports.listCommissions = async (req, res) => {
 
 exports.approveCommission = async (req, res) => {
     try {
+        log.info("[admin] approveCommission", { commissionId: req.params.id, adminId: req.admin?.userId });
         const result = await service.approveCommission(req.params.id);
 
         // Notify the professional
@@ -747,8 +760,10 @@ exports.approveCommission = async (req, res) => {
             entity_id:   Number(req.params.id),
         });
 
+        log.info("[admin] commission approved", { commissionId: req.params.id });
         res.json({ success: true, data: result });
     } catch (err) {
+        log.error("[admin] approveCommission — failed", { commissionId: req.params.id, error: err.message });
         const status = err.message === "COMMISSION_NOT_FOUND"      ? 404
                      : err.message === "COMMISSION_NOT_APPROVABLE" ? 409
                      : 500;
@@ -758,6 +773,7 @@ exports.approveCommission = async (req, res) => {
 
 exports.markCommissionPaid = async (req, res) => {
     try {
+        log.info("[admin] markCommissionPaid", { commissionId: req.params.id, adminId: req.admin?.userId });
         const result = await service.markCommissionPaid(req.params.id);
 
         // Notify the professional
@@ -777,8 +793,10 @@ exports.markCommissionPaid = async (req, res) => {
             entity_id:   Number(req.params.id),
         });
 
+        log.info("[admin] commission marked paid", { commissionId: req.params.id });
         res.json({ success: true, data: result });
     } catch (err) {
+        log.error("[admin] markCommissionPaid — failed", { commissionId: req.params.id, error: err.message });
         const status = err.message === "COMMISSION_NOT_FOUND"    ? 404
                      : err.message === "ALREADY_PAID"            ? 409
                      : err.message === "COMMISSION_NOT_APPROVED" ? 422
@@ -822,11 +840,13 @@ exports.markTravellingAllowancePaid = async (req, res) => {
 // ── Reject ─────────────────────────────────────────────────────────────────
 exports.reject = async (req, res) => {
     try {
+        log.info("[admin] reject registration", { pendingId: req.params.id, adminId: req.admin?.userId });
         const result = await service.rejectRegistration(
             req.params.id,
             req.admin.userId,
             req.body?.note
         );
+        log.info("[admin] registration rejected", { pendingId: req.params.id });
 
         auditLog(req, "reject_registration", {
             entity_type: "pending_registration",
@@ -860,7 +880,7 @@ exports.reject = async (req, res) => {
 
         res.json({ success: true, ...result });
     } catch (err) {
-        console.error("Reject error:", err.message);
+        log.error("[admin] reject registration — failed", { pendingId: req.params.id, error: err.message });
         const status = err.message === "PENDING_NOT_FOUND" ? 404
                      : err.message === "ALREADY_REVIEWED"  ? 409
                      : 500;
@@ -1184,7 +1204,7 @@ exports.reject = async (req, res) => {
 
         res.json({ success: true, ...result });
     } catch (err) {
-        console.error("Reject error:", err.message);
+        log.error("[admin] reject (duplicate handler) — failed", { pendingId: req.params.id, error: err.message });
         const status = err.message === "PENDING_NOT_FOUND" ? 404
                      : err.message === "ALREADY_REVIEWED"  ? 409
                      : 500;
@@ -1348,6 +1368,7 @@ exports.editUser = async (req, res) => {
 
 exports.suspendUser = async (req, res) => {
     try {
+        log.info("[admin] suspendUser", { targetUserId: req.params.userId, adminId: req.admin?.userId, note: req.body?.note });
         const result = await service.suspendUser(req.params.userId, req.admin.userId, req.body?.note);
 
         auditLog(req, "suspend_user", {
@@ -1356,8 +1377,10 @@ exports.suspendUser = async (req, res) => {
             details:     { note: req.body?.note ?? null },
         });
 
+        log.info("[admin] user suspended", { targetUserId: req.params.userId });
         res.json({ success: true, ...result });
     } catch (err) {
+        log.error("[admin] suspendUser — failed", { targetUserId: req.params.userId, error: err.message });
         const status = err.status || 500;
         res.status(status).json({ success: false, error: err.message });
     }
@@ -1365,6 +1388,7 @@ exports.suspendUser = async (req, res) => {
 
 exports.unsuspendUser = async (req, res) => {
     try {
+        log.info("[admin] unsuspendUser", { targetUserId: req.params.userId, adminId: req.admin?.userId });
         const result = await service.unsuspendUser(req.params.userId);
 
         auditLog(req, "unsuspend_user", {
@@ -1372,8 +1396,10 @@ exports.unsuspendUser = async (req, res) => {
             entity_id:   Number(req.params.userId),
         });
 
+        log.info("[admin] user unsuspended", { targetUserId: req.params.userId });
         res.json({ success: true, ...result });
     } catch (err) {
+        log.error("[admin] unsuspendUser — failed", { targetUserId: req.params.userId, error: err.message });
         const status = err.status || 500;
         res.status(status).json({ success: false, error: err.message });
     }

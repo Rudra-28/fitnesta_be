@@ -555,6 +555,16 @@ exports.getSocietyAdminById = async (id) => {
             ? { professional_id: r.professionals.id, full_name: r.professionals.users?.full_name ?? null, referral_code: r.professionals.referral_code }
             : null,
         professionals: undefined,
+        individual_participants: (r.individual_participants ?? []).map((p) => ({
+            id: p.id,
+            participant_name: p.students?.users?.full_name ?? null,
+            mobile: p.students?.users?.mobile ?? null,
+            flat_no: p.flat_no,
+            dob: p.dob,
+            age: p.age,
+            activity: p.activity,
+            kits: p.kits,
+        })),
     };
 };
 
@@ -594,12 +604,35 @@ exports.getAllSchoolsAdmin = async () => {
 exports.getSchoolAdminById = async (id) => {
     const r = await adminRepo.getSchoolAdminById(Number(id));
     if (!r) throw new Error("SCHOOL_NOT_FOUND");
+
+    const allIds = [];
+    for (const s of r.school_students ?? []) {
+        if (s.activities) {
+            for (const part of s.activities.split(",")) {
+                const n = parseInt(part.trim(), 10);
+                if (!isNaN(n)) allIds.push(n);
+            }
+        }
+    }
+    const activityRows = await adminRepo.getActivitiesByIds([...new Set(allIds)]);
+    const activityMap = Object.fromEntries(activityRows.map((a) => [a.id, a.name]));
+
     return {
         ...r,
         me: r.professionals
             ? { professional_id: r.professionals.id, full_name: r.professionals.users?.full_name ?? null, referral_code: r.professionals.referral_code }
             : null,
         professionals: undefined,
+        school_students: (r.school_students ?? []).map((s) => {
+            const names = (s.activities ?? "")
+                .split(",")
+                .map((p) => {
+                    const n = parseInt(p.trim(), 10);
+                    return isNaN(n) ? null : (activityMap[n] ?? null);
+                })
+                .filter(Boolean);
+            return { ...s, activities: names };
+        }),
     };
 };
 

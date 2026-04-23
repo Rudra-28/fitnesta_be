@@ -1,4 +1,5 @@
 const service = require("./subjectpurchaseservice");
+const log = require("../../../utils/logger");
 
 /**
  * GET /student/subject-purchase/standards
@@ -44,10 +45,12 @@ exports.getSubjectsForStandard = async (req, res) => {
  */
 exports.initiateSubjectPurchase = async (req, res) => {
     try {
+        log.info("[subject-purchase] initiate", { userId: req.user?.userId, standard: req.body?.standard, activity_ids: req.body?.activity_ids });
         const result = await service.initiateSubjectPurchase(req.user.userId, req.body);
+        log.info("[subject-purchase] parked — awaiting payment", { temp_uuid: result?.temp_uuid, amount: result?.amount });
         return res.status(200).json({ success: true, data: result });
     } catch (err) {
-        console.error("[SubjectPurchase] initiate error:", err.message);
+        log.error("[subject-purchase] initiate failed", err);
         return res.status(err.status || 500).json({ success: false, error: err.message });
     }
 };
@@ -62,7 +65,7 @@ exports.devConfirm = async (req, res) => {
         const result = await service.devFinalize(req.params.temp_uuid);
         return res.status(200).json({ success: true, ...result });
     } catch (err) {
-        console.error("[SubjectPurchase] devConfirm error:", err.message);
+        log.error("[subject-purchase] devConfirm failed", err);
         return res.status(err.status || 500).json({ success: false, error: err.message });
     }
 };

@@ -2,6 +2,7 @@ const service = require("./perstutorservice");
 const jwt = require("jsonwebtoken");
 const { validatePersonalTutor } = require("./validatepersonaltutor");
 const { validateParentConsent } = require("./validateparentconsent");
+const log = require("../../../utils/logger");
 
 function toYYYYMMDD(dateStr) {
     if (!dateStr) return null;
@@ -26,7 +27,7 @@ function toYYYYMMDD(dateStr) {
  */
 exports.submitRegistration = async (req, res) => {
     try {
-        console.log("[PT] submitRegistration called");
+        log.info("[PT] submitRegistration called");
         let formData = req.body.formData;
         let serviceType = req.body.serviceType || "personal_tutor";
 
@@ -34,7 +35,7 @@ exports.submitRegistration = async (req, res) => {
             try {
                 formData = JSON.parse(formData);
             } catch {
-                console.warn("[PT] Failed to parse formData JSON");
+                log.warn("[PT] Failed to parse formData JSON");
                 return res.status(400).json({ success: false, message: "Invalid formData JSON" });
             }
         } else if (!formData || Object.keys(formData).length === 0) {
@@ -75,7 +76,7 @@ exports.submitRegistration = async (req, res) => {
         const errors = [...errors1, ...errors2];
 
         if (errors.length > 0) {
-            console.warn("[PT] Validation failed:", errors);
+            log.warn("[PT] Validation failed", { errors });
             return res.status(400).json({ success: false, errors });
         }
 
@@ -135,7 +136,7 @@ exports.submitRegistration = async (req, res) => {
         };
 
         const result = await service.initiateRegistration(structuredPayload, serviceType);
-        console.log(`[PT] Registration parked — temp_uuid: ${result.tempUuid}, order_id: ${result.orderId}, amount: ${result.amount}`);
+        log.info("[PT] registration parked — awaiting payment", { temp_uuid: result.tempUuid, order_id: result.orderId, amount: result.amount });
 
         return res.status(200).json({
             success: true,
@@ -147,7 +148,7 @@ exports.submitRegistration = async (req, res) => {
             key_id: result.keyId,
         });
     } catch (error) {
-        console.error(`[PT] submitRegistration error: ${error.message}`);
+        log.error("[PT] submitRegistration failed", error);
         return res.status(error.status ?? 500).json({ success: false, message: error.message });
     }
 };
@@ -158,11 +159,11 @@ exports.submitRegistration = async (req, res) => {
 exports.checkRegistrationStatus = async (req, res) => {
     try {
         const { temp_uuid } = req.params;
-        console.log(`[PT] checkRegistrationStatus — temp_uuid: ${temp_uuid}`);
+        log.info("[PT] checkRegistrationStatus", { temp_uuid });
         const registration = await service.getRegistrationStatus(temp_uuid);
 
         if (registration.status === "approved") {
-            console.log(`[PT] Registration approved — userId: ${registration.userId}, issuing JWT`);
+            log.info("[PT] registration approved — issuing JWT", { userId: registration.userId });
             const token = jwt.sign(
                 { userId: registration.userId, mobile: registration.user?.mobile ?? null, role: "student", student_type: "personal_tutor" },
                 process.env.JWT_ACCESS_SECRET,
@@ -177,10 +178,10 @@ exports.checkRegistrationStatus = async (req, res) => {
             });
         }
 
-        console.log(`[PT] Registration status: ${registration.status}`);
+        log.info("[PT] registration status polled", { temp_uuid, status: registration.status });
         return res.status(200).json({ success: true, isCompleted: false, status: registration.status });
     } catch (error) {
-        console.error(`[PT] checkRegistrationStatus error: ${error.message}`);
+        log.error("[PT] checkRegistrationStatus failed", error);
         return res.status(500).json({ success: false, message: error.message });
     }
 };

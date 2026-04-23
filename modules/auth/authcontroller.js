@@ -1,6 +1,7 @@
 const service = require("./authservice");
 const repo = require("./authrepository");
 const { getAdmin } = require("../../config/firebase");
+const log = require("../../utils/logger");
 
 // ── Pre-check: is this mobile number a registered admin? ─────────────────────
 exports.checkAdmin = async (req, res) => {
@@ -11,24 +12,30 @@ exports.checkAdmin = async (req, res) => {
     }
 
     const cleanMobile = mobile.replace("+91", "").trim();
+    log.info("[auth] checkAdmin — mobile lookup", { mobile: cleanMobile });
     const user = await repo.findUserByMobile(cleanMobile);
 
     if (!user || user.role !== "admin") {
+      log.warn("[auth] checkAdmin — admin not found", { mobile: cleanMobile });
       return res.status(404).json({ success: false, error_code: "USER_NOT_FOUND", message: "No admin account found with this number." });
     }
     if (user.approval_status === "pending") {
+      log.warn("[auth] checkAdmin — approval pending", { userId: user.id, mobile: cleanMobile });
       return res.status(403).json({ success: false, error_code: "APPROVAL_PENDING" });
     }
     if (user.approval_status === "rejected") {
+      log.warn("[auth] checkAdmin — registration rejected", { userId: user.id, mobile: cleanMobile });
       return res.status(403).json({ success: false, error_code: "REGISTRATION_REJECTED" });
     }
     if (user.is_suspended) {
+      log.warn("[auth] checkAdmin — account suspended", { userId: user.id, mobile: cleanMobile });
       return res.status(403).json({ success: false, error_code: "ACCOUNT_SUSPENDED" });
     }
 
+    log.info("[auth] checkAdmin — admin found, OTP flow can proceed", { userId: user.id });
     res.json({ success: true });
   } catch (err) {
-    console.error("checkAdmin error:", err.message);
+    log.error("[auth] checkAdmin — unexpected error", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
@@ -45,12 +52,15 @@ exports.login = async (req, res) => {
       });
     }
 
+    log.info("[auth] login — verifying Firebase idToken", { role });
+
     // 1. Verify the Firebase ID token produced after OTP confirmation
     const firebaseAdmin = getAdmin();
     let decoded;
     try {
       decoded = await firebaseAdmin.auth().verifyIdToken(idToken);
     } catch (_) {
+      log.warn("[auth] login — Firebase token verification failed", { role });
       return res.status(401).json({
         success: false,
         message: "Invalid or expired OTP session. Please try again."
@@ -60,13 +70,17 @@ exports.login = async (req, res) => {
     // 2. Extract the verified phone number (+919876543210 → 9876543210)
     const phone = decoded.phone_number;
     if (!phone) {
+      log.warn("[auth] login — no phone_number in Firebase token", { role });
       return res.status(400).json({ success: false, message: "No phone number in token." });
     }
     const mobile = phone.replace("+91", "").trim();
 
+    log.info("[auth] login — Firebase token verified, looking up user", { mobile, role });
+
     // 3. Standard admin lookup + JWT issuance (existing logic)
     const result = await service.loginUser(mobile, role);
 
+    log.info("[auth] login — success, JWT issued", { userId: result.user?.id, role, mobile });
     res.status(200).json({
       success: true,
       message: "Login successful",
@@ -93,6 +107,7 @@ exports.login = async (req, res) => {
       statusCode = 403; message = "Admin record not found. Please contact super-admin.";
     }
 
+    log.warn("[auth] login — failed", { error_code: error.message, role: req.body?.role, statusCode });
     res.status(statusCode).json({
       success: false,
       message,
@@ -163,7 +178,7 @@ exports.getMe = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("GET /me Error:", error.message);
+    log.error("[auth] getMe — unexpected error", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

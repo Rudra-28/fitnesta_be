@@ -1,5 +1,6 @@
 const service = require("./indicoachservice");
 const jwt = require("jsonwebtoken");
+const log = require("../../../utils/logger");
 
 function toYYYYMMDD(dateStr) {
   if (!dateStr) return null;
@@ -26,14 +27,14 @@ function toYYYYMMDD(dateStr) {
  */
 exports.submitRegistration = async (req, res) => {
   try {
-    console.log("[IC] submitRegistration called");
+    log.info("[IC] submitRegistration called");
     let { formData, serviceType } = req.body;
 
     if (typeof formData === "string") {
       try {
         formData = JSON.parse(formData);
       } catch {
-        console.warn("[IC] Failed to parse formData JSON");
+        log.warn("[IC] Failed to parse formData JSON");
         return res.status(400).json({ success: false, message: "Invalid formData JSON" });
       }
     } else if (!formData || Object.keys(formData).length === 0) {
@@ -42,7 +43,7 @@ exports.submitRegistration = async (req, res) => {
 
     if (!serviceType) serviceType = formData.serviceType || "individual_coaching";
     delete formData.serviceType;
-    console.log(`[IC] serviceType: ${serviceType}, coaching_type: ${formData.coaching_type || "not provided"}`);
+    log.info("[IC] form params", { serviceType, coaching_type: formData.coaching_type ?? "not provided" });
 
     const signatureFile =
       (req.files?.["signatureUrl"] && req.files["signatureUrl"][0]) ||
@@ -71,9 +72,7 @@ exports.submitRegistration = async (req, res) => {
       const activityList = rawActivities
         ? String(rawActivities).split(",").map((a) => a.trim()).filter(Boolean)
         : [];
-      console.log("[IC] activity_ids (for fee lookup):", activity_ids);
-      console.log("[IC] activities field (display label):", rawActivities);
-      console.log("[IC] activities count:", activityList.length, "| list:", activityList);
+      log.info("[IC] activity resolution", { activity_ids, activities_label: rawActivities, activities_count: activityList.length });
       // ────────────────────────────────────────────────────────────────────
 
       // Resolve term_months — ensure it's an integer
@@ -132,7 +131,7 @@ exports.submitRegistration = async (req, res) => {
     }
 
     const result = await service.initiateRegistration(formData, serviceType);
-    console.log(`[IC] Registration parked — temp_uuid: ${result.tempUuid}, order_id: ${result.orderId}, amount: ${result.amount}`);
+    log.info("[IC] registration parked — awaiting payment", { temp_uuid: result.tempUuid, order_id: result.orderId, amount: result.amount });
 
     return res.status(200).json({
       success: true,
@@ -144,7 +143,7 @@ exports.submitRegistration = async (req, res) => {
       key_id: result.keyId,
     });
   } catch (error) {
-    console.error(`[IC] submitRegistration error: ${error.message}`);
+    log.error("[IC] submitRegistration failed", error);
     return res.status(error.status ?? 500).json({ success: false, message: error.message });
   }
 };
@@ -156,11 +155,11 @@ exports.submitRegistration = async (req, res) => {
 exports.checkRegistrationStatus = async (req, res) => {
   try {
     const { temp_uuid } = req.params;
-    console.log(`[IC] checkRegistrationStatus — temp_uuid: ${temp_uuid}`);
+    log.info("[IC] checkRegistrationStatus", { temp_uuid });
     const registration = await service.getRegistrationStatus(temp_uuid);
 
     if (registration.status === "approved") {
-      console.log(`[IC] Registration approved — userId: ${registration.userId}, issuing JWT`);
+      log.info("[IC] registration approved — issuing JWT", { userId: registration.userId });
       const token = jwt.sign(
         { userId: registration.userId, mobile: registration.user?.mobile ?? null, role: "student", student_type: "individual_coaching" },
         process.env.JWT_ACCESS_SECRET,
@@ -175,10 +174,10 @@ exports.checkRegistrationStatus = async (req, res) => {
       });
     }
 
-    console.log(`[IC] Registration status: ${registration.status}`);
+    log.info("[IC] registration status polled", { temp_uuid, status: registration.status });
     return res.status(200).json({ success: true, isCompleted: false, status: registration.status });
   } catch (error) {
-    console.error(`[IC] checkRegistrationStatus error: ${error.message}`);
+    log.error("[IC] checkRegistrationStatus failed", error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -1,9 +1,9 @@
 const service = require("./trainerservice");
+const log = require("../../../utils/logger");
 
 exports.createTrainer = async (req, res) => {
     try {
-        console.log("[Trainer] createTrainer called");
-        // Merge uploaded file paths into body data
+        log.info("[trainer] registration started", { name: req.body?.name, mobile: req.body?.mobile });
         const fileData = {};
         if (req.files) {
             if (req.files['photo'])             fileData.photo             = req.files['photo'][0].path;
@@ -14,14 +14,15 @@ exports.createTrainer = async (req, res) => {
         }
 
         const data = { ...req.body, ...fileData };
-        console.log("[Trainer] idToken:", data.idToken ? "present" : "missing", "| name:", data.name, "| files:", Object.keys(fileData));
+        log.info("[trainer] form data assembled", { hasToken: !!data.idToken, filesUploaded: Object.keys(fileData) });
         const result = await service.createTrainer(data);
-        console.log("[Trainer] Registration complete — userId:", result.userId ?? result.id ?? "unknown");
+        const userId = result.userId ?? result.id ?? null;
+        log.info("[trainer] registration complete — pending admin approval", { userId });
 
         res.status(201).json(result);
 
     } catch (err) {
-        console.error("[Trainer] Registration error:", err.message);
+        log.error("[trainer] registration failed", err);
         res.status(400).json({ success: false, error: err.message });
     }
 };

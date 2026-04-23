@@ -1,4 +1,5 @@
 const service = require("./activitypurchaseservice");
+const log = require("../../../utils/logger");
 
 /**
  * GET /student/activity-purchase/societies
@@ -68,10 +69,12 @@ exports.getFees = async (req, res) => {
  */
 exports.initiateActivityPurchase = async (req, res) => {
     try {
+        log.info("[activity-purchase] initiate", { userId: req.user?.userId, type: req.body?.type, activity_ids: req.body?.activity_ids });
         const result = await service.initiateActivityPurchase(req.user.userId, req.body);
+        log.info("[activity-purchase] parked — awaiting payment", { temp_uuid: result?.temp_uuid, amount: result?.amount });
         return res.status(200).json({ success: true, data: result });
     } catch (err) {
-        console.error("[ActivityPurchase] initiate error:", err.message);
+        log.error("[activity-purchase] initiate failed", err);
         return res.status(err.status || 500).json({ success: false, error: err.message });
     }
 };
@@ -86,7 +89,7 @@ exports.devConfirm = async (req, res) => {
         const result = await service.devFinalize(req.params.temp_uuid);
         return res.status(200).json({ success: true, ...result });
     } catch (err) {
-        console.error("[ActivityPurchase] devConfirm error:", err.message);
+        log.error("[activity-purchase] devConfirm failed", err);
         return res.status(err.status || 500).json({ success: false, error: err.message });
     }
 };

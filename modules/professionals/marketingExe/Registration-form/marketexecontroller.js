@@ -1,8 +1,9 @@
 const service = require("./marketexeservice");
+const log = require("../../../../utils/logger");
 
 exports.createMarketExe = async (req, res) => {
     try {
-        console.log("[ME] createMarketExe called");
+        log.info("[marketing-exe] registration started", { name: req.body?.name, mobile: req.body?.mobile });
         const fileData = {};
         if (req.files) {
             if (req.files['panCard'])               fileData.panCard               = req.files['panCard'][0].path;
@@ -12,14 +13,15 @@ exports.createMarketExe = async (req, res) => {
         }
 
         const data = { ...req.body, ...fileData };
-        console.log("[ME] idToken:", data.idToken ? "present" : "missing", "| name:", data.name, "| files:", Object.keys(fileData));
+        log.info("[marketing-exe] form data assembled", { hasToken: !!data.idToken, filesUploaded: Object.keys(fileData) });
         const result = await service.createMarketExe(data);
-        console.log("[ME] Registration complete — userId:", result.userId ?? result.id ?? "unknown");
+        const userId = result.userId ?? result.id ?? null;
+        log.info("[marketing-exe] registration complete — pending admin approval", { userId });
 
         res.status(201).json(result);
 
     } catch (err) {
-        console.error("[ME] Registration error:", err.message);
+        log.error("[marketing-exe] registration failed", err);
         res.status(400).json({ success: false, error: err.message });
     }
 };
@@ -29,6 +31,7 @@ exports.getAllMarketexe = async (req, res) => {
         const marketexe = await service.getAllMarketexe();
         res.json({ total: marketexe.length, data: marketexe });
     } catch (err) {
+        log.error("[marketing-exe] getAllMarketexe failed", err);
         res.status(500).json({ success: false, error: err.message });
     }
 };

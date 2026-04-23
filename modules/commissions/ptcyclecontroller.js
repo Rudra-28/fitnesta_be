@@ -1,6 +1,7 @@
 "use strict";
 
 const service = require("./ptcycleservice");
+const log     = require("../../utils/logger");
 
 /**
  * GET /api/v1/admin/teachers/:professionalId/pt-settlement
@@ -14,7 +15,7 @@ exports.getPTSettlement = async (req, res) => {
         const data = await service.getPTSettlement(professionalId);
         return res.status(200).json(data);
     } catch (err) {
-        console.error("[PTCycle] getPTSettlement error:", err.message);
+        log.error("[pt-cycle] getPTSettlement failed", err);
         return res.status(err.statusCode || 500).json({ success: false, error: err.message });
     }
 };
@@ -34,7 +35,7 @@ exports.settleCycle = async (req, res) => {
         const result = await service.settleCycle(cycleId, professionalId);
         return res.status(200).json(result);
     } catch (err) {
-        console.error("[PTCycle] settleCycle error:", err.message);
+        log.error("[pt-cycle] settleCycle failed", { cycleId: req.params.cycleId, error: err.message });
         return res.status(err.statusCode || 500).json({ success: false, error: err.message });
     }
 };
