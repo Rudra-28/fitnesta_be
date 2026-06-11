@@ -12,6 +12,7 @@ const findUserByMobile = async (mobile) => {
             full_name: true,
             is_verified: true,
             approval_status: true,
+            is_suspended: true,
         },
     });
 };
@@ -30,6 +31,7 @@ const findUserById = async (id) => {
             photo: true,
             is_verified: true,
             approval_status: true,
+            is_suspended: true,
         },
     });
 };
